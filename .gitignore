@@ -17,3 +17,6 @@ rag/lancedb/
 # OS
 .DS_Store
 quality.csv
+
+# Tessdata: bara user-words committas, modell + symlänkar laddas av setup_tessdata.sh
+tessdata/*.traineddata

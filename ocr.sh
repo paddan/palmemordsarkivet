@@ -14,15 +14,30 @@
 
 set -u
 
-IN=${IN:-$HOME/projects/palmemordsarkivet/files}
-OCR=${OCR:-$HOME/projects/palmemordsarkivet/ocr}
-TXT=${TXT:-$HOME/projects/palmemordsarkivet/text}
+ROOT=${ROOT:-$HOME/projects/palmemordsarkivet}
+IN=${IN:-$ROOT/files}
+OCR=${OCR:-$ROOT/ocr}
+TXT=${TXT:-$ROOT/text}
+TESSDATA=${TESSDATA:-$ROOT/tessdata}
+USER_WORDS=${USER_WORDS:-$TESSDATA/swe.user-words}
+LANGS=${LANGS:-swe+eng}            # svensk + engelsk modell
 JOBS=${JOBS:-4}                    # antal filer parallellt
 PER_FILE_JOBS=${PER_FILE_JOBS:-2}  # OCR-trådar per fil
 MIN_TEXT_CHARS=${MIN_TEXT_CHARS:-200}  # tröskel för "har redan text"
 REDO_TEXT_LAYER=${REDO_TEXT_LAYER:-0}
 
 mkdir -p "$OCR" "$TXT"
+
+# Använd projekt-lokal tessdata om den finns (swe_best + symlänkar till eng/osd)
+if [ -f "$TESSDATA/swe.traineddata" ]; then
+  export TESSDATA_PREFIX="$TESSDATA"
+  echo "Använder $TESSDATA (swe_best)"
+else
+  echo "Tips: kör ./setup_tessdata.sh för att hämta swe_best.traineddata (mer noggrann modell)."
+fi
+
+[ -f "$USER_WORDS" ] || USER_WORDS=""
+[ -n "$USER_WORDS" ] && echo "Använder user-words: $USER_WORDS ($(wc -l < "$USER_WORDS" | tr -d ' ') ord)"
 
 for cmd in ocrmypdf pdftotext; do
   command -v "$cmd" >/dev/null || { echo "saknar verktyg: $cmd"; exit 1; }
@@ -34,14 +49,17 @@ run_ocr() {
   log=$(mktemp)
   local skip_flag="--skip-text"
   [ "$mode" = "redo" ] && skip_flag="--redo-ocr"
+  local extra=()
+  [ -n "${USER_WORDS:-}" ] && extra+=(--user-words "$USER_WORDS")
   if ocrmypdf \
-        -l swe \
+        -l "$LANGS" \
         $skip_flag \
         --rotate-pages \
         --deskew \
         --clean \
         --jobs "$PER_FILE_JOBS" \
         --quiet \
+        "${extra[@]}" \
         "$pdf" "$out_pdf" 2>"$log"; then
     rm -f "$log"
     return 0
@@ -97,7 +115,7 @@ process_one() {
   fi
 }
 export -f process_one run_ocr
-export IN OCR TXT PER_FILE_JOBS MIN_TEXT_CHARS REDO_TEXT_LAYER
+export IN OCR TXT PER_FILE_JOBS MIN_TEXT_CHARS REDO_TEXT_LAYER LANGS USER_WORDS TESSDATA_PREFIX
 
 find "$IN" -name '*.pdf' -print0 \
   | xargs -0 -n 1 -P "$JOBS" -I {} bash -c 'process_one "$@"' _ {}
