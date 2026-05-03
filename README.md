@@ -104,8 +104,23 @@ OAuth-token genereras med `claude setup-token` (engångsåtgärd).
 |---|---|
 | `download.py` | Hämta PDF:er från Drive |
 | `ocr.sh` | OCR + textextraktion |
+| `quality.py` | Heuristisk kvalitetsbedömning av `text/*.txt` |
 | `rag/ingest.py` | Bygg vektorindex |
 | `rag/ask.py` | Frågefronten |
+
+### Bonus: kvalitetskoll
+
+```bash
+.venv/bin/python quality.py --top 30
+```
+
+Skriver `quality.csv` (sorterat värst först) med poäng 0–100 per fil baserat på
+junk-tecken-andel, andel 1–2-tecken-ord, ihopklistrade ord, siffror inuti ord
+och vokal/konsonant-balans. Markerar källa `text-layer` (originalet hade text)
+vs `ocr` (Tesseract). Använder hunspell för svensk ordbokskoll om installerad.
+
+Viktig insikt: `text-layer` betyder inte automatiskt "bra" — vissa PDF:er har
+gammalt OCR-skräp inbäddat. Sortera efter score, inte efter källa.
 
 ## Datafiler (gitignorerade)
 

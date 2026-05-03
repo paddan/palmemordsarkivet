@@ -16,3 +16,4 @@ rag/lancedb/
 
 # OS
 .DS_Store
+quality.csv
