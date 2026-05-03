@@ -62,6 +62,14 @@ nohup .venv/bin/python download.py files > log.txt 2>&1 &
 
 Tunables via env: `JOBS=8 PER_FILE_JOBS=2 ./ocr.sh`.
 
+Lägen:
+
+```bash
+./ocr.sh                       # normal: OCR:a sidor utan textlager
+REDO_TEXT_LAYER=1 ./ocr.sh     # kör om OCR på alla PDF:er som har textlager
+                               # (för PDF:er med inbäddat OCR-skräp)
+```
+
 Vid riktiga fel skrivs `[fel] <namn>` följt av indragen ocrmypdf-logg. Tesseracts
 varningar för blanka sidor (`Too few characters. Skipping this page` /
 `Error during processing`) är benigna och göms numera — filen blir ändå OCR:ad.

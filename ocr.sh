@@ -2,10 +2,15 @@
 # OCR + textextraktion för palmemordsarkivet.
 # - Snabbkoll: hoppar över OCR om PDF:en redan har användbart textlager
 # - OCR med svenska + deskew/clean/rotate för scannade sidor
-# - Parallelliserar över filer (GNU parallel)
+# - Parallelliserar över filer med xargs -P
 # - Idempotent: hoppar över filer där .txt redan finns
 #
-# Krav: brew install ocrmypdf tesseract-lang poppler unpaper parallel
+# Lägen:
+#   ./ocr.sh                       # normal: OCR:a sidor utan textlager
+#   REDO_TEXT_LAYER=1 ./ocr.sh     # kör om OCR på alla PDF:er som har textlager
+#                                  # (bra för PDF:er med inbäddat OCR-skräp)
+#
+# Krav: brew install ocrmypdf tesseract-lang poppler unpaper
 
 set -u
 
@@ -15,6 +20,7 @@ TXT=${TXT:-$HOME/projects/palmemordsarkivet/text}
 JOBS=${JOBS:-4}                    # antal filer parallellt
 PER_FILE_JOBS=${PER_FILE_JOBS:-2}  # OCR-trådar per fil
 MIN_TEXT_CHARS=${MIN_TEXT_CHARS:-200}  # tröskel för "har redan text"
+REDO_TEXT_LAYER=${REDO_TEXT_LAYER:-0}
 
 mkdir -p "$OCR" "$TXT"
 
@@ -22,17 +28,61 @@ for cmd in ocrmypdf pdftotext; do
   command -v "$cmd" >/dev/null || { echo "saknar verktyg: $cmd"; exit 1; }
 done
 
+run_ocr() {
+  # $1 = mode (skip|redo), $2 = input pdf, $3 = output pdf
+  local mode="$1" pdf="$2" out_pdf="$3" log
+  log=$(mktemp)
+  local skip_flag="--skip-text"
+  [ "$mode" = "redo" ] && skip_flag="--redo-ocr"
+  if ocrmypdf \
+        -l swe \
+        $skip_flag \
+        --rotate-pages \
+        --deskew \
+        --clean \
+        --jobs "$PER_FILE_JOBS" \
+        --quiet \
+        "$pdf" "$out_pdf" 2>"$log"; then
+    rm -f "$log"
+    return 0
+  else
+    echo "[fel] $(basename "$pdf" .pdf) — se loggen nedan:" >&2
+    sed 's/^/    /' "$log" >&2
+    rm -f "$log"
+    return 1
+  fi
+}
+
 process_one() {
-  local f="$1" base out_pdf out_txt existing
+  local f="$1" base out_pdf out_txt existing has_text
   base=$(basename "$f" .pdf)
   out_pdf="$OCR/$base.pdf"
   out_txt="$TXT/$base.txt"
 
+  existing=$(pdftotext -q -layout "$f" - 2>/dev/null | tr -d '[:space:]' | wc -c)
+  has_text=0
+  [ "$existing" -gt "$MIN_TEXT_CHARS" ] && has_text=1
+
+  if [ "$REDO_TEXT_LAYER" = "1" ]; then
+    # I detta läge: bara text-layer-filer, alltid kör om med --redo-ocr
+    if [ "$has_text" != "1" ]; then
+      echo "[hoppar-ej-text] $base"
+      return 0
+    fi
+    echo "[redo] $base"
+    rm -f "$out_pdf" "$out_txt"
+    if run_ocr redo "$f" "$out_pdf"; then
+      pdftotext -layout "$out_pdf" "$out_txt"
+    else
+      return 1
+    fi
+    return 0
+  fi
+
+  # Normalt läge
   [ -s "$out_txt" ] && { echo "[hoppar] $base"; return 0; }
 
-  # Snabbkoll: har originalet redan användbart textlager?
-  existing=$(pdftotext -q -layout "$f" - 2>/dev/null | tr -d '[:space:]' | wc -c)
-  if [ "$existing" -gt "$MIN_TEXT_CHARS" ]; then
+  if [ "$has_text" = "1" ]; then
     echo "[text-finns] $base"
     cp "$f" "$out_pdf"
     pdftotext -layout "$f" "$out_txt"
@@ -40,28 +90,14 @@ process_one() {
   fi
 
   echo "[ocr] $base"
-  local log
-  log=$(mktemp)
-  if ocrmypdf \
-        -l swe \
-        --skip-text \
-        --rotate-pages \
-        --deskew \
-        --clean \
-        --jobs "$PER_FILE_JOBS" \
-        --quiet \
-        "$f" "$out_pdf" 2>"$log"; then
+  if run_ocr skip "$f" "$out_pdf"; then
     pdftotext -layout "$out_pdf" "$out_txt"
-    rm -f "$log"
   else
-    echo "[fel] $base — se loggen nedan:" >&2
-    sed 's/^/    /' "$log" >&2
-    rm -f "$log"
     return 1
   fi
 }
-export -f process_one
-export IN OCR TXT PER_FILE_JOBS MIN_TEXT_CHARS
+export -f process_one run_ocr
+export IN OCR TXT PER_FILE_JOBS MIN_TEXT_CHARS REDO_TEXT_LAYER
 
 find "$IN" -name '*.pdf' -print0 \
   | xargs -0 -n 1 -P "$JOBS" -I {} bash -c 'process_one "$@"' _ {}
