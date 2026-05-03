@@ -117,10 +117,22 @@ OAuth-token genereras med `claude setup-token` (engångsåtgärd).
 Skriver `quality.csv` (sorterat värst först) med poäng 0–100 per fil baserat på
 junk-tecken-andel, andel 1–2-tecken-ord, ihopklistrade ord, siffror inuti ord
 och vokal/konsonant-balans. Markerar källa `text-layer` (originalet hade text)
-vs `ocr` (Tesseract). Använder hunspell för svensk ordbokskoll om installerad.
+vs `ocr` (Tesseract).
 
 Viktig insikt: `text-layer` betyder inte automatiskt "bra" — vissa PDF:er har
-gammalt OCR-skräp inbäddat. Sortera efter score, inte efter källa.
+gammalt OCR-skräp inbäddat. Sortera efter `score`, inte efter källa.
+
+Valfritt: installera hunspell + svensk ordlista så fylls `pct_swe`-kolumnen i:
+
+```bash
+brew install hunspell
+mkdir -p ~/Library/Spelling
+curl -L -o ~/Library/Spelling/sv_SE.aff \
+  https://raw.githubusercontent.com/LibreOffice/dictionaries/master/sv_SE/sv_SE.aff
+curl -L -o ~/Library/Spelling/sv_SE.dic \
+  https://raw.githubusercontent.com/LibreOffice/dictionaries/master/sv_SE/sv_SE.dic
+echo "katt hus blabla" | hunspell -d sv_SE -l   # ska skriva ut "blabla"
+```
 
 ## Datafiler (gitignorerade)
 
