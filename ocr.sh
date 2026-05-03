@@ -39,6 +39,8 @@ process_one() {
   fi
 
   echo "[ocr] $base"
+  local log
+  log=$(mktemp)
   if ocrmypdf \
         -l swe \
         --skip-text \
@@ -47,10 +49,13 @@ process_one() {
         --clean \
         --jobs "$PER_FILE_JOBS" \
         --quiet \
-        "$f" "$out_pdf"; then
+        "$f" "$out_pdf" 2>"$log"; then
     pdftotext -layout "$out_pdf" "$out_txt"
+    rm -f "$log"
   else
-    echo "[fel] $base" >&2
+    echo "[fel] $base — se loggen nedan:" >&2
+    sed 's/^/    /' "$log" >&2
+    rm -f "$log"
     return 1
   fi
 }
