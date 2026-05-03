@@ -20,7 +20,7 @@ download.py  →  files/        ocr.sh  →  ocr/  +  text/        rag/ingest.py
 ## Installation
 
 ```bash
-git clone <repo-url>
+git clone git@github.com:paddan/palmemordsarkivet.git
 cd palmemordsarkivet
 
 python3 -m venv .venv
@@ -62,6 +62,10 @@ nohup .venv/bin/python download.py files > log.txt 2>&1 &
 
 Tunables via env: `JOBS=8 PER_FILE_JOBS=2 ./ocr.sh`.
 
+Vid riktiga fel skrivs `[fel] <namn>` följt av indragen ocrmypdf-logg. Tesseracts
+varningar för blanka sidor (`Too few characters. Skipping this page` /
+`Error during processing`) är benigna och göms numera — filen blir ändå OCR:ad.
+
 ### 3. Indexera i vektor-DB
 
 ```bash
@@ -101,6 +105,12 @@ med källhänvisningar `[Nr X, sida Y]`. Säger "framgår inte av materialet" he
 ## Datafiler (gitignorerade)
 
 `files/`, `ocr/`, `text/`, `rag/lancedb/` — åter-skapas helt av skripten.
+
+## Starta om
+
+Alla fyra steg är idempotenta — kör om utan oro. De hoppar över redan färdigt
+arbete (download: `files/<namn>.pdf` finns; ocr: `text/<namn>.txt` finns;
+ingest: `source` redan i tabellen). Avbrutna körningar fortsätter där de slutade.
 
 ## Licens
 
