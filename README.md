@@ -105,6 +105,7 @@ OAuth-token genereras med `claude setup-token` (engångsåtgärd).
 | `download.py` | Hämta PDF:er från Drive |
 | `ocr.sh` | OCR + textextraktion |
 | `quality.py` | Heuristisk kvalitetsbedömning av `text/*.txt` |
+| `redo_ocr.sh` | Kör om OCR med `--redo-ocr` på filer med dåligt textlager |
 | `rag/ingest.py` | Bygg vektorindex |
 | `rag/ask.py` | Frågefronten |
 
@@ -120,7 +121,11 @@ och vokal/konsonant-balans. Markerar källa `text-layer` (originalet hade text)
 vs `ocr` (Tesseract).
 
 Viktig insikt: `text-layer` betyder inte automatiskt "bra" — vissa PDF:er har
-gammalt OCR-skräp inbäddat. Sortera efter `score`, inte efter källa.
+gammalt OCR-skräp inbäddat fastän originalbilden är fullt läsbar. Sortera
+efter `score`, inte efter källa. För dessa: kör `./redo_ocr.sh` som anropar
+`ocrmypdf --redo-ocr` (tar bort det dåliga textlagret och OCR:ar om från
+bilden). Tröskel via env: `THRESHOLD=70 ./redo_ocr.sh`. Inkludera även
+dåliga Tesseract-filer: `SOURCE=any ./redo_ocr.sh`.
 
 Valfritt: installera hunspell + svensk ordlista så fylls `pct_swe`-kolumnen i:
 
