@@ -1,0 +1,17 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Nedladdade och bearbetade arkivdata (stora, åter-skapas av skripten)
+files/
+ocr/
+text/
+log.txt
+
+# Vektorindex
+rag/lancedb/
+
+# OS
+.DS_Store
