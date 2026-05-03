@@ -34,6 +34,7 @@ process_one() {
   existing=$(pdftotext -q -layout "$f" - 2>/dev/null | tr -d '[:space:]' | wc -c)
   if [ "$existing" -gt "$MIN_TEXT_CHARS" ]; then
     echo "[text-finns] $base"
+    cp "$f" "$out_pdf"
     pdftotext -layout "$f" "$out_txt"
     return 0
   fi
@@ -64,3 +65,21 @@ export IN OCR TXT PER_FILE_JOBS MIN_TEXT_CHARS
 
 find "$IN" -name '*.pdf' -print0 \
   | xargs -0 -n 1 -P "$JOBS" -I {} bash -c 'process_one "$@"' _ {}
+
+# Slutkontroll: alla PDF:er i files/ ska finnas i ocr/
+echo
+echo "Kontrollerar att alla PDF:er finns i $OCR/ …"
+missing=0
+while IFS= read -r -d '' f; do
+  base=$(basename "$f" .pdf)
+  if [ ! -s "$OCR/$base.pdf" ]; then
+    echo "  SAKNAS: $base.pdf"
+    missing=$((missing + 1))
+  fi
+done < <(find "$IN" -name '*.pdf' -print0)
+if [ "$missing" -eq 0 ]; then
+  echo "  OK — alla $(find "$IN" -name '*.pdf' | wc -l | tr -d ' ') PDF:er finns i $OCR/."
+else
+  echo "  $missing PDF:er saknas i $OCR/ — kör om skriptet."
+  exit 1
+fi

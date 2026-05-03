@@ -2,8 +2,11 @@
 """
 Ställ frågor till det indexerade arkivet.
 
+Använder Claude Agent SDK med OAuth-token (Pro/Max-abonnemang) — räknas mot
+abonnemangets timgränser, inte mot API-credits.
+
 Kör:
-    export ANTHROPIC_API_KEY=...
+    export CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...
     python ask.py "Vad sa Annett Kohut om kvällen den 28 februari?"
     python ask.py --top-k 30 --rerank "din fråga"
     python ask.py            # interaktiv repl
@@ -12,12 +15,20 @@ Kör:
 from __future__ import annotations
 
 import argparse
+import asyncio
 import os
 import sys
 from pathlib import Path
 
-import anthropic
 import lancedb
+from claude_agent_sdk import (
+    AssistantMessage,
+    ClaudeAgentOptions,
+    ResultMessage,
+    TextBlock,
+    ThinkingConfigAdaptive,
+    query,
+)
 from sentence_transformers import SentenceTransformer
 
 DB_DIR = Path(__file__).resolve().parent / "lancedb"
@@ -36,9 +47,9 @@ Regler:
 - OCR-fel kan förekomma. Säg till om en passage verkar vara skadad eller obegriplig."""
 
 
-def search(table, model, query: str, top_k: int) -> list[dict]:
+def search(table, model, q: str, top_k: int) -> list[dict]:
     qv = model.encode(
-        [f"query: {query}"],
+        [f"query: {q}"],
         normalize_embeddings=True,
         convert_to_numpy=True,
     )[0]
@@ -50,11 +61,11 @@ def search(table, model, query: str, top_k: int) -> list[dict]:
     )
 
 
-def rerank(query: str, hits: list[dict], top_n: int) -> list[dict]:
+def rerank(q: str, hits: list[dict], top_n: int) -> list[dict]:
     from sentence_transformers import CrossEncoder
 
     ce = CrossEncoder(RERANK_MODEL)
-    pairs = [(query, h["text"]) for h in hits]
+    pairs = [(q, h["text"]) for h in hits]
     scores = ce.predict(pairs, show_progress_bar=False)
     ranked = sorted(zip(scores, hits), key=lambda x: -float(x[0]))
     return [h for _, h in ranked[:top_n]]
@@ -68,51 +79,53 @@ def format_context(hits: list[dict]) -> str:
     return "\n\n---\n\n".join(blocks)
 
 
-def ask_claude(client: anthropic.Anthropic, query: str, context: str) -> str:
-    user_msg = f"Utdrag ur arkivet:\n\n{context}\n\n---\n\nFråga: {query}"
-    with client.messages.stream(
+async def ask_claude(q: str, context: str) -> None:
+    user_msg = f"Utdrag ur arkivet:\n\n{context}\n\n---\n\nFråga: {q}"
+    options = ClaudeAgentOptions(
+        system_prompt=SYSTEM_PROMPT,
         model=CLAUDE_MODEL,
-        max_tokens=64000,
-        system=SYSTEM_PROMPT,
-        thinking={"type": "adaptive"},
-        output_config={"effort": "high"},
-        messages=[{"role": "user", "content": user_msg}],
-    ) as stream:
-        for text in stream.text_stream:
-            print(text, end="", flush=True)
-        print()
-        return stream.get_final_message()
+        allowed_tools=[],          # ren Q&A — inga verktyg
+        thinking=ThinkingConfigAdaptive(),
+        effort="high",
+        max_turns=1,
+        setting_sources=[],        # ignorera lokal CLAUDE.md / settings
+    )
+    async for message in query(prompt=user_msg, options=options):
+        if isinstance(message, AssistantMessage):
+            for block in message.content:
+                if isinstance(block, TextBlock):
+                    print(block.text, end="", flush=True)
+        elif isinstance(message, ResultMessage):
+            print()
+            if getattr(message, "is_error", False):
+                print(f"\n(fel: {message})", file=sys.stderr)
 
 
-def run_query(table, embed_model, client, query: str, top_k: int, top_n: int, do_rerank: bool):
+async def run_query(table, embed_model, q: str, top_k: int, top_n: int, do_rerank: bool):
     print(f"\n→ söker top-{top_k} chunks…", flush=True)
-    hits = search(table, embed_model, query, top_k)
+    hits = search(table, embed_model, q, top_k)
     if not hits:
         print("Inga träffar.")
         return
     if do_rerank:
         print(f"→ omrankar med cross-encoder, behåller top-{top_n}…", flush=True)
-        hits = rerank(query, hits, top_n)
+        hits = rerank(q, hits, top_n)
     else:
         hits = hits[:top_n]
 
-    print(f"\nKällor som skickas till Claude:")
+    print("\nKällor som skickas till Claude:")
     for h in hits:
         print(f"  Nr {h['nr']}, sida {h['page']}: {h['titel'][:70]}")
     print("\n— Svar —\n")
-    ask_claude(client, query, format_context(hits))
+    await ask_claude(q, format_context(hits))
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("query", nargs="*", help="frågan; lämna tom för repl")
-    ap.add_argument("--top-k", type=int, default=20, help="antal kandidater från vektor-DB")
-    ap.add_argument("--top-n", type=int, default=6, help="antal som skickas till Claude")
-    ap.add_argument("--rerank", action="store_true", help="omranka med cross-encoder (laddar extra modell)")
-    args = ap.parse_args()
-
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        print("Sätt ANTHROPIC_API_KEY först.", file=sys.stderr)
+async def main_async(args) -> int:
+    if not (os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") or os.environ.get("ANTHROPIC_API_KEY")):
+        print(
+            "Sätt CLAUDE_CODE_OAUTH_TOKEN (Pro/Max) eller ANTHROPIC_API_KEY först.",
+            file=sys.stderr,
+        )
         return 1
     if not DB_DIR.exists():
         print(f"Saknar {DB_DIR}/ — kör ingest.py först.", file=sys.stderr)
@@ -125,11 +138,10 @@ def main() -> int:
     table = db.open_table(TABLE)
     print(f"Index: {table.count_rows()} chunks. Laddar embedding-modell…")
     embed_model = SentenceTransformer(EMBED_MODEL)
-    client = anthropic.Anthropic()
 
     if args.query:
-        run_query(table, embed_model, client, " ".join(args.query),
-                  args.top_k, args.top_n, args.rerank)
+        await run_query(table, embed_model, " ".join(args.query),
+                        args.top_k, args.top_n, args.rerank)
         return 0
 
     print("Interaktiv repl — tom rad eller Ctrl-D avslutar.\n")
@@ -138,11 +150,21 @@ def main() -> int:
             q = input("frågan> ").strip()
             if not q:
                 break
-            run_query(table, embed_model, client, q,
-                      args.top_k, args.top_n, args.rerank)
+            await run_query(table, embed_model, q,
+                            args.top_k, args.top_n, args.rerank)
     except (EOFError, KeyboardInterrupt):
         print()
     return 0
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("query", nargs="*", help="frågan; lämna tom för repl")
+    ap.add_argument("--top-k", type=int, default=20, help="antal kandidater från vektor-DB")
+    ap.add_argument("--top-n", type=int, default=6, help="antal som skickas till Claude")
+    ap.add_argument("--rerank", action="store_true", help="omranka med cross-encoder")
+    args = ap.parse_args()
+    return asyncio.run(main_async(args))
 
 
 if __name__ == "__main__":

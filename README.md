@@ -14,8 +14,8 @@ download.py  →  files/        ocr.sh  →  ocr/  +  text/        rag/ingest.py
 ## Krav
 
 - macOS (testat på Darwin 25), Python 3.11+
-- Homebrew för OCR-verktygen
-- Anthropic API-nyckel för `rag/ask.py`
+- Homebrew för OCR-verktygen och `claude` CLI
+- Claude Pro/Max-abonnemang (OAuth-token) eller Anthropic API-nyckel för `rag/ask.py`
 
 ## Installation
 
@@ -25,9 +25,9 @@ cd palmemordsarkivet
 
 python3 -m venv .venv
 .venv/bin/pip install --upgrade pip
-.venv/bin/pip install gdown requests sentence-transformers lancedb pyarrow anthropic
+.venv/bin/pip install gdown requests sentence-transformers lancedb pyarrow claude-agent-sdk
 
-brew install ocrmypdf tesseract-lang poppler unpaper
+brew install ocrmypdf tesseract-lang poppler unpaper claude-code
 ```
 
 ## Användning
@@ -81,7 +81,10 @@ varningar för blanka sidor (`Too few characters. Skipping this page` /
 ### 4. Ställ frågor
 
 ```bash
-export ANTHROPIC_API_KEY=sk-...
+# Pro/Max-abonnemang (räknas mot abonnemangets timgränser):
+export CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...
+# Eller API-credits:
+# export ANTHROPIC_API_KEY=sk-ant-...
 
 .venv/bin/python rag/ask.py "Vad sa Annett Kohut om kvällen 28 februari?"
 .venv/bin/python rag/ask.py --rerank "..."   # bättre precision (laddar ned 568 MB modell)
@@ -89,9 +92,11 @@ export ANTHROPIC_API_KEY=sk-...
 ```
 
 Hämtar top-20 chunks från vektor-DB, ev. omrankar med `BAAI/bge-reranker-v2-m3`,
-skickar topp-6 till Claude Opus 4.7 (adaptive thinking) som svarar på svenska
-med källhänvisningar `[Nr X, sida Y]`. Säger "framgår inte av materialet" hellre
-än att gissa.
+skickar topp-6 till Claude Opus 4.7 (adaptive thinking) via Claude Agent SDK.
+Svarar på svenska med källhänvisningar `[Nr X, sida Y]`. Säger
+"framgår inte av materialet" hellre än att gissa.
+
+OAuth-token genereras med `claude setup-token` (engångsåtgärd).
 
 ## Filer
 

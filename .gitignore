@@ -9,6 +9,7 @@ files/
 ocr/
 text/
 log.txt
+*.pdf
 
 # Vektorindex
 rag/lancedb/
