@@ -47,16 +47,16 @@ run_ocr() {
   # $1 = mode (skip|redo), $2 = input pdf, $3 = output pdf
   local mode="$1" pdf="$2" out_pdf="$3" log
   log=$(mktemp)
-  local skip_flag="--skip-text"
-  [ "$mode" = "redo" ] && skip_flag="--redo-ocr"
-  local extra=()
+  local extra=(--rotate-pages --clean)
+  if [ "$mode" = "redo" ]; then
+    # --redo-ocr är inkompatibel med --deskew (och --clean-final, --remove-background)
+    extra+=(--redo-ocr)
+  else
+    extra+=(--skip-text --deskew)
+  fi
   [ -n "${USER_WORDS:-}" ] && extra+=(--user-words "$USER_WORDS")
   if ocrmypdf \
         -l "$LANGS" \
-        $skip_flag \
-        --rotate-pages \
-        --deskew \
-        --clean \
         --jobs "$PER_FILE_JOBS" \
         --quiet \
         "${extra[@]}" \
