@@ -20,6 +20,8 @@ OCR=${OCR:-$ROOT/ocr}
 TXT=${TXT:-$ROOT/text}
 TESSDATA=${TESSDATA:-$ROOT/tessdata}
 USER_WORDS=${USER_WORDS:-$TESSDATA/swe.user-words}
+TESS_CONFIG=${TESS_CONFIG:-$TESSDATA/tesseract.config}
+PSM=${PSM:-6}                      # 6 = uniform block of text (bra för förhör)
 LANGS=${LANGS:-swe+eng}            # svensk + engelsk modell
 JOBS=${JOBS:-4}                    # antal filer parallellt
 PER_FILE_JOBS=${PER_FILE_JOBS:-2}  # OCR-trådar per fil
@@ -37,7 +39,10 @@ else
 fi
 
 [ -f "$USER_WORDS" ] || USER_WORDS=""
+[ -f "$TESS_CONFIG" ] || TESS_CONFIG=""
 [ -n "$USER_WORDS" ] && echo "Använder user-words: $USER_WORDS ($(wc -l < "$USER_WORDS" | tr -d ' ') ord)"
+[ -n "$TESS_CONFIG" ] && echo "Använder tesseract-config: $TESS_CONFIG"
+echo "PSM: $PSM (page segmentation mode)"
 
 for cmd in ocrmypdf pdftotext; do
   command -v "$cmd" >/dev/null || { echo "saknar verktyg: $cmd"; exit 1; }
@@ -47,7 +52,7 @@ run_ocr() {
   # $1 = mode (skip|redo), $2 = input pdf, $3 = output pdf
   local mode="$1" pdf="$2" out_pdf="$3" log
   log=$(mktemp)
-  local extra=(--rotate-pages --clean)
+  local extra=(--rotate-pages --clean --tesseract-pagesegmode "$PSM")
   if [ "$mode" = "redo" ]; then
     # --redo-ocr är inkompatibel med --deskew (och --clean-final, --remove-background)
     extra+=(--redo-ocr)
@@ -55,6 +60,7 @@ run_ocr() {
     extra+=(--skip-text --deskew)
   fi
   [ -n "${USER_WORDS:-}" ] && extra+=(--user-words "$USER_WORDS")
+  [ -n "${TESS_CONFIG:-}" ] && extra+=(--tesseract-config "$TESS_CONFIG")
   if ocrmypdf \
         -l "$LANGS" \
         --jobs "$PER_FILE_JOBS" \
@@ -115,7 +121,7 @@ process_one() {
   fi
 }
 export -f process_one run_ocr
-export IN OCR TXT PER_FILE_JOBS MIN_TEXT_CHARS REDO_TEXT_LAYER LANGS USER_WORDS TESSDATA_PREFIX
+export IN OCR TXT PER_FILE_JOBS MIN_TEXT_CHARS REDO_TEXT_LAYER LANGS PSM USER_WORDS TESS_CONFIG TESSDATA_PREFIX
 
 find "$IN" -name '*.pdf' -print0 \
   | xargs -0 -n 1 -P "$JOBS" -I {} bash -c 'process_one "$@"' _ {}
