@@ -8,6 +8,7 @@ __pycache__/
 files/
 ocr/
 text/
+text_surya/
 log.txt
 *.pdf
 
@@ -18,5 +19,8 @@ rag/lancedb/
 .DS_Store
 quality.csv
 
-# Tessdata: bara user-words committas, modell + symlänkar laddas av setup_tessdata.sh
-tessdata/*.traineddata
+# Tessdata: bara user-words och config committas, allt annat läggs av setup_tessdata.sh
+tessdata/*
+!tessdata/swe.user-words
+!tessdata/tesseract.config
+quality.csv.before

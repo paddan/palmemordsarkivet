@@ -30,6 +30,14 @@ python3 -m venv .venv
 brew install ocrmypdf tesseract-lang poppler unpaper claude-code
 ```
 
+Valfritt för Surya-OCR (alternativ till Tesseract, högre kvalitet på degraderade scans):
+
+```bash
+.venv/bin/pip install surya-ocr 'transformers<5'
+```
+
+Surya 0.17 fungerar inte med transformers 5.x — pinnen är medvetet vald.
+
 ## Användning
 
 ### 1. Ladda ner PDF-filerna
@@ -51,16 +59,27 @@ nohup .venv/bin/python download.py files > log.txt 2>&1 &
 
 ### 2. OCR till text
 
+Förbered tessdata (engångsåtgärd — laddar ner swe_best, mer noggrann modell):
+
+```bash
+./setup_tessdata.sh
+```
+
+Sen:
+
 ```bash
 ./ocr.sh
 ```
 
 - Snabbkoll först: om PDF:en redan har textlager extraheras det direkt utan OCR.
-- Annars `ocrmypdf -l swe --rotate-pages --deskew --clean` → sökbar PDF + `.txt`.
+- Annars `ocrmypdf -l swe+eng --rotate-pages --deskew --clean` med PSM 6
+  (förhörsprotokoll-vänlig page-segmentation), `swe_best.traineddata` från
+  `tessdata/`, och `tessdata/swe.user-words` (Palme-specifika namn, Q/A-markörer,
+  ärendenummer-prefix).
 - Parallelliserar över filer med `xargs -P` (default 4 jobb).
 - Idempotent.
 
-Tunables via env: `JOBS=8 PER_FILE_JOBS=2 ./ocr.sh`.
+Tunables via env: `JOBS=8 PER_FILE_JOBS=2 PSM=4 ./ocr.sh`.
 
 Lägen:
 
@@ -73,6 +92,25 @@ REDO_TEXT_LAYER=1 ./ocr.sh     # kör om OCR på alla PDF:er som har textlager
 Vid riktiga fel skrivs `[fel] <namn>` följt av indragen ocrmypdf-logg. Tesseracts
 varningar för blanka sidor (`Too few characters. Skipping this page` /
 `Error during processing`) är benigna och göms numera — filen blir ändå OCR:ad.
+
+#### Alternativ: Surya för värsta filerna
+
+Tesseract klarar ~85 % av materialet bra men kämpar på degraderade scans. För
+de filerna ger [Surya](https://github.com/VikParuchuri/surya) (transformer-OCR)
+markant högre kvalitet — i stickprov på 50 svåra filer: medelpoäng 60 → 73,
+49 av 50 bättre. Priset är fart (~30–100 s/sida på Apple Silicon MPS, mot
+~1 s/sida för Tesseract).
+
+Hybrid-workflow:
+
+```bash
+./ocr.sh                                                # full Tesseract-omgång
+.venv/bin/python quality.py                             # bygg quality.csv
+.venv/bin/python ocr_surya.py --in files --out text_surya  # eller bara värsta filerna
+```
+
+För att bara ta värsta filerna, symlinka över de PDF:er där `quality.csv`-poäng
+< 50 till en separat katalog och kör `ocr_surya.py` mot den.
 
 ### 3. Indexera i vektor-DB
 
@@ -111,11 +149,15 @@ OAuth-token genereras med `claude setup-token` (engångsåtgärd).
 | Fil | Vad |
 |---|---|
 | `download.py` | Hämta PDF:er från Drive |
-| `ocr.sh` | OCR + textextraktion |
+| `setup_tessdata.sh` | Sätt upp projekt-lokal `tessdata/` med swe_best |
+| `ocr.sh` | Tesseract-OCR + textextraktion |
+| `ocr_surya.py` | Surya-OCR (alternativ, högre kvalitet på svåra scans) |
 | `quality.py` | Heuristisk kvalitetsbedömning av `text/*.txt` |
 | `redo_ocr.sh` | Kör om OCR med `--redo-ocr` på filer med dåligt textlager |
 | `rag/ingest.py` | Bygg vektorindex |
 | `rag/ask.py` | Frågefronten |
+| `tessdata/swe.user-words` | Palme-specifika ord (committat) |
+| `tessdata/tesseract.config` | `preserve_interword_spaces 1` (committat) |
 
 ### Bonus: kvalitetskoll
 
@@ -149,7 +191,9 @@ echo "katt hus blabla" | hunspell -d sv_SE -l   # ska skriva ut "blabla"
 
 ## Datafiler (gitignorerade)
 
-`files/`, `ocr/`, `text/`, `rag/lancedb/` — åter-skapas helt av skripten.
+`files/`, `ocr/`, `text/`, `text_surya/`, `rag/lancedb/`, `tessdata/*.traineddata`
+— åter-skapas helt av skripten (`text_surya/` av `ocr_surya.py`,
+`tessdata/swe.traineddata` av `setup_tessdata.sh`).
 
 ## Starta om
 
