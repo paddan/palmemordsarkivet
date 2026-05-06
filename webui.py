@@ -8,11 +8,11 @@ eller manuellt:
 from __future__ import annotations
 
 import asyncio
+import base64
 import os
 import re
 import subprocess
 import sys
-import urllib.parse
 from pathlib import Path
 
 import lancedb
@@ -75,11 +75,8 @@ CITE_RE = re.compile(r"Nr (\d+(?:[.,]\d+)*),\s*sida (\d+)")
 
 
 def linkify_citations(text: str, hits) -> str:
-    """Förvandla varje "Nr X, sida Y" till en klickbar HTML-länk.
-
-    Kodar PDF-stem direkt i URL:en så att klick fungerar även om sessionen
-    återställs (t.ex. nytt fönster). Använder target=_self så Streamlit
-    kan rerun:a samma flik och hantera klicket.
+    """Förvandla "Nr X, sida Y" till små inline-knappar som öppnar PDF lokalt
+    via ?pdf=<base64>-handlern högst upp i scriptet (oberoende av session_state).
     """
     nr_to_pdf = {}
     for h in hits:
@@ -87,34 +84,93 @@ def linkify_citations(text: str, hits) -> str:
         if pdf:
             nr_to_pdf[str(h["nr"])] = pdf
 
+    style = (
+        "display:inline-block;padding:1px 6px;margin:0 2px;"
+        "border:1px solid rgba(128,128,128,0.4);border-radius:6px;"
+        "font-size:0.82em;background:rgba(128,128,128,0.12);"
+        "color:inherit;text-decoration:none;"
+        "font-family:ui-monospace,SFMono-Regular,monospace;"
+    )
+
     def repl(m: re.Match) -> str:
         nr, page = m.group(1), m.group(2)
         if nr not in nr_to_pdf:
             return m.group(0)
-        # file://-URL med URL-kodad sökväg + #page=N (PDF-läsare som
-        # öppnar i webbläsare hoppar då direkt till rätt sida).
-        href = "file://" + urllib.parse.quote(str(nr_to_pdf[nr]))
-        return f'<a href="{href}#page={page}" target="_blank">{m.group(0)}</a>'
+        token = base64.urlsafe_b64encode(str(nr_to_pdf[nr]).encode()).decode().rstrip("=")
+        href = f"?pdf={token}"
+        return (
+            f'<a href="{href}" target="pdf_opener" '
+            f'style="{style}" title="Öppna PDF">{m.group(0)}</a>'
+        )
 
     return CITE_RE.sub(repl, text)
 
 
-if not (os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") or os.environ.get("ANTHROPIC_API_KEY")):
-    st.error(
-        "Sätt `CLAUDE_CODE_OAUTH_TOKEN` (Pro/Max) eller `ANTHROPIC_API_KEY` i miljön "
-        "innan du startar webgränssnittet."
-    )
-    st.stop()
-
 table, embed_model = load()
-st.caption(f"Index: {table.count_rows():,} chunks · modell: {CLAUDE_MODEL}")
+st.caption(f"Index: {table.count_rows():,} chunks")
+
+# Gömd iframe: citatlänkar har target="pdf_opener" och laddas hit istället för
+# i huvudsidan. Streamlit serverar requesten i iframen, kör pdf-handlern högst
+# upp i scriptet (öppnar PDF via subprocess) — huvudsidan rörs inte.
+st.markdown(
+    '<iframe name="pdf_opener" style="display:none" '
+    'width="0" height="0" tabindex="-1" aria-hidden="true"></iframe>',
+    unsafe_allow_html=True,
+)
+
+BACKENDS = {
+    "Claude Opus 4.7": {"kind": "claude", "model": CLAUDE_MODEL},
+    "OpenAI GPT-5": {"kind": "openai", "model": "gpt-5",
+                     "base_url": "https://api.openai.com/v1",
+                     "env": "OPENAI_API_KEY"},
+    "OpenAI GPT-4o": {"kind": "openai", "model": "gpt-4o",
+                      "base_url": "https://api.openai.com/v1",
+                      "env": "OPENAI_API_KEY"},
+    "OpenAI-kompatibel (custom)": {"kind": "openai", "model": "llama3.1:8b",
+                                   "base_url": "http://localhost:11434/v1",
+                                   "env": None, "configurable": True},
+}
 
 with st.sidebar:
     st.header("Inställningar")
+    backend_name = st.selectbox("AI-modell", list(BACKENDS.keys()), index=0)
+    backend = BACKENDS[backend_name]
+    if backend.get("configurable"):
+        backend = {
+            **backend,
+            "base_url": st.text_input(
+                "Endpoint-URL", value=backend["base_url"],
+                help="OpenAI-kompatibel /v1-endpoint (Ollama, LM Studio, "
+                     "llama.cpp, vLLM, fjärr-OpenAI-API, ...)"),
+            "model": st.text_input(
+                "Modellnamn", value=backend["model"],
+                help="T.ex. `llama3.1:8b` (Ollama), `gpt-4o-mini`, eller "
+                     "vad providern kräver"),
+            "api_key_override": st.text_input(
+                "API-nyckel (valfritt)", value="", type="password",
+                help="Lämna tomt för Ollama/lokala servrar utan auth"),
+        }
     do_rerank = st.toggle("Använd cross-encoder reranker", value=True,
                           help="Långsammare första gången (laddar ~568 MB) men bättre precision.")
-    top_k = st.slider("Hämta top-K kandidater", 5, 50, 20)
-    top_n = st.slider("Skicka top-N till Claude", 1, 15, 6)
+    top_k = st.slider(
+        "Hämta top-K kandidater", 5, 50, 20,
+        help="Antal chunks som vektorsökningen plockar fram ur indexet i första "
+             "steget. Högre K → fler alternativ för rerankern att välja bland "
+             "(bättre täckning) men långsammare. Utan reranker används bara de "
+             "första top-N av dessa.")
+    top_n = st.slider(
+        "Skicka top-N till AI", 1, 15, 6,
+        help="Antal chunks (efter ev. reranking) som faktiskt skickas som "
+             "kontext till språkmodellen. Högre N → mer underlag men längre "
+             "prompt, högre kostnad och risk att modellen tappar fokus.")
+
+if backend["kind"] == "claude":
+    if not (os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") or os.environ.get("ANTHROPIC_API_KEY")):
+        st.error("Sätt `CLAUDE_CODE_OAUTH_TOKEN` eller `ANTHROPIC_API_KEY` i miljön.")
+        st.stop()
+elif backend.get("env") and not os.environ.get(backend["env"]):
+    st.error(f"Sätt `{backend['env']}` i miljön för att använda {backend_name}.")
+    st.stop()
 
 # Cacha senaste sökning + svar i session_state så att klick på "Öppna PDF"
 # (som triggar streamlit-rerun) inte tvingar fram en ny Claude-anrop.
@@ -123,6 +179,21 @@ ss.setdefault("question", "")
 ss.setdefault("hits", None)
 ss.setdefault("answer", "")
 
+# Klick på inline-citatknapp i svaret: ?pdf=<base64-encoded path> → öppna PDF.
+# PDF-sökvägen kodas direkt i URL:en så det fungerar även om session_state
+# försvinner vid full sidladdning. Validerar att path ligger under ROOT.
+qp = st.query_params
+if "pdf" in qp:
+    try:
+        token = qp["pdf"]
+        token += "=" * (-len(token) % 4)
+        path = Path(base64.urlsafe_b64decode(token).decode()).resolve()
+        if path.is_file() and ROOT in path.parents:
+            subprocess.Popen(["open", str(path)])
+    except Exception:
+        pass
+    st.query_params.clear()
+
 
 with st.form("ask"):
     q = st.text_input("Din fråga", placeholder="Vem är Stig Engström?",
@@ -130,8 +201,7 @@ with st.form("ask"):
     submitted = st.form_submit_button("Fråga", type="primary")
 
 
-async def stream_to_string(hits, q) -> str:
-    user_msg = f"Utdrag ur arkivet:\n\n{format_context(hits)}\n\n---\n\nFråga: {q}"
+async def stream_claude(user_msg: str, placeholder, parts: list[str]) -> None:
     options = ClaudeAgentOptions(
         system_prompt=SYSTEM_PROMPT,
         model=CLAUDE_MODEL,
@@ -141,14 +211,41 @@ async def stream_to_string(hits, q) -> str:
         max_turns=1,
         setting_sources=[],
     )
-    placeholder = st.empty()
-    parts: list[str] = []
     async for message in query(prompt=user_msg, options=options):
         if isinstance(message, AssistantMessage):
             for block in message.content:
                 if isinstance(block, TextBlock):
                     parts.append(block.text)
                     placeholder.markdown("".join(parts))
+
+
+async def stream_openai(user_msg: str, placeholder, parts: list[str], cfg) -> None:
+    from openai import AsyncOpenAI  # noqa: PLC0415
+    api_key = os.environ.get(cfg["env"]) if cfg.get("env") else "ollama"
+    client = AsyncOpenAI(api_key=api_key or "ollama", base_url=cfg["base_url"])
+    stream = await client.chat.completions.create(
+        model=cfg["model"],
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_msg},
+        ],
+        stream=True,
+    )
+    async for chunk in stream:
+        delta = chunk.choices[0].delta.content if chunk.choices else None
+        if delta:
+            parts.append(delta)
+            placeholder.markdown("".join(parts))
+
+
+async def stream_to_string(hits, q, cfg) -> str:
+    user_msg = f"Utdrag ur arkivet:\n\n{format_context(hits)}\n\n---\n\nFråga: {q}"
+    placeholder = st.empty()
+    parts: list[str] = []
+    if cfg["kind"] == "claude":
+        await stream_claude(user_msg, placeholder, parts)
+    else:
+        await stream_openai(user_msg, placeholder, parts, cfg)
     final = linkify_citations("".join(parts), hits)
     placeholder.markdown(final, unsafe_allow_html=True)
     return final
@@ -170,13 +267,13 @@ if submitted and q.strip():
         status.update(label=f"Hittade {len(hits)} relevanta chunks", state="complete")
     ss.hits = hits
 
-    st.subheader("Svar")
-    ss.answer = asyncio.run(stream_to_string(hits, q))
+    st.subheader(f"Svar ({backend_name})")
+    ss.answer = asyncio.run(stream_to_string(hits, q, backend))
 
 # Rendera resultat från session_state (även efter rerun från PDF-knappar)
 if ss.hits:
     if not submitted:
-        # på rerun: visa cachat svar
+        # på rerun: visa cachat svar (redan linkifierat)
         st.subheader("Svar")
         st.markdown(ss.answer, unsafe_allow_html=True)
 

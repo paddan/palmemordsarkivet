@@ -153,6 +153,32 @@ export CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...
 ./web.sh
 ```
 
+Webgränssnittet stödjer flera AI-backends via en väljare i sidebaren:
+
+- **Claude Opus 4.7** (default) — via `claude-agent-sdk` med adaptive thinking,
+  kräver `CLAUDE_CODE_OAUTH_TOKEN` eller `ANTHROPIC_API_KEY`.
+- **OpenAI GPT-5 / GPT-4o** — kräver `OPENAI_API_KEY`.
+- **OpenAI-kompatibel (custom)** — pekar på vilken `/v1`-endpoint som helst
+  (Ollama, LM Studio, llama.cpp, vLLM, fjärr-OpenAI-providers...). URL,
+  modellnamn och valfri API-nyckel konfigureras i sidebaren.
+
+Lägg till `openai` om du vill använda andra backends än Claude:
+
+```bash
+.venv/bin/pip install openai
+```
+
+För lokal Ollama:
+
+```bash
+brew install ollama
+ollama serve &
+ollama pull llama3.1:8b
+```
+
+Citat i svaret renderas som små inline-knappar — klick öppnar original-PDF:en
+lokalt (via `open`) i en gömd iframe så huvudsidan inte laddas om.
+
 Hämtar top-20 chunks från vektor-DB, ev. omrankar med `BAAI/bge-reranker-v2-m3`,
 skickar topp-6 till Claude Opus 4.7 (adaptive thinking) via Claude Agent SDK.
 Svarar på svenska med källhänvisningar `[Nr X, sida Y]`. Säger
