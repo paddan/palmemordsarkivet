@@ -151,12 +151,16 @@ if ss.hits:
             pdf = find_pdf(h["source"])
             txt = find_txt(h["source"])
             stem = h["source"][:-4] if h["source"].endswith(".txt") else h["source"]
-            cols = st.columns([5, 2, 2])
-            with cols[0]:
-                st.markdown(f"**{stem}** (sida {h['page']})")
-            with cols[1]:
-                if pdf and st.button("Öppna PDF", key=f"open_pdf_{i}"):
-                    subprocess.Popen(["open", str(pdf)])
-            with cols[2]:
-                if txt and st.button("Öppna text", key=f"open_txt_{i}"):
-                    subprocess.Popen(["open", str(txt)])
+            with st.container(border=True):
+                cols = st.columns([5, 2, 2])
+                with cols[0]:
+                    st.markdown(f"**{stem}**")
+                    st.caption(f"sida {h['page']}")
+                with cols[1]:
+                    if pdf and st.button("Öppna PDF", key=f"open_pdf_{i}",
+                                         use_container_width=True):
+                        subprocess.Popen(["open", str(pdf)])
+                with cols[2]:
+                    if txt and st.button("Öppna text", key=f"open_txt_{i}",
+                                         use_container_width=True):
+                        subprocess.Popen(["open", str(txt)])
