@@ -81,18 +81,20 @@ def linkify_citations(text: str, hits) -> str:
     återställs (t.ex. nytt fönster). Använder target=_self så Streamlit
     kan rerun:a samma flik och hantera klicket.
     """
-    nr_to_stem = {}
+    nr_to_pdf = {}
     for h in hits:
-        stem = h["source"][:-4] if h["source"].endswith(".txt") else h["source"]
-        nr_to_stem[str(h["nr"])] = stem
+        pdf = find_pdf(h["source"])
+        if pdf:
+            nr_to_pdf[str(h["nr"])] = pdf
 
     def repl(m: re.Match) -> str:
         nr, page = m.group(1), m.group(2)
-        if nr not in nr_to_stem:
+        if nr not in nr_to_pdf:
             return m.group(0)
-        stem_q = urllib.parse.quote(nr_to_stem[nr])
-        href = f"?stem={stem_q}&page={page}"
-        return f'<a href="{href}" target="_blank">{m.group(0)}</a>'
+        # file://-URL med URL-kodad sökväg + #page=N (PDF-läsare som
+        # öppnar i webbläsare hoppar då direkt till rätt sida).
+        href = "file://" + urllib.parse.quote(str(nr_to_pdf[nr]))
+        return f'<a href="{href}#page={page}" target="_blank">{m.group(0)}</a>'
 
     return CITE_RE.sub(repl, text)
 
@@ -121,17 +123,6 @@ ss.setdefault("question", "")
 ss.setdefault("hits", None)
 ss.setdefault("answer", "")
 
-# Citat-länkar öppnas i ny flik (?stem=...&page=Y) — öppna PDF lokalt
-# och visa kort bekräftelse i den nya fliken, sen avsluta.
-qp = st.query_params
-if "stem" in qp:
-    pdf = find_pdf(qp["stem"] + ".txt")
-    if pdf:
-        subprocess.Popen(["open", str(pdf)])
-        st.success(f"Öppnar **{pdf.name}** — fliken kan stängas.")
-    else:
-        st.error(f"Hittade ingen PDF för `{qp['stem']}`.")
-    st.stop()
 
 with st.form("ask"):
     q = st.text_input("Din fråga", placeholder="Vem är Stig Engström?",
