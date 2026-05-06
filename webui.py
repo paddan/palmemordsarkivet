@@ -70,11 +70,17 @@ def find_txt(source_txt: str) -> Path | None:
     return p if p.is_file() else None
 
 
-CITE_RE = re.compile(r"\[Nr ([\w.,]+),\s*sida (\d+)\]")
+# Nr kan vara digitalt med valfritt antal led av "." eller "," (t.ex. 281,10 eller 1322.7).
+CITE_RE = re.compile(r"Nr (\d+(?:[.,]\d+)*),\s*sida (\d+)")
 
 
 def linkify_citations(text: str, hits) -> str:
-    """Förvandla [Nr X, sida Y]-citat till klickbara länkar via query params."""
+    """Förvandla varje "Nr X, sida Y" till en klickbar HTML-länk.
+
+    Kodar PDF-stem direkt i URL:en så att klick fungerar även om sessionen
+    återställs (t.ex. nytt fönster). Använder target=_self så Streamlit
+    kan rerun:a samma flik och hantera klicket.
+    """
     nr_to_stem = {}
     for h in hits:
         stem = h["source"][:-4] if h["source"].endswith(".txt") else h["source"]
@@ -84,10 +90,9 @@ def linkify_citations(text: str, hits) -> str:
         nr, page = m.group(1), m.group(2)
         if nr not in nr_to_stem:
             return m.group(0)
-        return (
-            f"[Nr {nr}, sida {page}]"
-            f"(?nr={urllib.parse.quote(nr)}&page={page})"
-        )
+        stem_q = urllib.parse.quote(nr_to_stem[nr])
+        href = f"?stem={stem_q}&page={page}"
+        return f'<a href="{href}" target="_self">{m.group(0)}</a>'
 
     return CITE_RE.sub(repl, text)
 
@@ -116,16 +121,12 @@ ss.setdefault("question", "")
 ss.setdefault("hits", None)
 ss.setdefault("answer", "")
 
-# Hantera klick på citat-länkar (?nr=X&page=Y) — öppna PDF lokalt.
+# Hantera klick på citat-länkar (?stem=...&page=Y) — öppna PDF lokalt.
 qp = st.query_params
-if "nr" in qp and ss.hits:
-    target_nr = qp["nr"]
-    for h in ss.hits:
-        if str(h["nr"]) == target_nr:
-            pdf = find_pdf(h["source"])
-            if pdf:
-                subprocess.Popen(["open", str(pdf)])
-            break
+if "stem" in qp:
+    pdf = find_pdf(qp["stem"] + ".txt")
+    if pdf:
+        subprocess.Popen(["open", str(pdf)])
     st.query_params.clear()
 
 with st.form("ask"):
@@ -154,7 +155,7 @@ async def stream_to_string(hits, q) -> str:
                     parts.append(block.text)
                     placeholder.markdown("".join(parts))
     final = linkify_citations("".join(parts), hits)
-    placeholder.markdown(final)
+    placeholder.markdown(final, unsafe_allow_html=True)
     return final
 
 
@@ -182,7 +183,7 @@ if ss.hits:
     if not submitted:
         # på rerun: visa cachat svar
         st.subheader("Svar")
-        st.markdown(ss.answer)
+        st.markdown(ss.answer, unsafe_allow_html=True)
 
     with st.expander(f"Källor ({len(ss.hits)})", expanded=False):
         for i, h in enumerate(ss.hits):
