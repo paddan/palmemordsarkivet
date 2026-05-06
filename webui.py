@@ -139,24 +139,24 @@ if ss.hits:
         st.subheader("Svar")
         st.markdown(ss.answer)
 
-    st.subheader(f"Källor ({len(ss.hits)})")
-    for i, h in enumerate(ss.hits):
-        pdf = find_pdf(h["source"])
-        cols = st.columns([5, 2, 2])
-        with cols[0]:
-            st.markdown(f"**Nr {h['nr']}, sida {h['page']}** — {h['titel'][:80]}")
-        with cols[1]:
-            if pdf and st.button("Öppna i PDF-läsare", key=f"open_{i}"):
-                subprocess.Popen(["open", str(pdf)])
-        with cols[2]:
-            if pdf:
-                st.download_button(
-                    "Ladda ner",
-                    data=pdf.read_bytes(),
-                    file_name=pdf.name,
-                    mime="application/pdf",
-                    key=f"dl_{i}",
-                )
-        text = h["text"]
-        st.text(text[:400] + ("…" if len(text) > 400 else ""))
-        st.divider()
+    with st.expander(f"Källor ({len(ss.hits)})", expanded=False):
+        for i, h in enumerate(ss.hits):
+            pdf = find_pdf(h["source"])
+            cols = st.columns([5, 2, 2])
+            with cols[0]:
+                st.markdown(f"**Nr {h['nr']}, sida {h['page']}** — {h['titel'][:80]}")
+            with cols[1]:
+                if pdf and st.button("Öppna i PDF-läsare", key=f"open_{i}"):
+                    subprocess.Popen(["open", str(pdf)])
+            with cols[2]:
+                if pdf:
+                    st.download_button(
+                        "Ladda ner",
+                        data=pdf.read_bytes(),
+                        file_name=pdf.name,
+                        mime="application/pdf",
+                        key=f"dl_{i}",
+                    )
+            text = h["text"]
+            st.text(text[:400] + ("…" if len(text) > 400 else ""))
+            st.divider()
