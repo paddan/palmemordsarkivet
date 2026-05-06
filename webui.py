@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import pickle
 import re
 import subprocess
 import sys
@@ -40,23 +39,6 @@ from claude_agent_sdk import (  # noqa: E402
 )
 
 ROOT = Path(__file__).resolve().parent
-CACHE_FILE = ROOT / ".webui_cache.pkl"
-
-
-def save_cache(state: dict) -> None:
-    try:
-        CACHE_FILE.write_bytes(pickle.dumps(state))
-    except OSError:
-        pass
-
-
-def load_cache() -> dict | None:
-    if not CACHE_FILE.exists():
-        return None
-    try:
-        return pickle.loads(CACHE_FILE.read_bytes())
-    except Exception:  # noqa: BLE001
-        return None
 
 st.set_page_config(page_title="Palmemordsarkivet", layout="wide")
 st.title("Palmemordsarkivet")
@@ -110,7 +92,7 @@ def linkify_citations(text: str, hits) -> str:
             return m.group(0)
         stem_q = urllib.parse.quote(nr_to_stem[nr])
         href = f"?stem={stem_q}&page={page}"
-        return f'<a href="{href}" target="_self">{m.group(0)}</a>'
+        return f'<a href="{href}" target="_blank">{m.group(0)}</a>'
 
     return CITE_RE.sub(repl, text)
 
@@ -139,22 +121,17 @@ ss.setdefault("question", "")
 ss.setdefault("hits", None)
 ss.setdefault("answer", "")
 
-# Återställ från disk om sessionen är tom (t.ex. efter länkklick som
-# triggar full siduppdatering och nollar st.session_state).
-if ss.hits is None and not ss.answer:
-    cached = load_cache()
-    if cached:
-        ss.question = cached.get("question", "")
-        ss.hits = cached.get("hits")
-        ss.answer = cached.get("answer", "")
-
-# Hantera klick på citat-länkar (?stem=...&page=Y) — öppna PDF lokalt.
+# Citat-länkar öppnas i ny flik (?stem=...&page=Y) — öppna PDF lokalt
+# och visa kort bekräftelse i den nya fliken, sen avsluta.
 qp = st.query_params
 if "stem" in qp:
     pdf = find_pdf(qp["stem"] + ".txt")
     if pdf:
         subprocess.Popen(["open", str(pdf)])
-    st.query_params.clear()
+        st.success(f"Öppnar **{pdf.name}** — fliken kan stängas.")
+    else:
+        st.error(f"Hittade ingen PDF för `{qp['stem']}`.")
+    st.stop()
 
 with st.form("ask"):
     q = st.text_input("Din fråga", placeholder="Vem är Stig Engström?",
@@ -204,7 +181,6 @@ if submitted and q.strip():
 
     st.subheader("Svar")
     ss.answer = asyncio.run(stream_to_string(hits, q))
-    save_cache({"question": q, "hits": hits, "answer": ss.answer})
 
 # Rendera resultat från session_state (även efter rerun från PDF-knappar)
 if ss.hits:

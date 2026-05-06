@@ -24,4 +24,3 @@ tessdata/*
 !tessdata/swe.user-words
 !tessdata/tesseract.config
 quality.csv.before
-.webui_cache.pkl
