@@ -112,6 +112,15 @@ Hybrid-workflow:
 För att bara ta värsta filerna, symlinka över de PDF:er där `quality.csv`-poäng
 < 50 till en separat katalog och kör `ocr_surya.py` mot den.
 
+`ocr_surya.py` skriver bara `.txt`. För att få sökbara PDF:er med Surya-textlager
+(motsvarande Tesseracts output i `ocr/`) finns `ocr_surya_pdf.py` som kör Surya
++ bäddar in osynligt textöverdrag i en kopia av PDF:en via PyMuPDF:
+
+```bash
+.venv/bin/pip install pymupdf
+.venv/bin/python ocr_surya_pdf.py --in <indir> --out ocr --text-out text_surya
+```
+
 ### 3. Indexera i vektor-DB
 
 ```bash
@@ -151,7 +160,8 @@ OAuth-token genereras med `claude setup-token` (engångsåtgärd).
 | `download.py` | Hämta PDF:er från Drive |
 | `setup_tessdata.sh` | Sätt upp projekt-lokal `tessdata/` med swe_best |
 | `ocr.sh` | Tesseract-OCR + textextraktion |
-| `ocr_surya.py` | Surya-OCR (alternativ, högre kvalitet på svåra scans) |
+| `ocr_surya.py` | Surya-OCR till `.txt` (alternativ, högre kvalitet på svåra scans) |
+| `ocr_surya_pdf.py` | Surya-OCR + inbäddat osynligt textlager i sökbar PDF |
 | `quality.py` | Heuristisk kvalitetsbedömning av `text/*.txt` |
 | `redo_ocr.sh` | Kör om OCR med `--redo-ocr` på filer med dåligt textlager |
 | `rag/ingest.py` | Bygg vektorindex |
