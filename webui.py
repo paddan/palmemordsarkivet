@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import subprocess
 import sys
+import urllib.parse
 from pathlib import Path
 
 import lancedb
@@ -68,6 +70,28 @@ def find_txt(source_txt: str) -> Path | None:
     return p if p.is_file() else None
 
 
+CITE_RE = re.compile(r"\[Nr ([\w.,]+),\s*sida (\d+)\]")
+
+
+def linkify_citations(text: str, hits) -> str:
+    """Förvandla [Nr X, sida Y]-citat till klickbara länkar via query params."""
+    nr_to_stem = {}
+    for h in hits:
+        stem = h["source"][:-4] if h["source"].endswith(".txt") else h["source"]
+        nr_to_stem[str(h["nr"])] = stem
+
+    def repl(m: re.Match) -> str:
+        nr, page = m.group(1), m.group(2)
+        if nr not in nr_to_stem:
+            return m.group(0)
+        return (
+            f"[Nr {nr}, sida {page}]"
+            f"(?nr={urllib.parse.quote(nr)}&page={page})"
+        )
+
+    return CITE_RE.sub(repl, text)
+
+
 if not (os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") or os.environ.get("ANTHROPIC_API_KEY")):
     st.error(
         "Sätt `CLAUDE_CODE_OAUTH_TOKEN` (Pro/Max) eller `ANTHROPIC_API_KEY` i miljön "
@@ -91,6 +115,18 @@ ss = st.session_state
 ss.setdefault("question", "")
 ss.setdefault("hits", None)
 ss.setdefault("answer", "")
+
+# Hantera klick på citat-länkar (?nr=X&page=Y) — öppna PDF lokalt.
+qp = st.query_params
+if "nr" in qp and ss.hits:
+    target_nr = qp["nr"]
+    for h in ss.hits:
+        if str(h["nr"]) == target_nr:
+            pdf = find_pdf(h["source"])
+            if pdf:
+                subprocess.Popen(["open", str(pdf)])
+            break
+    st.query_params.clear()
 
 with st.form("ask"):
     q = st.text_input("Din fråga", placeholder="Vem är Stig Engström?",
@@ -117,7 +153,9 @@ async def stream_to_string(hits, q) -> str:
                 if isinstance(block, TextBlock):
                     parts.append(block.text)
                     placeholder.markdown("".join(parts))
-    return "".join(parts)
+    final = linkify_citations("".join(parts), hits)
+    placeholder.markdown(final)
+    return final
 
 
 if submitted and q.strip():
