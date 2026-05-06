@@ -85,7 +85,7 @@ async def ask_claude(q: str, context: str) -> None:
         system_prompt=SYSTEM_PROMPT,
         model=CLAUDE_MODEL,
         allowed_tools=[],          # ren Q&A — inga verktyg
-        thinking=ThinkingConfigAdaptive(),
+        thinking=ThinkingConfigAdaptive(type="adaptive"),
         effort="high",
         max_turns=1,
         setting_sources=[],        # ignorera lokal CLAUDE.md / settings
