@@ -144,6 +144,10 @@ export CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...
 .venv/bin/python rag/ask.py "Vad sa Annett Kohut om kvällen 28 februari?"
 .venv/bin/python rag/ask.py --rerank "..."   # bättre precision (laddar ned 568 MB modell)
 .venv/bin/python rag/ask.py                  # interaktiv repl
+
+# Eller via wrapper-skriptet (aktiverar venv, läser in token, --rerank som default):
+./ask.sh "Vem är Stig Engström?"
+./ask.sh --no-rerank "snabbare"
 ```
 
 Hämtar top-20 chunks från vektor-DB, ev. omrankar med `BAAI/bge-reranker-v2-m3`,
@@ -166,6 +170,7 @@ OAuth-token genereras med `claude setup-token` (engångsåtgärd).
 | `redo_ocr.sh` | Kör om OCR med `--redo-ocr` på filer med dåligt textlager |
 | `rag/ingest.py` | Bygg vektorindex |
 | `rag/ask.py` | Frågefronten |
+| `ask.sh` | Wrapper för `rag/ask.py` (aktiverar venv, läser token) |
 | `tessdata/swe.user-words` | Palme-specifika ord (committat) |
 | `tessdata/tesseract.config` | `preserve_interword_spaces 1` (committat) |
 
