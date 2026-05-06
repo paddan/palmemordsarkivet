@@ -56,7 +56,7 @@ def search(table, model, q: str, top_k: int) -> list[dict]:
     return (
         table.search(qv.tolist())
         .limit(top_k)
-        .select(["text", "source", "page", "nr", "titel", "anmarkning"])
+        .select(["text", "source", "page", "nr", "titel", "anmarkning", "_distance"])
         .to_list()
     )
 
@@ -132,7 +132,7 @@ async def main_async(args) -> int:
         return 1
 
     db = lancedb.connect(str(DB_DIR))
-    if TABLE not in db.table_names():
+    if TABLE not in db.list_tables().tables:
         print(f"Tabell '{TABLE}' finns inte — kör ingest.py först.", file=sys.stderr)
         return 1
     table = db.open_table(TABLE)
