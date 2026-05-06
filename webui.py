@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import pickle
 import re
 import subprocess
 import sys
@@ -39,6 +40,23 @@ from claude_agent_sdk import (  # noqa: E402
 )
 
 ROOT = Path(__file__).resolve().parent
+CACHE_FILE = ROOT / ".webui_cache.pkl"
+
+
+def save_cache(state: dict) -> None:
+    try:
+        CACHE_FILE.write_bytes(pickle.dumps(state))
+    except OSError:
+        pass
+
+
+def load_cache() -> dict | None:
+    if not CACHE_FILE.exists():
+        return None
+    try:
+        return pickle.loads(CACHE_FILE.read_bytes())
+    except Exception:  # noqa: BLE001
+        return None
 
 st.set_page_config(page_title="Palmemordsarkivet", layout="wide")
 st.title("Palmemordsarkivet")
@@ -121,6 +139,15 @@ ss.setdefault("question", "")
 ss.setdefault("hits", None)
 ss.setdefault("answer", "")
 
+# Återställ från disk om sessionen är tom (t.ex. efter länkklick som
+# triggar full siduppdatering och nollar st.session_state).
+if ss.hits is None and not ss.answer:
+    cached = load_cache()
+    if cached:
+        ss.question = cached.get("question", "")
+        ss.hits = cached.get("hits")
+        ss.answer = cached.get("answer", "")
+
 # Hantera klick på citat-länkar (?stem=...&page=Y) — öppna PDF lokalt.
 qp = st.query_params
 if "stem" in qp:
@@ -177,6 +204,7 @@ if submitted and q.strip():
 
     st.subheader("Svar")
     ss.answer = asyncio.run(stream_to_string(hits, q))
+    save_cache({"question": q, "hits": hits, "answer": ss.answer})
 
 # Rendera resultat från session_state (även efter rerun från PDF-knappar)
 if ss.hits:
