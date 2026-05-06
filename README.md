@@ -4,12 +4,9 @@ Skript för att ladda ner, OCR-tolka och söka i materialet på
 [palmemordsarkivet.se](https://palmemordsarkivet.se) — ett publikt Google Sheet
 med drygt 3 700 PDF-filer (~33 000 sidor) som länkas via "Länk till kopia".
 
-Pipelinen i fyra steg:
+Efter nedladdning, ocr-scanning så finns det ett web-gränssnitt som man kan ställa frågor om Palme-mordet i.
 
-```
-download.py  →  files/        ocr.sh  →  ocr/  +  text/        rag/ingest.py  →  rag/lancedb/        rag/ask.py
-   PDF                          sökbar PDF + .txt                  vektorindex                          fråga → svar
-```
+![Web-gränssnitt](web-ui.png)
 
 ## Krav
 
@@ -114,7 +111,8 @@ För att bara ta värsta filerna, symlinka över de PDF:er där `quality.csv`-po
 
 `ocr_surya.py` skriver bara `.txt`. För att få sökbara PDF:er med Surya-textlager
 (motsvarande Tesseracts output i `ocr/`) finns `ocr_surya_pdf.py` som kör Surya
-+ bäddar in osynligt textöverdrag i en kopia av PDF:en via PyMuPDF:
+
+- bäddar in osynligt textöverdrag i en kopia av PDF:en via PyMuPDF:
 
 ```bash
 .venv/bin/pip install pymupdf
