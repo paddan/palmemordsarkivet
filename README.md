@@ -25,7 +25,7 @@ cd palmemordsarkivet
 
 python3 -m venv .venv
 .venv/bin/pip install --upgrade pip
-.venv/bin/pip install gdown requests sentence-transformers lancedb pyarrow claude-agent-sdk
+.venv/bin/pip install gdown requests sentence-transformers lancedb pyarrow claude-agent-sdk streamlit
 
 brew install ocrmypdf tesseract-lang poppler unpaper claude-code
 ```
@@ -148,6 +148,9 @@ export CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...
 # Eller via wrapper-skriptet (aktiverar venv, läser in token, --rerank som default):
 ./ask.sh "Vem är Stig Engström?"
 ./ask.sh --no-rerank "snabbare"
+
+# Webgränssnitt (Streamlit) — aktiverar venv, läser token, öppnar i webbläsaren:
+./web.sh
 ```
 
 Hämtar top-20 chunks från vektor-DB, ev. omrankar med `BAAI/bge-reranker-v2-m3`,
@@ -171,6 +174,8 @@ OAuth-token genereras med `claude setup-token` (engångsåtgärd).
 | `rag/ingest.py` | Bygg vektorindex |
 | `rag/ask.py` | Frågefronten |
 | `ask.sh` | Wrapper för `rag/ask.py` (aktiverar venv, läser token) |
+| `webui.py` | Streamlit-webgränssnitt för frågor |
+| `web.sh` | Wrapper för Streamlit-servern |
 | `tessdata/swe.user-words` | Palme-specifika ord (committat) |
 | `tessdata/tesseract.config` | `preserve_interword_spaces 1` (committat) |
 
