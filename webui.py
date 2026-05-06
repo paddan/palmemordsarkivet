@@ -61,6 +61,13 @@ def find_pdf(source_txt: str) -> Path | None:
     return None
 
 
+def find_txt(source_txt: str) -> Path | None:
+    """Hitta extraherad textfil för en chunk."""
+    stem = source_txt[:-4] if source_txt.endswith(".txt") else source_txt
+    p = ROOT / "text" / f"{stem}.txt"
+    return p if p.is_file() else None
+
+
 if not (os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") or os.environ.get("ANTHROPIC_API_KEY")):
     st.error(
         "Sätt `CLAUDE_CODE_OAUTH_TOKEN` (Pro/Max) eller `ANTHROPIC_API_KEY` i miljön "
@@ -142,21 +149,14 @@ if ss.hits:
     with st.expander(f"Källor ({len(ss.hits)})", expanded=False):
         for i, h in enumerate(ss.hits):
             pdf = find_pdf(h["source"])
+            txt = find_txt(h["source"])
+            stem = h["source"][:-4] if h["source"].endswith(".txt") else h["source"]
             cols = st.columns([5, 2, 2])
             with cols[0]:
-                st.markdown(f"**Nr {h['nr']}, sida {h['page']}** — {h['titel'][:80]}")
+                st.markdown(f"**{stem}** (sida {h['page']})")
             with cols[1]:
-                if pdf and st.button("Öppna i PDF-läsare", key=f"open_{i}"):
+                if pdf and st.button("Öppna PDF", key=f"open_pdf_{i}"):
                     subprocess.Popen(["open", str(pdf)])
             with cols[2]:
-                if pdf:
-                    st.download_button(
-                        "Ladda ner",
-                        data=pdf.read_bytes(),
-                        file_name=pdf.name,
-                        mime="application/pdf",
-                        key=f"dl_{i}",
-                    )
-            text = h["text"]
-            st.text(text[:400] + ("…" if len(text) > 400 else ""))
-            st.divider()
+                if txt and st.button("Öppna text", key=f"open_txt_{i}"):
+                    subprocess.Popen(["open", str(txt)])
