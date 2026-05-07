@@ -156,6 +156,8 @@ Webgränssnittet stödjer flera AI-backends via en väljare i sidebaren:
 - **Claude Opus 4.7** (default) — via `claude-agent-sdk` med adaptive thinking,
   kräver `CLAUDE_CODE_OAUTH_TOKEN` eller `ANTHROPIC_API_KEY`.
 - **OpenAI GPT-5 / GPT-4o** — kräver `OPENAI_API_KEY`.
+- **DeepSeek V4 / Reasoner** — kräver `DEEPSEEK_API_KEY`
+  (`deepseek-chat` är V4-routern, `deepseek-reasoner` är thinking-modellen).
 - **OpenAI-kompatibel (custom)** — pekar på vilken `/v1`-endpoint som helst
   (Ollama, LM Studio, llama.cpp, vLLM, fjärr-OpenAI-providers...). URL,
   modellnamn och valfri API-nyckel konfigureras i sidebaren.
