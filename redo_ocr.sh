@@ -167,11 +167,11 @@ redo_one() {
   echo "[redo] $base"
   rm -f "$out_pdf" "$out_txt"
   log=$(mktemp)
+  # --redo-ocr är inkompatibel med --deskew/--clean-final/--remove-background
   if ocrmypdf \
         -l swe \
         --redo-ocr \
         --rotate-pages \
-        --deskew \
         --clean \
         --jobs "$PER_FILE_JOBS" \
         --quiet \
@@ -188,8 +188,8 @@ redo_one() {
 export -f redo_one
 export IN OCR TXT PER_FILE_JOBS
 
-printf '%s\n' "${TARGETS[@]}" \
-  | xargs -I {} -P "$JOBS" bash -c 'redo_one "$@"' _ {}
+printf '%s\0' "${TARGETS[@]}" \
+  | xargs -0 -I {} -P "$JOBS" bash -c 'redo_one "$@"' _ {}
 
 echo
 echo "Klart. Kör 'python quality.py' igen för att se förbättringen."
