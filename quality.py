@@ -15,11 +15,18 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import re
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+try:
+    from errors_log import log_error
+except Exception:  # pragma: no cover
+    def log_error(component: str, item: str, message: str) -> None:
+        pass
 
 ROOT = Path(__file__).resolve().parent
 TEXT_DIR = ROOT / "text"
@@ -132,6 +139,10 @@ def main() -> int:
     ap.add_argument("--top", type=int, help="visa även värsta N i terminalen")
     ap.add_argument("--out", default="quality.csv", help="output-CSV")
     ap.add_argument("--limit", type=int, help="bara N första filerna (för testkörning)")
+    ap.add_argument("--per-page", action="store_true",
+                    help="skriv quality_pages.jsonl med en rad per sida")
+    ap.add_argument("--pages-out", default="quality_pages.jsonl",
+                    help="output-fil för --per-page")
     args = ap.parse_args()
 
     if not TEXT_DIR.exists():
@@ -155,18 +166,34 @@ def main() -> int:
 
     print(f"Bedömer {len(files)} filer…", file=sys.stderr)
     rows = []
-    for i, f in enumerate(files, 1):
-        if i % 100 == 0:
-            print(f"  {i}/{len(files)}", file=sys.stderr)
-        try:
-            text = f.read_text(encoding="utf-8", errors="replace")
-        except OSError as e:
-            print(f"  SKIP {f.name}: {e}", file=sys.stderr)
-            continue
-        scored = score_text(text, use_hunspell)
-        scored["file"] = f.name
-        scored["source"] = "text-layer" if original_had_text(f.stem) else "ocr"
-        rows.append(scored)
+    pages_fp = None
+    if args.per_page:
+        pages_fp = Path(args.pages_out).open("w", encoding="utf-8")
+    try:
+        for i, f in enumerate(files, 1):
+            if i % 100 == 0:
+                print(f"  {i}/{len(files)}", file=sys.stderr)
+            try:
+                text = f.read_text(encoding="utf-8", errors="replace")
+            except OSError as e:
+                print(f"  SKIP {f.name}: {e}", file=sys.stderr)
+                log_error("quality", f.name, str(e))
+                continue
+            scored = score_text(text, use_hunspell)
+            scored["file"] = f.name
+            scored["source"] = "text-layer" if original_had_text(f.stem) else "ocr"
+            rows.append(scored)
+
+            if pages_fp is not None:
+                pages = text.split("\f") if "\f" in text else [text]
+                for p_idx, page_text in enumerate(pages, start=1):
+                    p_scored = score_text(page_text, use_hunspell=False)
+                    p_scored["file"] = f.name
+                    p_scored["page"] = p_idx
+                    pages_fp.write(json.dumps(p_scored, ensure_ascii=False) + "\n")
+    finally:
+        if pages_fp is not None:
+            pages_fp.close()
 
     rows.sort(key=lambda r: r["score"])
 
