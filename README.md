@@ -69,16 +69,16 @@ Förbered tessdata (engångsåtgärd — laddar ner swe_best, mer noggrann model
 ./setup_tessdata.sh
 ```
 
-#### Rekommenderad workflow: `auto_ocr.sh`
+#### Rekommenderad workflow: `ocr.sh`
 
 Kör hela OCR-pipelinen i ett enda kommando — Tesseract på allt, kvalitets-
 bedömning, Surya på sidor som inte når tröskeln, och slutbedömning:
 
 ```bash
-./auto_ocr.sh                    # full pipeline (rekommenderas)
-./auto_ocr.sh --threshold 60     # mer aggressiv om-OCR
-./auto_ocr.sh --skip-redo        # bara Tesseract + bedömning, ingen Surya
-./auto_ocr.sh --help
+./ocr.sh                         # full pipeline (rekommenderas)
+./ocr.sh --threshold 60          # mer aggressiv om-OCR
+./ocr.sh --skip-redo             # bara Tesseract + bedömning, ingen Surya
+./ocr.sh --help
 ```
 
 Surya-steget hoppas automatiskt över om paketet inte är installerat. Skriptet
@@ -90,13 +90,13 @@ Vill du köra stegen individuellt (för felsökning eller delkörningar) anropar
 du delarna direkt:
 
 ```bash
-./ocr.sh                         # Tesseract på alla nya filer
+./ocr_tesseract.sh               # Tesseract på alla nya filer
 ./quality.sh --per-page          # bygg quality.csv + quality_pages.jsonl
-./redo_ocr.sh --mode pages       # Surya på sidor under tröskeln
+./ocr.sh --redo --mode pages     # Surya på sidor under tröskeln
 ./quality.sh                     # uppdaterad bedömning
 ```
 
-`ocr.sh`:s interna logik:
+`ocr_tesseract.sh`:s interna logik:
 - Snabbkoll först: om PDF:en redan har användbart textlager extraheras det
   direkt utan OCR (kvalitetscheck: alnum-andel, andel korta ord, siffer-i-ord).
 - Skräpigt textlager → `ocrmypdf --redo-ocr` (tar bort det och OCR:ar om).
@@ -108,14 +108,13 @@ du delarna direkt:
 Tunables via flaggor (env-vars fungerar fortfarande som fallback):
 
 ```bash
-./ocr.sh --jobs 8 --per-file-jobs 2 --psm 4
-./ocr.sh --help                              # alla flaggor
-JOBS=8 PER_FILE_JOBS=2 PSM=4 ./ocr.sh        # bakåtkompatibelt
+./ocr_tesseract.sh --jobs 8 --per-file-jobs 2 --psm 4
+./ocr_tesseract.sh --help                          # alla flaggor
+JOBS=8 PER_FILE_JOBS=2 PSM=4 ./ocr_tesseract.sh    # bakåtkompatibelt
 ```
 
-`ocr.sh` byter aldrig OCR-engine på egen hand — för Surya/Vision på dåliga
-sidor använder du `auto_ocr.sh` ovan eller [`./redo_ocr.sh`](redo_ocr.sh)
-manuellt.
+`ocr_tesseract.sh` byter aldrig OCR-engine på egen hand — för Surya/Vision på
+dåliga sidor använder du `./ocr.sh` ovan eller `./ocr.sh --redo` manuellt.
 
 Vid riktiga fel skrivs `[fel] <namn>` följt av indragen ocrmypdf-logg. Tesseracts
 varningar för blanka sidor (`Too few characters. Skipping this page` /
@@ -132,7 +131,7 @@ markant högre kvalitet — i stickprov på 50 svåra filer: medelpoäng 60 → 
 Hybrid-workflow:
 
 ```bash
-./ocr.sh                                            # full Tesseract-omgång
+./ocr_tesseract.sh                                  # full Tesseract-omgång
 ./quality.sh                                        # bygg quality.csv
 ./ocr_surya.sh --in files --out text_surya          # eller bara värsta filerna
 ```
@@ -170,10 +169,10 @@ till ``<stem>.txt`` med ``\f`` som sidbrytare.
 brew install insidegui/tap/ocrit
 ```
 
-Kombo med `./quality.sh --per-page` + `./redo_ocr.sh --mode pages` kör om bara
-de sidor som ligger under tröskeln (med Surya som default). Alla skript har
-`--help` som listar tillgängliga flaggor; env-vars fungerar fortfarande som
-fallback.
+Kombo med `./quality.sh --per-page` + `./ocr.sh --redo --mode pages` kör om
+bara de sidor som ligger under tröskeln (med Surya som default). Alla skript
+har `--help` som listar tillgängliga flaggor; env-vars fungerar fortfarande
+som fallback.
 
 #### macOS Vision (`ocr_vision.sh`)
 
@@ -189,7 +188,7 @@ brew install insidegui/tap/ocrit
 
 Bygg `tessdata/swe.user-words.auto` från befintliga `text/*.txt`. Filtrerar
 mot hunspell sv_SE om installerat, annars freq ≥ 30. Plockas upp automatiskt
-av `ocr.sh`:
+av `ocr_tesseract.sh`:
 
 ```bash
 ./build_user_words.sh
@@ -269,15 +268,14 @@ OAuth-token genereras med `claude setup-token` (engångsåtgärd).
 |---|---|
 | `download.sh` → `src/download.py` | Hämta PDF:er från Drive |
 | `setup_tessdata.sh` | Sätt upp projekt-lokal `tessdata/` med swe_best |
-| `auto_ocr.sh` | Full OCR-pipeline (Tesseract → kvalitet → Surya på dåliga sidor) |
-| `ocr.sh` | Tesseract-OCR + textextraktion |
+| `ocr.sh` | Full OCR-pipeline (Tesseract → kvalitet → Surya på dåliga sidor); `--redo` kör om dåliga filer/sidor |
+| `ocr_tesseract.sh` | Bara Tesseract-steget (textextraktion + ocrmypdf) |
 | `ocr_surya.sh` → `src/ocr_surya.py` | Surya-OCR till `.txt` (alternativ, högre kvalitet på svåra scans) |
 | `ocr_surya_pdf.sh` → `src/ocr_surya_pdf.py` | Surya-OCR + inbäddat osynligt textlager i sökbar PDF |
 | `ocr_pages.sh` → `src/ocr_pages.py` | Per-sida OCR (Tesseract/Vision/Surya) med sidor i `\f`-separerad txt |
 | `ocr_vision.sh` → `src/ocr_vision.py` | macOS Vision Framework via `ocrit` (PDF eller bilder) |
 | `build_user_words.sh` → `src/build_user_words.py` | Bygg `tessdata/swe.user-words.auto` från `text/*.txt` |
 | `quality.sh` → `src/quality.py` | Heuristisk kvalitetsbedömning av `text/*.txt` (`--per-page` finns) |
-| `redo_ocr.sh` | Kör om OCR med `--redo-ocr` på filer med dåligt textlager |
 | `ingest.sh` → `src/rag/ingest.py` | Bygg vektorindex |
 | `ask.sh` → `src/rag/ask.py` | Frågefronten (wrapper aktiverar venv, läser token) |
 | `src/webui.py` | Streamlit-webgränssnitt för frågor |
@@ -298,12 +296,12 @@ vs `ocr` (Tesseract).
 
 Viktig insikt: `text-layer` betyder inte automatiskt "bra" — vissa PDF:er har
 gammalt OCR-skräp inbäddat fastän originalbilden är fullt läsbar. Sortera
-efter `score`, inte efter källa. För dessa: kör `./redo_ocr.sh` som anropar
-`ocrmypdf --redo-ocr` (tar bort det dåliga textlagret och OCR:ar om från
-bilden). Default tar med både `text-layer`- och `ocr`-källor. Tröskel via
-flagga: `./redo_ocr.sh --threshold 70` (eller env `THRESHOLD=70`). Begränsa
-till en källa: `./redo_ocr.sh --source text-layer`. `./redo_ocr.sh --help`
-listar alla flaggor.
+efter `score`, inte efter källa. För dessa: kör `./ocr.sh --redo --mode files`
+som anropar `ocrmypdf --redo-ocr` (tar bort det dåliga textlagret och OCR:ar
+om från bilden). Default tar med både `text-layer`- och `ocr`-källor. Tröskel
+via flagga: `./ocr.sh --redo --mode files --threshold 70` (eller env
+`THRESHOLD=70`). Begränsa till en källa: `./ocr.sh --redo --mode files
+--source text-layer`. `./ocr.sh --help` listar alla flaggor.
 
 Valfritt: installera hunspell + svensk ordlista så fylls `pct_swe`-kolumnen i:
 
