@@ -131,8 +131,12 @@ PYEOF
   exit 0
 fi
 
-# Plocka filnamnen ur CSV: kolumn 1 = file, 2 = source, 3 = score
-mapfile -t TARGETS < <(
+# Plocka filnamnen ur CSV: kolumn 1 = file, 2 = source, 3 = score.
+# Använder while-read istället för mapfile (mapfile saknas i macOS bash 3.2).
+TARGETS=()
+while IFS= read -r line; do
+  [ -n "$line" ] && TARGETS+=("$line")
+done < <(
   awk -F, -v t="$THRESHOLD" -v s="$SOURCE" '
     NR == 1 { next }
     {
