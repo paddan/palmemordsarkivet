@@ -47,6 +47,9 @@ Regler:
 - OCR-fel kan förekomma. Säg till om en passage verkar vara skadad eller obegriplig."""
 
 
+SELECT_COLS = ["text", "source", "page", "nr", "titel", "anmarkning"]
+
+
 def search(table, model, q: str, top_k: int) -> list[dict]:
     qv = model.encode(
         [f"query: {q}"],
@@ -56,9 +59,45 @@ def search(table, model, q: str, top_k: int) -> list[dict]:
     return (
         table.search(qv.tolist())
         .limit(top_k)
-        .select(["text", "source", "page", "nr", "titel", "anmarkning", "_distance"])
+        .select([*SELECT_COLS, "_distance"])
         .to_list()
     )
+
+
+def _hit_key(h: dict) -> tuple:
+    return (h.get("source", ""), int(h.get("page") or 0), h.get("text", "")[:64])
+
+
+def search_hybrid(table, model, q: str, top_k: int) -> list[dict]:
+    """Hybridsök: vector + BM25 (FTS), slås ihop med Reciprocal Rank Fusion (k=60)."""
+    vec_hits = search(table, model, q, top_k)
+    fts_hits: list[dict] = []
+    try:
+        fts_hits = (
+            table.search(q, query_type="fts")
+            .limit(top_k)
+            .select(SELECT_COLS)
+            .to_list()
+        )
+    except Exception as e:  # noqa: BLE001
+        print(f"  (FTS otillgängligt: {e}; faller tillbaka till vektor)",
+              file=sys.stderr)
+        return vec_hits
+
+    k_rrf = 60
+    scores: dict[tuple, float] = {}
+    bag: dict[tuple, dict] = {}
+    for rank, h in enumerate(vec_hits):
+        key = _hit_key(h)
+        scores[key] = scores.get(key, 0.0) + 1.0 / (k_rrf + rank + 1)
+        bag.setdefault(key, h)
+    for rank, h in enumerate(fts_hits):
+        key = _hit_key(h)
+        scores[key] = scores.get(key, 0.0) + 1.0 / (k_rrf + rank + 1)
+        bag.setdefault(key, h)
+
+    ranked = sorted(scores.items(), key=lambda kv: -kv[1])
+    return [bag[k] for k, _ in ranked[:top_k]]
 
 
 def rerank(q: str, hits: list[dict], top_n: int) -> list[dict]:
@@ -101,9 +140,14 @@ async def ask_claude(q: str, context: str) -> None:
                 print(f"\n(fel: {message})", file=sys.stderr)
 
 
-async def run_query(table, embed_model, q: str, top_k: int, top_n: int, do_rerank: bool):
-    print(f"\n→ söker top-{top_k} chunks…", flush=True)
-    hits = search(table, embed_model, q, top_k)
+async def run_query(table, embed_model, q: str, top_k: int, top_n: int,
+                    do_rerank: bool, do_hybrid: bool = False):
+    print(f"\n→ söker top-{top_k} chunks "
+          f"({'hybrid' if do_hybrid else 'vektor'})…", flush=True)
+    if do_hybrid:
+        hits = search_hybrid(table, embed_model, q, top_k)
+    else:
+        hits = search(table, embed_model, q, top_k)
     if not hits:
         print("Inga träffar.")
         return
@@ -141,7 +185,7 @@ async def main_async(args) -> int:
 
     if args.query:
         await run_query(table, embed_model, " ".join(args.query),
-                        args.top_k, args.top_n, args.rerank)
+                        args.top_k, args.top_n, args.rerank, args.hybrid)
         return 0
 
     print("Interaktiv repl — tom rad eller Ctrl-D avslutar.\n")
@@ -151,7 +195,7 @@ async def main_async(args) -> int:
             if not q:
                 break
             await run_query(table, embed_model, q,
-                            args.top_k, args.top_n, args.rerank)
+                            args.top_k, args.top_n, args.rerank, args.hybrid)
     except (EOFError, KeyboardInterrupt):
         print()
     return 0
@@ -163,6 +207,8 @@ def main() -> int:
     ap.add_argument("--top-k", type=int, default=20, help="antal kandidater från vektor-DB")
     ap.add_argument("--top-n", type=int, default=6, help="antal som skickas till Claude")
     ap.add_argument("--rerank", action="store_true", help="omranka med cross-encoder")
+    ap.add_argument("--hybrid", action="store_true",
+                    help="hybridsök: vector + BM25 sammanslaget med RRF")
     args = ap.parse_args()
     return asyncio.run(main_async(args))
 

@@ -50,10 +50,19 @@ def split_pages(text: str) -> list[str]:
 
 
 def chunk_text(text: str, size: int, overlap: int) -> list[tuple[int, int, str]]:
-    """Returnerar (start, end, chunk) — bryter helst på radslut."""
+    """Returnerar (start, end, chunk) — bryter helst på radslut.
+
+    OBS: chunkar INOM en sida; ``\f`` får aldrig förekomma i text som skickas hit.
+    Korta sidor blir egna (en) chunk.
+    """
     text = text.strip()
     if not text:
         return []
+    if "\f" in text:
+        # defensiv: callern ska ha splittat först
+        text = text.replace("\f", " ")
+    if len(text) <= size:
+        return [(0, len(text), text)]
     chunks = []
     i = 0
     n = len(text)
@@ -174,6 +183,14 @@ def main() -> int:
             f"  [{i:>4}/{len(todo)}] {f.name[:60]:60s} "
             f"+{len(rows):>3} chunks (totalt {total_chunks}, eta {int(eta // 60)}m{int(eta % 60):02d}s)"
         )
+
+    # Bygg/uppdatera FTS-index (BM25). Kräver lancedb med tantivy/native FTS.
+    try:
+        table.create_fts_index("text", replace=True)
+        print("FTS-index uppdaterat (BM25 på 'text').")
+    except Exception as e:  # noqa: BLE001
+        print(f"VARNING: kunde inte skapa FTS-index ({e}). "
+              f"Uppgradera lancedb om du vill ha hybridsök.", file=sys.stderr)
 
     print(f"\nKlart. Tabell '{TABLE}' har {table.count_rows()} chunks.")
     return 0
