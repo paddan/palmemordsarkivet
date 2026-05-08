@@ -11,7 +11,7 @@ readme = "README.md"
 dependencies = [
     "requests",
     "gdown",
-    "sentence-transformers",
+    "sentence-transformers<5",
     "lancedb",
     "pyarrow",
     "claude-agent-sdk",

@@ -23,7 +23,7 @@ cd palmemordsarkivet
 python3 -m venv .venv
 .venv/bin/pip install --upgrade pip
 # Antingen via requirements (kompakt):
-.venv/bin/pip install gdown requests sentence-transformers lancedb pyarrow claude-agent-sdk streamlit
+.venv/bin/pip install gdown requests 'sentence-transformers<5' lancedb pyarrow claude-agent-sdk streamlit
 # Eller via pyproject (gör det enklare att lägga till extras):
 .venv/bin/pip install -e .            # core
 .venv/bin/pip install -e .[webui]     # + Streamlit/OpenAI
@@ -40,6 +40,9 @@ Valfritt för Surya-OCR (alternativ till Tesseract, högre kvalitet på degrader
 ```
 
 Surya 0.17 fungerar inte med transformers 5.x — pinnen är medvetet vald.
+`sentence-transformers<5` är också medvetet pinnat eftersom 5.x försöker
+använda AutoProcessor för cross-encoders, vilket inte stöder
+`BAAI/bge-reranker-v2-m3` som används i `--rerank`-flaggan.
 
 ## Användning
 
