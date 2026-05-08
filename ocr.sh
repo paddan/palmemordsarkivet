@@ -50,6 +50,10 @@ Flaggor (default visas inom parentes):
   --csv FILE              quality.csv (\$ROOT/quality.csv)
   --pages-jsonl FILE      quality_pages.jsonl (\$ROOT/quality_pages.jsonl)
   --pages-out DIR         output-katalog för per-sida (\$ROOT/text_pages)
+  --from-list FILE        --redo --mode files: läs filnamn från textfil (en per
+                          rad) istället för att filtrera quality.csv. Användbart
+                          för att om-OCR:a filer som ingest.py flaggade som
+                          'inga användbara chunks' (skrivs till unusable.txt).
   --no-update-pdf         hoppa PDF-textlager-patchen efter Surya per sida
                           (default: textlagret i \$OCR/<stem>.pdf uppdateras)
   -h, --help              visa denna hjälp
@@ -71,6 +75,7 @@ TXT=${TXT:-}
 CSV=${CSV:-}
 PAGES_JSONL=${PAGES_JSONL:-}
 PAGES_OUT=${PAGES_OUT:-}
+FROM_LIST=${FROM_LIST:-}
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -89,6 +94,7 @@ while [ $# -gt 0 ]; do
     --csv)             CSV="$2"; shift 2 ;;
     --pages-jsonl)     PAGES_JSONL="$2"; shift 2 ;;
     --pages-out)       PAGES_OUT="$2"; shift 2 ;;
+    --from-list)       FROM_LIST="$2"; shift 2 ;;
     -h|--help)         usage; exit 0 ;;
     *) echo "okänd flagga: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -210,16 +216,24 @@ PYEOF
   exit 0
 fi
 
-# MODE=files: plocka filnamnen ur CSV via python — awk förstår inte CSV-kvotering
-# (filnamn kan innehålla komman och blir då dubbelkvoterade).
+# MODE=files: plocka filnamnen ur CSV (eller --from-list).
 PYBIN="$ROOT/.venv/bin/python"
 [ -x "$PYBIN" ] || PYBIN="python3"
 
 TARGETS=()
-while IFS= read -r line; do
-  [ -n "$line" ] && TARGETS+=("$line")
-done < <(
-  "$PYBIN" - "$CSV" "$THRESHOLD" "$SOURCE" <<'PYEOF'
+if [ -n "${FROM_LIST:-}" ]; then
+  [ -f "$FROM_LIST" ] || { echo "Saknar --from-list-fil: $FROM_LIST"; exit 1; }
+  while IFS= read -r line; do
+    line="${line%.txt}"
+    [ -n "$line" ] && TARGETS+=("$line")
+  done < "$FROM_LIST"
+else
+  # Plocka filnamnen ur CSV via python — awk förstår inte CSV-kvotering
+  # (filnamn kan innehålla komman och blir då dubbelkvoterade).
+  while IFS= read -r line; do
+    [ -n "$line" ] && TARGETS+=("$line")
+  done < <(
+    "$PYBIN" - "$CSV" "$THRESHOLD" "$SOURCE" <<'PYEOF'
 import csv, sys
 csv_path, thr, src = sys.argv[1], float(sys.argv[2]), sys.argv[3]
 with open(csv_path, encoding="utf-8", newline="") as f:
@@ -237,14 +251,23 @@ with open(csv_path, encoding="utf-8", newline="") as f:
             name = name[:-4]
         print(name)
 PYEOF
-)
+  )
+fi
 
 if [ ${#TARGETS[@]} -eq 0 ]; then
-  echo "Inga filer matchade (THRESHOLD=$THRESHOLD, SOURCE=$SOURCE)."
+  if [ -n "${FROM_LIST:-}" ]; then
+    echo "Inga filer i $FROM_LIST."
+  else
+    echo "Inga filer matchade (THRESHOLD=$THRESHOLD, SOURCE=$SOURCE)."
+  fi
   exit 0
 fi
 
-echo "Kör om OCR på ${#TARGETS[@]} filer (THRESHOLD=$THRESHOLD, SOURCE=$SOURCE)..."
+if [ -n "${FROM_LIST:-}" ]; then
+  echo "Kör om OCR på ${#TARGETS[@]} filer från $FROM_LIST..."
+else
+  echo "Kör om OCR på ${#TARGETS[@]} filer (THRESHOLD=$THRESHOLD, SOURCE=$SOURCE)..."
+fi
 
 redo_one() {
   local base="$1" pdf out_pdf out_txt log

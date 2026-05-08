@@ -112,6 +112,11 @@ def main() -> int:
     ap.add_argument("--model",
                     default=os.environ.get("EMBED_MODEL", MODEL_NAME),
                     help=f"embedding-modell (default: {MODEL_NAME})")
+    ap.add_argument("--unusable-list",
+                    default=os.environ.get("UNUSABLE_LIST",
+                                           str(ROOT / "unusable.txt")),
+                    help="skriv filer som producerade noll användbara chunks "
+                         "till denna fil (default: unusable.txt)")
     args = ap.parse_args()
 
     text_dir = Path(args.text_dir)
@@ -153,6 +158,7 @@ def main() -> int:
 
     t0 = time.monotonic()
     total_chunks = 0
+    unusable: list[str] = []
 
     for i, f in enumerate(todo, 1):
         meta = parse_filename(f.stem)
@@ -179,6 +185,7 @@ def main() -> int:
 
         if not rows:
             print(f"  [{i}/{len(todo)}] {f.name}: inga användbara chunks")
+            unusable.append(f.name)
             continue
 
         # e5 vill ha "passage: " på dokument
@@ -212,6 +219,16 @@ def main() -> int:
               f"Uppgradera lancedb om du vill ha hybridsök.", file=sys.stderr)
 
     print(f"\nKlart. Tabell '{TABLE}' har {table.count_rows()} chunks.")
+
+    if unusable:
+        unusable_path = Path(args.unusable_list)
+        unusable_path.write_text("\n".join(unusable) + "\n", encoding="utf-8")
+        print(
+            f"\n{len(unusable)} filer producerade noll användbara chunks — "
+            f"skrivna till {unusable_path}.\n"
+            f"Kör om OCR med:  ./ocr.sh --redo --mode files "
+            f"--from-list {unusable_path.name}"
+        )
     return 0
 
 
