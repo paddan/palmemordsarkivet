@@ -131,22 +131,33 @@ PYEOF
   exit 0
 fi
 
-# Plocka filnamnen ur CSV: kolumn 1 = file, 2 = source, 3 = score.
-# Använder while-read istället för mapfile (mapfile saknas i macOS bash 3.2).
+# Plocka filnamnen ur CSV via python — awk förstår inte CSV-kvotering
+# (filnamn kan innehålla komman och blir då dubbelkvoterade).
+PYBIN="$ROOT/.venv/bin/python"
+[ -x "$PYBIN" ] || PYBIN="python3"
+
 TARGETS=()
 while IFS= read -r line; do
   [ -n "$line" ] && TARGETS+=("$line")
 done < <(
-  awk -F, -v t="$THRESHOLD" -v s="$SOURCE" '
-    NR == 1 { next }
-    {
-      file = $1; source = $2; score = $3 + 0
-      if (score < t && (s == "any" || source == s)) {
-        sub(/\.txt$/, "", file)
-        print file
-      }
-    }
-  ' "$CSV"
+  "$PYBIN" - "$CSV" "$THRESHOLD" "$SOURCE" <<'PYEOF'
+import csv, sys
+csv_path, thr, src = sys.argv[1], float(sys.argv[2]), sys.argv[3]
+with open(csv_path, encoding="utf-8", newline="") as f:
+    for row in csv.DictReader(f):
+        try:
+            score = float(row.get("score") or 0)
+        except ValueError:
+            continue
+        if score >= thr:
+            continue
+        if src != "any" and row.get("source") != src:
+            continue
+        name = row["file"]
+        if name.endswith(".txt"):
+            name = name[:-4]
+        print(name)
+PYEOF
 )
 
 if [ ${#TARGETS[@]} -eq 0 ]; then
