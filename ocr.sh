@@ -1,145 +1,308 @@
 #!/bin/bash
-# OCR + textextraktion för palmemordsarkivet.
-# - Snabbkoll: hoppar över OCR om PDF:en redan har användbart textlager
-# - OCR med svenska + deskew/clean/rotate för scannade sidor
-# - Parallelliserar över filer med xargs -P
-# - Idempotent: hoppar över filer där .txt redan finns
+# Full OCR-pipeline för palmemordsarkivet.
 #
-# Lägen:
-#   ./ocr.sh                       # normal: OCR:a sidor utan textlager
-#   REDO_TEXT_LAYER=1 ./ocr.sh     # kör om OCR på alla PDF:er som har textlager
-#                                  # (bra för PDF:er med inbäddat OCR-skräp)
+# Default-läge (utan flaggor): Tesseract → kvalitetsbedömning → Surya på dåliga
+# sidor → ny kvalitetsbedömning. Anropar ocr_tesseract.sh och quality.sh och
+# rekursivt sig själv (./ocr.sh --redo --mode pages).
 #
-# Krav: brew install ocrmypdf tesseract-lang poppler unpaper
+# --redo-läge: kör om OCR på filer/sidor som ligger under en kvalitetströskel.
+#   --mode files  — ocrmypdf --redo-ocr på hela filer från quality.csv
+#   --mode pages  — Surya på enstaka sidor från quality_pages.jsonl (default)
+#
+# Användning:
+#   ./ocr.sh                                # full pipeline (default)
+#   ./ocr.sh --skip-redo                    # bara Tesseract + bedömning
+#   ./ocr.sh --redo                         # bara redo-steget (default mode pages)
+#   ./ocr.sh --redo --mode files            # om-OCR av hela filer
+#   ./ocr.sh --help                         # alla flaggor
 
 set -u
 
-ROOT=${ROOT:-$HOME/projects/palmemordsarkivet}
+usage() {
+  cat <<EOF
+Användning: $(basename "$0") [flaggor]
+
+Default-läge (full pipeline):
+  1. ./ocr_tesseract.sh                       # Tesseract på alla nya filer
+  2. ./quality.sh --per-page                  # quality.csv + quality_pages.jsonl
+  3. ./ocr.sh --redo --mode pages             # Surya på sidor under tröskeln
+  4. ./quality.sh                             # uppdaterad quality.csv
+
+Steg 3 hoppas över om --skip-redo eller om Surya inte är installerat.
+
+Flaggor (default visas inom parentes):
+
+  --root DIR              projektrot (\$PWD om ej satt via ROOT)
+  --skip-redo             hoppa Surya-steget i full pipeline
+  --redo                  hoppa direkt till redo-logiken (steg 3 ovan)
+  --mode files|pages      bara med --redo (pages)
+                            files = ocrmypdf --redo-ocr på hela filer från
+                                    quality.csv
+                            pages = Surya på enstaka sidor från
+                                    quality_pages.jsonl
+  --threshold N           score-tröskel för om-OCR (50)
+  --source S              text-layer | ocr | any — bara med --redo --mode files (any)
+  --jobs N                antal filer parallellt (4)
+  --per-file-jobs N       OCR-trådar per fil (2)
+  --in DIR                ingångskatalog med PDF:er (\$ROOT/files)
+  --ocr DIR               output-katalog för OCR-PDF:er (\$ROOT/ocr)
+  --txt DIR               output-katalog för .txt (\$ROOT/text)
+  --csv FILE              quality.csv (\$ROOT/quality.csv)
+  --pages-jsonl FILE      quality_pages.jsonl (\$ROOT/quality_pages.jsonl)
+  --pages-out DIR         output-katalog för per-sida (\$ROOT/text_pages)
+  --from-list FILE        --redo --mode files: läs filnamn från textfil (en per
+                          rad) istället för att filtrera quality.csv. Användbart
+                          för att om-OCR:a filer som ingest.py flaggade som
+                          'inga användbara chunks' (skrivs till unusable.txt).
+  --no-update-pdf         hoppa PDF-textlager-patchen efter Surya per sida
+                          (default: textlagret i \$OCR/<stem>.pdf uppdateras)
+  -h, --help              visa denna hjälp
+EOF
+}
+
+ROOT=${ROOT:-$(cd "$(dirname "$0")" && pwd)}
+THRESHOLD=${THRESHOLD:-50}
+SKIP_REDO=0
+REDO_ONLY=0
+NO_UPDATE_PDF=0
+MODE=${MODE:-pages}
+SOURCE=${SOURCE:-any}
+JOBS=${JOBS:-4}
+PER_FILE_JOBS=${PER_FILE_JOBS:-2}
+IN=${IN:-}
+OCR=${OCR:-}
+TXT=${TXT:-}
+CSV=${CSV:-}
+PAGES_JSONL=${PAGES_JSONL:-}
+PAGES_OUT=${PAGES_OUT:-}
+FROM_LIST=${FROM_LIST:-}
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --root)            ROOT="$2"; shift 2 ;;
+    --threshold)       THRESHOLD="$2"; shift 2 ;;
+    --skip-redo)       SKIP_REDO=1; shift ;;
+    --redo)            REDO_ONLY=1; shift ;;
+    --no-update-pdf)   NO_UPDATE_PDF=1; shift ;;
+    --mode)            MODE="$2"; shift 2 ;;
+    --source)          SOURCE="$2"; shift 2 ;;
+    --jobs)            JOBS="$2"; shift 2 ;;
+    --per-file-jobs)   PER_FILE_JOBS="$2"; shift 2 ;;
+    --in)              IN="$2"; shift 2 ;;
+    --ocr)             OCR="$2"; shift 2 ;;
+    --txt)             TXT="$2"; shift 2 ;;
+    --csv)             CSV="$2"; shift 2 ;;
+    --pages-jsonl)     PAGES_JSONL="$2"; shift 2 ;;
+    --pages-out)       PAGES_OUT="$2"; shift 2 ;;
+    --from-list)       FROM_LIST="$2"; shift 2 ;;
+    -h|--help)         usage; exit 0 ;;
+    *) echo "okänd flagga: $1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+
 IN=${IN:-$ROOT/files}
 OCR=${OCR:-$ROOT/ocr}
 TXT=${TXT:-$ROOT/text}
-TESSDATA=${TESSDATA:-$ROOT/tessdata}
-USER_WORDS=${USER_WORDS:-$TESSDATA/swe.user-words}
-TESS_CONFIG=${TESS_CONFIG:-$TESSDATA/tesseract.config}
-PSM=${PSM:-6}                      # 6 = uniform block of text (bra för förhör)
-LANGS=${LANGS:-swe+eng}            # svensk + engelsk modell
-JOBS=${JOBS:-4}                    # antal filer parallellt
-PER_FILE_JOBS=${PER_FILE_JOBS:-2}  # OCR-trådar per fil
-MIN_TEXT_CHARS=${MIN_TEXT_CHARS:-200}  # tröskel för "har redan text"
-REDO_TEXT_LAYER=${REDO_TEXT_LAYER:-0}
+CSV=${CSV:-$ROOT/quality.csv}
+PAGES_JSONL=${PAGES_JSONL:-$ROOT/quality_pages.jsonl}
+PAGES_OUT=${PAGES_OUT:-$ROOT/text_pages}
 
-mkdir -p "$OCR" "$TXT"
+cd "$ROOT"
 
-# Använd projekt-lokal tessdata om den finns (swe_best + symlänkar till eng/osd)
-if [ -f "$TESSDATA/swe.traineddata" ]; then
-  export TESSDATA_PREFIX="$TESSDATA"
-  echo "Använder $TESSDATA (swe_best)"
-else
-  echo "Tips: kör ./setup_tessdata.sh för att hämta swe_best.traineddata (mer noggrann modell)."
+step() {
+  echo
+  echo "===== $1 ====="
+}
+
+# --------------------------------------------------------------------
+# Default-läge: full pipeline
+# --------------------------------------------------------------------
+if [ "$REDO_ONLY" = "0" ]; then
+  set -e
+  t0=$(date +%s)
+
+  step "1/4  Tesseract-OCR (./ocr_tesseract.sh --jobs $JOBS)"
+  ./ocr_tesseract.sh --jobs "$JOBS" --per-file-jobs "$PER_FILE_JOBS"
+
+  step "2/4  Kvalitetsbedömning (./quality.sh --per-page)"
+  ./quality.sh --per-page
+
+  if [ "$SKIP_REDO" = "1" ]; then
+    echo
+    echo "===== Hoppar över steg 3 (--skip-redo) ====="
+  elif ! "$ROOT/.venv/bin/python" -c "import surya" 2>/dev/null; then
+    echo
+    echo "===== Hoppar över steg 3 (Surya inte installerat) ====="
+    echo "Installera med:  .venv/bin/pip install surya-ocr 'transformers<5'"
+  else
+    step "3/4  Om-OCR med Surya på sidor < $THRESHOLD (./ocr.sh --redo --mode pages)"
+    redo_extra=()
+    [ "$NO_UPDATE_PDF" = "1" ] && redo_extra+=(--no-update-pdf)
+    ./ocr.sh --redo --mode pages --threshold "$THRESHOLD" --jobs "$JOBS" --per-file-jobs "$PER_FILE_JOBS" ${redo_extra[@]+"${redo_extra[@]}"}
+
+    step "4/4  Uppdaterad kvalitetsbedömning"
+    ./quality.sh
+  fi
+
+  t1=$(date +%s)
+  elapsed=$((t1 - t0))
+  echo
+  echo "===== Klart på ${elapsed}s ====="
+  exit 0
 fi
 
-[ -f "$USER_WORDS" ] || USER_WORDS=""
-[ -f "$TESS_CONFIG" ] || TESS_CONFIG=""
-[ -n "$USER_WORDS" ] && echo "Använder user-words: $USER_WORDS ($(wc -l < "$USER_WORDS" | tr -d ' ') ord)"
-[ -n "$TESS_CONFIG" ] && echo "Använder tesseract-config: $TESS_CONFIG"
-echo "PSM: $PSM (page segmentation mode)"
+# --------------------------------------------------------------------
+# --redo-läge: kör om OCR på filer/sidor under tröskeln
+# --------------------------------------------------------------------
+if [ "$MODE" = "pages" ]; then
+  [ -f "$PAGES_JSONL" ] || { echo "Saknar $PAGES_JSONL — kör './quality.sh --per-page' först."; exit 1; }
+else
+  [ -f "$CSV" ] || { echo "Saknar $CSV — kör quality.py först."; exit 1; }
+  command -v ocrmypdf >/dev/null || { echo "saknar ocrmypdf"; exit 1; }
+  command -v pdftotext >/dev/null || { echo "saknar pdftotext"; exit 1; }
+fi
 
-for cmd in ocrmypdf pdftotext; do
-  command -v "$cmd" >/dev/null || { echo "saknar verktyg: $cmd"; exit 1; }
-done
+if [ "$MODE" = "pages" ]; then
+  # Per-sida läge: kör ocr_pages.py --engine surya på dåliga sidor.
+  echo "MODE=pages — använder $PAGES_JSONL (THRESHOLD=$THRESHOLD)..."
+  PYBIN="$ROOT/.venv/bin/python"
+  [ -x "$PYBIN" ] || PYBIN="python3"
 
-run_ocr() {
-  # $1 = mode (skip|redo), $2 = input pdf, $3 = output pdf
-  local mode="$1" pdf="$2" out_pdf="$3" log
-  log=$(mktemp)
-  local extra=(--rotate-pages --clean --tesseract-pagesegmode "$PSM")
-  if [ "$mode" = "redo" ]; then
-    # --redo-ocr är inkompatibel med --deskew (och --clean-final, --remove-background)
-    extra+=(--redo-ocr)
+  "$PYBIN" - "$PAGES_JSONL" "$THRESHOLD" "$IN" "$PAGES_OUT" "$ROOT" "$OCR" "$NO_UPDATE_PDF" <<'PYEOF'
+import json, subprocess, sys
+from collections import defaultdict
+from pathlib import Path
+
+jsonl, thr, in_dir, out_dir, root, ocr_dir, no_update = sys.argv[1:8]
+thr = float(thr)
+in_dir = Path(in_dir); out_dir = Path(out_dir); root = Path(root)
+
+bad = defaultdict(list)
+with open(jsonl, encoding="utf-8") as f:
+    for line in f:
+        try:
+            row = json.loads(line)
+        except Exception:
+            continue
+        score = float(row.get("score") or 0.0)
+        if score < thr:
+            bad[row["file"]].append(int(row["page"]))
+
+if not bad:
+    print(f"Inga dåliga sidor (THRESHOLD={thr}).")
+    sys.exit(0)
+
+print(f"Hittade {sum(len(v) for v in bad.values())} dåliga sidor i {len(bad)} filer.")
+for txt_name, pages in bad.items():
+    stem = txt_name[:-4] if txt_name.endswith(".txt") else txt_name
+    pdf = in_dir / f"{stem}.pdf"
+    if not pdf.exists():
+        print(f"  SAKNAS: {pdf}")
+        continue
+    pages_arg = ",".join(str(p) for p in sorted(set(pages)))
+    cmd = [
+        sys.executable, str(root / "src" / "ocr_pages.py"),
+        "--in", str(pdf),
+        "--out-dir", str(out_dir),
+        "--engine", "surya",
+        "--pages", pages_arg,
+        "--ocr-dir", ocr_dir,
+    ]
+    if no_update == "1":
+        cmd.append("--no-update-pdf")
+    print(f"[redo-pages] {stem}: sidor {pages_arg}")
+    subprocess.run(cmd, check=False)
+PYEOF
+  exit 0
+fi
+
+# MODE=files: plocka filnamnen ur CSV (eller --from-list).
+PYBIN="$ROOT/.venv/bin/python"
+[ -x "$PYBIN" ] || PYBIN="python3"
+
+TARGETS=()
+if [ -n "${FROM_LIST:-}" ]; then
+  [ -f "$FROM_LIST" ] || { echo "Saknar --from-list-fil: $FROM_LIST"; exit 1; }
+  while IFS= read -r line; do
+    line="${line%.txt}"
+    [ -n "$line" ] && TARGETS+=("$line")
+  done < "$FROM_LIST"
+else
+  # Plocka filnamnen ur CSV via python — awk förstår inte CSV-kvotering
+  # (filnamn kan innehålla komman och blir då dubbelkvoterade).
+  while IFS= read -r line; do
+    [ -n "$line" ] && TARGETS+=("$line")
+  done < <(
+    "$PYBIN" - "$CSV" "$THRESHOLD" "$SOURCE" <<'PYEOF'
+import csv, sys
+csv_path, thr, src = sys.argv[1], float(sys.argv[2]), sys.argv[3]
+with open(csv_path, encoding="utf-8", newline="") as f:
+    for row in csv.DictReader(f):
+        try:
+            score = float(row.get("score") or 0)
+        except ValueError:
+            continue
+        if score >= thr:
+            continue
+        if src != "any" and row.get("source") != src:
+            continue
+        name = row["file"]
+        if name.endswith(".txt"):
+            name = name[:-4]
+        print(name)
+PYEOF
+  )
+fi
+
+if [ ${#TARGETS[@]} -eq 0 ]; then
+  if [ -n "${FROM_LIST:-}" ]; then
+    echo "Inga filer i $FROM_LIST."
   else
-    extra+=(--skip-text --deskew)
+    echo "Inga filer matchade (THRESHOLD=$THRESHOLD, SOURCE=$SOURCE)."
   fi
-  [ -n "${USER_WORDS:-}" ] && extra+=(--user-words "$USER_WORDS")
-  [ -n "${TESS_CONFIG:-}" ] && extra+=(--tesseract-config "$TESS_CONFIG")
+  exit 0
+fi
+
+if [ -n "${FROM_LIST:-}" ]; then
+  echo "Kör om OCR på ${#TARGETS[@]} filer från $FROM_LIST..."
+else
+  echo "Kör om OCR på ${#TARGETS[@]} filer (THRESHOLD=$THRESHOLD, SOURCE=$SOURCE)..."
+fi
+
+redo_one() {
+  local base="$1" pdf out_pdf out_txt log
+  pdf="$IN/$base.pdf"
+  out_pdf="$OCR/$base.pdf"
+  out_txt="$TXT/$base.txt"
+
+  [ -f "$pdf" ] || { echo "  SAKNAS: $pdf"; return 1; }
+
+  echo "[redo] $base"
+  rm -f "$out_pdf" "$out_txt"
+  log=$(mktemp)
+  # --redo-ocr är inkompatibel med --deskew/--clean-final/--remove-background
   if ocrmypdf \
-        -l "$LANGS" \
+        -l swe \
+        --redo-ocr \
+        --rotate-pages \
+        --clean \
         --jobs "$PER_FILE_JOBS" \
         --quiet \
-        "${extra[@]}" \
         "$pdf" "$out_pdf" 2>"$log"; then
+    pdftotext -layout "$out_pdf" "$out_txt"
     rm -f "$log"
-    return 0
   else
-    echo "[fel] $(basename "$pdf" .pdf) — se loggen nedan:" >&2
+    echo "[fel] $base — se loggen nedan:" >&2
     sed 's/^/    /' "$log" >&2
     rm -f "$log"
     return 1
   fi
 }
+export -f redo_one
+export IN OCR TXT PER_FILE_JOBS
 
-process_one() {
-  local f="$1" base out_pdf out_txt existing has_text
-  base=$(basename "$f" .pdf)
-  out_pdf="$OCR/$base.pdf"
-  out_txt="$TXT/$base.txt"
+printf '%s\0' ${TARGETS[@]+"${TARGETS[@]}"} \
+  | xargs -0 -I {} -P "$JOBS" bash -c 'redo_one "$@"' _ {}
 
-  existing=$(pdftotext -q -layout "$f" - 2>/dev/null | tr -d '[:space:]' | wc -c)
-  has_text=0
-  [ "$existing" -gt "$MIN_TEXT_CHARS" ] && has_text=1
-
-  if [ "$REDO_TEXT_LAYER" = "1" ]; then
-    # I detta läge: bara text-layer-filer, alltid kör om med --redo-ocr
-    if [ "$has_text" != "1" ]; then
-      echo "[hoppar-ej-text] $base"
-      return 0
-    fi
-    echo "[redo] $base"
-    rm -f "$out_pdf" "$out_txt"
-    if run_ocr redo "$f" "$out_pdf"; then
-      pdftotext -layout "$out_pdf" "$out_txt"
-    else
-      return 1
-    fi
-    return 0
-  fi
-
-  # Normalt läge
-  [ -s "$out_txt" ] && { echo "[hoppar] $base"; return 0; }
-
-  if [ "$has_text" = "1" ]; then
-    echo "[text-finns] $base"
-    cp "$f" "$out_pdf"
-    pdftotext -layout "$f" "$out_txt"
-    return 0
-  fi
-
-  echo "[ocr] $base"
-  if run_ocr skip "$f" "$out_pdf"; then
-    pdftotext -layout "$out_pdf" "$out_txt"
-  else
-    return 1
-  fi
-}
-export -f process_one run_ocr
-export IN OCR TXT PER_FILE_JOBS MIN_TEXT_CHARS REDO_TEXT_LAYER LANGS PSM USER_WORDS TESS_CONFIG TESSDATA_PREFIX
-
-find "$IN" -name '*.pdf' -print0 \
-  | xargs -0 -n 1 -P "$JOBS" -I {} bash -c 'process_one "$@"' _ {}
-
-# Slutkontroll: alla PDF:er i files/ ska finnas i ocr/
 echo
-echo "Kontrollerar att alla PDF:er finns i $OCR/ …"
-missing=0
-while IFS= read -r -d '' f; do
-  base=$(basename "$f" .pdf)
-  if [ ! -s "$OCR/$base.pdf" ]; then
-    echo "  SAKNAS: $base.pdf"
-    missing=$((missing + 1))
-  fi
-done < <(find "$IN" -name '*.pdf' -print0)
-if [ "$missing" -eq 0 ]; then
-  echo "  OK — alla $(find "$IN" -name '*.pdf' | wc -l | tr -d ' ') PDF:er finns i $OCR/."
-else
-  echo "  $missing PDF:er saknas i $OCR/ — kör om skriptet."
-  exit 1
-fi
+echo "Klart. Kör './quality.sh' igen för att se förbättringen."

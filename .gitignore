@@ -24,3 +24,14 @@ tessdata/*
 !tessdata/swe.user-words
 !tessdata/tesseract.config
 quality.csv.before
+quality_pages.jsonl
+errors.log
+text_pages/
+text_vision/
+
+
+# Lokala testdata
+test.csv
+test_txt/
+test_files/
+test_ocr/

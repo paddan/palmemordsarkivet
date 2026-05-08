@@ -15,16 +15,24 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
+import os
 import re
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent
-TEXT_DIR = ROOT / "text"
-FILES_DIR = ROOT / "files"
-MIN_TEXT_CHARS = 200  # samma tröskel som ocr.sh
+try:
+    from errors_log import log_error
+except Exception:  # pragma: no cover
+    def log_error(component: str, item: str, message: str) -> None:
+        pass
+
+ROOT = Path(os.environ.get("ROOT") or Path(__file__).resolve().parents[1])
+TEXT_DIR = Path(os.environ.get("TEXT_DIR") or (ROOT / "text"))
+FILES_DIR = Path(os.environ.get("FILES_DIR") or (ROOT / "files"))
+MIN_TEXT_CHARS = int(os.environ.get("MIN_TEXT_CHARS", "200"))  # samma tröskel som ocr.sh
 
 VOWELS = set("aeiouyåäöAEIOUYÅÄÖ")
 PUNCT = set('.,;:!?"\'()-—–…/\\[]{}<>')
@@ -44,8 +52,8 @@ def has_hunspell_swe() -> bool:
         return False
 
 
-def original_had_text(stem: str) -> bool:
-    pdf = FILES_DIR / f"{stem}.pdf"
+def original_had_text(stem: str, files_dir: Path = FILES_DIR) -> bool:
+    pdf = files_dir / f"{stem}.pdf"
     if not pdf.exists():
         return False
     try:
@@ -128,14 +136,27 @@ def score_text(text: str, use_hunspell: bool) -> dict:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--top", type=int, help="visa även värsta N i terminalen")
-    ap.add_argument("--out", default="quality.csv", help="output-CSV")
+    ap.add_argument("--out", default=os.environ.get("OUT", "quality.csv"),
+                    help="output-CSV (default: quality.csv)")
     ap.add_argument("--limit", type=int, help="bara N första filerna (för testkörning)")
+    ap.add_argument("--per-page", action="store_true",
+                    help="skriv quality_pages.jsonl med en rad per sida")
+    ap.add_argument("--pages-out",
+                    default=os.environ.get("PAGES_OUT", "quality_pages.jsonl"),
+                    help="output-fil för --per-page")
+    ap.add_argument("--text-dir", default=str(TEXT_DIR),
+                    help=f"katalog med .txt-filer (default: {TEXT_DIR})")
+    ap.add_argument("--files-dir", default=str(FILES_DIR),
+                    help=f"katalog med original-PDF:er (default: {FILES_DIR})")
     args = ap.parse_args()
 
-    if not TEXT_DIR.exists():
-        print(f"Saknar {TEXT_DIR}/", file=sys.stderr)
+    text_dir = Path(args.text_dir)
+    files_dir = Path(args.files_dir)
+    if not text_dir.exists():
+        print(f"Saknar {text_dir}/", file=sys.stderr)
         return 1
 
     use_hunspell = has_hunspell_swe()
@@ -146,27 +167,43 @@ def main() -> int:
             file=sys.stderr,
         )
 
-    files = sorted(TEXT_DIR.glob("*.txt"))
+    files = sorted(text_dir.glob("*.txt"))
     if not files:
-        print(f"Inga .txt-filer i {TEXT_DIR}/", file=sys.stderr)
+        print(f"Inga .txt-filer i {text_dir}/", file=sys.stderr)
         return 1
     if args.limit:
         files = files[: args.limit]
 
     print(f"Bedömer {len(files)} filer…", file=sys.stderr)
     rows = []
-    for i, f in enumerate(files, 1):
-        if i % 100 == 0:
-            print(f"  {i}/{len(files)}", file=sys.stderr)
-        try:
-            text = f.read_text(encoding="utf-8", errors="replace")
-        except OSError as e:
-            print(f"  SKIP {f.name}: {e}", file=sys.stderr)
-            continue
-        scored = score_text(text, use_hunspell)
-        scored["file"] = f.name
-        scored["source"] = "text-layer" if original_had_text(f.stem) else "ocr"
-        rows.append(scored)
+    pages_fp = None
+    if args.per_page:
+        pages_fp = Path(args.pages_out).open("w", encoding="utf-8")
+    try:
+        for i, f in enumerate(files, 1):
+            if i % 100 == 0:
+                print(f"  {i}/{len(files)}", file=sys.stderr)
+            try:
+                text = f.read_text(encoding="utf-8", errors="replace")
+            except OSError as e:
+                print(f"  SKIP {f.name}: {e}", file=sys.stderr)
+                log_error("quality", f.name, str(e))
+                continue
+            scored = score_text(text, use_hunspell)
+            scored["file"] = f.name
+            scored["source"] = "text-layer" if original_had_text(f.stem, files_dir) else "ocr"
+            rows.append(scored)
+
+            if pages_fp is not None:
+                pages = text.split("\f") if "\f" in text else [text]
+                for p_idx, page_text in enumerate(pages, start=1):
+                    p_scored = score_text(page_text, use_hunspell=False)
+                    p_scored["file"] = f.name
+                    p_scored["page"] = p_idx
+                    pages_fp.write(json.dumps(p_scored, ensure_ascii=False) + "\n")
+    finally:
+        if pages_fp is not None:
+            pages_fp.close()
 
     rows.sort(key=lambda r: r["score"])
 

@@ -10,6 +10,7 @@ Kör:
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import sys
 import time
@@ -19,9 +20,9 @@ import lancedb
 import pyarrow as pa
 from sentence_transformers import SentenceTransformer
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]
 TEXT_DIR = ROOT / "text"
-DB_DIR = Path(__file__).resolve().parent / "lancedb"
+DB_DIR = ROOT / "rag" / "lancedb"
 TABLE = "chunks"
 MODEL_NAME = "intfloat/multilingual-e5-large"
 EMBED_DIM = 1024
@@ -50,10 +51,19 @@ def split_pages(text: str) -> list[str]:
 
 
 def chunk_text(text: str, size: int, overlap: int) -> list[tuple[int, int, str]]:
-    """Returnerar (start, end, chunk) — bryter helst på radslut."""
+    """Returnerar (start, end, chunk) — bryter helst på radslut.
+
+    OBS: chunkar INOM en sida; ``\f`` får aldrig förekomma i text som skickas hit.
+    Korta sidor blir egna (en) chunk.
+    """
     text = text.strip()
     if not text:
         return []
+    if "\f" in text:
+        # defensiv: callern ska ha splittat först
+        text = text.replace("\f", " ")
+    if len(text) <= size:
+        return [(0, len(text), text)]
     chunks = []
     i = 0
     n = len(text)
@@ -83,17 +93,40 @@ def is_useful(chunk: str) -> bool:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--rebuild", action="store_true", help="börja om från noll")
     ap.add_argument("--limit", type=int, help="max antal filer att indexera")
+    ap.add_argument("--text-dir",
+                    default=os.environ.get("TEXT_DIR", str(TEXT_DIR)),
+                    help=f"katalog med .txt-filer (default: {TEXT_DIR})")
+    ap.add_argument("--db-dir",
+                    default=os.environ.get("DB_DIR", str(DB_DIR)),
+                    help=f"LanceDB-katalog (default: {DB_DIR})")
+    ap.add_argument("--chunk-chars", type=int,
+                    default=int(os.environ.get("CHUNK_CHARS", str(CHUNK_CHARS))),
+                    help=f"chunk-storlek i tecken (default: {CHUNK_CHARS})")
+    ap.add_argument("--chunk-overlap", type=int,
+                    default=int(os.environ.get("CHUNK_OVERLAP", str(CHUNK_OVERLAP))),
+                    help=f"chunk-överlapp i tecken (default: {CHUNK_OVERLAP})")
+    ap.add_argument("--model",
+                    default=os.environ.get("EMBED_MODEL", MODEL_NAME),
+                    help=f"embedding-modell (default: {MODEL_NAME})")
+    ap.add_argument("--unusable-list",
+                    default=os.environ.get("UNUSABLE_LIST",
+                                           str(ROOT / "unusable.txt")),
+                    help="skriv filer som producerade noll användbara chunks "
+                         "till denna fil (default: unusable.txt)")
     args = ap.parse_args()
 
-    if not TEXT_DIR.exists():
-        print(f"Saknar {TEXT_DIR}/ — kör ocr.sh först.", file=sys.stderr)
+    text_dir = Path(args.text_dir)
+    db_dir = Path(args.db_dir)
+    if not text_dir.exists():
+        print(f"Saknar {text_dir}/ — kör ocr.sh först.", file=sys.stderr)
         return 1
 
-    DB_DIR.mkdir(exist_ok=True)
-    db = lancedb.connect(str(DB_DIR))
+    db_dir.mkdir(exist_ok=True)
+    db = lancedb.connect(str(db_dir))
 
     schema = pa.schema([
         pa.field("vector", pa.list_(pa.float32(), EMBED_DIM)),
@@ -104,19 +137,19 @@ def main() -> int:
         *[pa.field(f, pa.string()) for f in NAME_FIELDS],
     ])
 
-    if args.rebuild and TABLE in db.table_names():
+    if args.rebuild and TABLE in db.list_tables().tables:
         db.drop_table(TABLE)
-    if TABLE in db.table_names():
+    if TABLE in db.list_tables().tables:
         table = db.open_table(TABLE)
         already = {r["source"] for r in table.search().select(["source"]).limit(10**9).to_list()}
     else:
         table = db.create_table(TABLE, schema=schema)
         already = set()
 
-    print(f"Laddar embedding-modell {MODEL_NAME} (första gången tar några minuter)…")
-    model = SentenceTransformer(MODEL_NAME)
+    print(f"Laddar embedding-modell {args.model} (första gången tar några minuter)…")
+    model = SentenceTransformer(args.model)
 
-    files = sorted(TEXT_DIR.glob("*.txt"))
+    files = sorted(text_dir.glob("*.txt"))
     if args.limit:
         files = files[: args.limit]
 
@@ -125,6 +158,7 @@ def main() -> int:
 
     t0 = time.monotonic()
     total_chunks = 0
+    unusable: list[str] = []
 
     for i, f in enumerate(todo, 1):
         meta = parse_filename(f.stem)
@@ -137,7 +171,7 @@ def main() -> int:
         rows = []
         chunk_idx = 0
         for page_idx, page in enumerate(split_pages(raw), start=1):
-            for _, _, chunk in chunk_text(page, CHUNK_CHARS, CHUNK_OVERLAP):
+            for _, _, chunk in chunk_text(page, args.chunk_chars, args.chunk_overlap):
                 if not is_useful(chunk):
                     continue
                 rows.append({
@@ -151,6 +185,7 @@ def main() -> int:
 
         if not rows:
             print(f"  [{i}/{len(todo)}] {f.name}: inga användbara chunks")
+            unusable.append(f.name)
             continue
 
         # e5 vill ha "passage: " på dokument
@@ -175,7 +210,25 @@ def main() -> int:
             f"+{len(rows):>3} chunks (totalt {total_chunks}, eta {int(eta // 60)}m{int(eta % 60):02d}s)"
         )
 
+    # Bygg/uppdatera FTS-index (BM25). Kräver lancedb med tantivy/native FTS.
+    try:
+        table.create_fts_index("text", replace=True)
+        print("FTS-index uppdaterat (BM25 på 'text').")
+    except Exception as e:  # noqa: BLE001
+        print(f"VARNING: kunde inte skapa FTS-index ({e}). "
+              f"Uppgradera lancedb om du vill ha hybridsök.", file=sys.stderr)
+
     print(f"\nKlart. Tabell '{TABLE}' har {table.count_rows()} chunks.")
+
+    if unusable:
+        unusable_path = Path(args.unusable_list)
+        unusable_path.write_text("\n".join(unusable) + "\n", encoding="utf-8")
+        print(
+            f"\n{len(unusable)} filer producerade noll användbara chunks — "
+            f"skrivna till {unusable_path}.\n"
+            f"Kör om OCR med:  ./ocr.sh --redo --mode files "
+            f"--from-list {unusable_path.name}"
+        )
     return 0
 
 
