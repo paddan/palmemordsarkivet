@@ -45,6 +45,8 @@ Surya 0.17 fungerar inte med transformers 5.x — pinnen är medvetet vald.
 
 ### 1. Ladda ner PDF-filerna
 
+`download.py` saknar shell-wrapper — kör direkt:
+
 ```bash
 .venv/bin/python src/download.py files
 ```
@@ -110,18 +112,18 @@ markant högre kvalitet — i stickprov på 50 svåra filer: medelpoäng 60 → 
 Hybrid-workflow:
 
 ```bash
-./ocr.sh                                                # full Tesseract-omgång
-.venv/bin/python src/quality.py                             # bygg quality.csv
+./ocr.sh                                                       # full Tesseract-omgång
+./quality.sh                                                   # bygg quality.csv
 .venv/bin/python src/ocr_surya.py --in files --out text_surya  # eller bara värsta filerna
 ```
 
 För att bara ta värsta filerna, symlinka över de PDF:er där `quality.csv`-poäng
-< 50 till en separat katalog och kör `ocr_surya.py` mot den.
+< 50 till en separat katalog och kör `src/ocr_surya.py` mot den.
 
-`ocr_surya.py` skriver bara `.txt`. För att få sökbara PDF:er med Surya-textlager
-(motsvarande Tesseracts output i `ocr/`) finns `ocr_surya_pdf.py` som kör Surya
-
-- bäddar in osynligt textöverdrag i en kopia av PDF:en via PyMuPDF:
+`src/ocr_surya.py` skriver bara `.txt`. För att få sökbara PDF:er med
+Surya-textlager (motsvarande Tesseracts output i `ocr/`) finns
+`src/ocr_surya_pdf.py` som kör Surya och bäddar in osynligt textöverdrag i en
+kopia av PDF:en via PyMuPDF:
 
 ```bash
 .venv/bin/pip install pymupdf
@@ -148,7 +150,7 @@ till ``<stem>.txt`` med ``\f`` som sidbrytare.
 brew install insidegui/tap/ocrit
 ```
 
-Kombo med `quality.py --per-page` + `./redo_ocr.sh --mode pages` kör om bara
+Kombo med `./quality.sh --per-page` + `./redo_ocr.sh --mode pages` kör om bara
 de sidor som ligger under tröskeln (med Surya som default). Alla skript har
 `--help` som listar tillgängliga flaggor; env-vars fungerar fortfarande som
 fallback.
@@ -163,20 +165,22 @@ brew install insidegui/tap/ocrit
 .venv/bin/python src/ocr_vision.py --in files/foo.pdf --out text_vision
 ```
 
-#### Auto-byggda user-words (`build_user_words.py`)
+#### Auto-byggda user-words (`build_user_words.sh`)
 
 Bygg `tessdata/swe.user-words.auto` från befintliga `text/*.txt`. Filtrerar
 mot hunspell sv_SE om installerat, annars freq ≥ 30. Plockas upp automatiskt
 av `ocr.sh`:
 
 ```bash
-.venv/bin/python src/build_user_words.py
+./build_user_words.sh
 ```
 
 ### 3. Indexera i vektor-DB
 
 ```bash
-.venv/bin/python src/rag/ingest.py
+./ingest.sh                       # nya filer
+./ingest.sh --rebuild             # börja om från noll
+./ingest.sh --help                # alla flaggor
 ```
 
 - Chunkar `text/*.txt` (800 tecken med 150 teckens överlapp, bryter på radslut).
@@ -193,14 +197,12 @@ export CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...
 # Eller API-credits:
 # export ANTHROPIC_API_KEY=sk-ant-...
 
-.venv/bin/python src/rag/ask.py "Vad sa Annett Kohut om kvällen 28 februari?"
-.venv/bin/python src/rag/ask.py --rerank "..."   # bättre precision (laddar ned 568 MB modell)
-.venv/bin/python src/rag/ask.py --hybrid "..."   # vector + BM25 sammanslaget med RRF
-.venv/bin/python src/rag/ask.py                  # interaktiv repl
-
-# Eller via wrapper-skriptet (aktiverar venv, läser in token, --rerank som default):
+# Wrapper aktiverar venv, läser token, --rerank som default:
 ./ask.sh "Vem är Stig Engström?"
 ./ask.sh --no-rerank "snabbare"
+./ask.sh --hybrid "..."           # vector + BM25 sammanslaget med RRF
+./ask.sh                          # interaktiv repl
+./ask.sh --help                   # alla flaggor
 
 # Webgränssnitt (Streamlit) — aktiverar venv, läser token, öppnar i webbläsaren:
 ./web.sh
@@ -252,12 +254,11 @@ OAuth-token genereras med `claude setup-token` (engångsåtgärd).
 | `src/ocr_surya_pdf.py` | Surya-OCR + inbäddat osynligt textlager i sökbar PDF |
 | `src/ocr_pages.py` | Per-sida OCR (Tesseract/Vision/Surya) med sidor i `\f`-separerad txt |
 | `src/ocr_vision.py` | macOS Vision Framework via `ocrit` (PDF eller bilder) |
-| `src/build_user_words.py` | Bygg `tessdata/swe.user-words.auto` från `text/*.txt` |
-| `src/quality.py` | Heuristisk kvalitetsbedömning av `text/*.txt` (`--per-page` finns) |
+| `build_user_words.sh` → `src/build_user_words.py` | Bygg `tessdata/swe.user-words.auto` från `text/*.txt` |
+| `quality.sh` → `src/quality.py` | Heuristisk kvalitetsbedömning av `text/*.txt` (`--per-page` finns) |
 | `redo_ocr.sh` | Kör om OCR med `--redo-ocr` på filer med dåligt textlager |
-| `src/rag/ingest.py` | Bygg vektorindex |
-| `src/rag/ask.py` | Frågefronten |
-| `ask.sh` | Wrapper för `src/rag/ask.py` (aktiverar venv, läser token) |
+| `ingest.sh` → `src/rag/ingest.py` | Bygg vektorindex |
+| `ask.sh` → `src/rag/ask.py` | Frågefronten (wrapper aktiverar venv, läser token) |
 | `src/webui.py` | Streamlit-webgränssnitt för frågor |
 | `web.sh` | Wrapper för Streamlit-servern |
 | `tessdata/swe.user-words` | Palme-specifika ord (committat) |
@@ -266,7 +267,7 @@ OAuth-token genereras med `claude setup-token` (engångsåtgärd).
 ### Bonus: kvalitetskoll
 
 ```bash
-.venv/bin/python src/quality.py --top 30
+./quality.sh --top 30
 ```
 
 Skriver `quality.csv` (sorterat värst först) med poäng 0–100 per fil baserat på
