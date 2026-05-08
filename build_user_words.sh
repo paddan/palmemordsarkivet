@@ -12,12 +12,19 @@ set -eu
 
 usage() {
   cat <<EOF
-Användning: $(basename "$0") [flaggor] [-- build_user_words.py-flaggor...]
+Användning: $(basename "$0") [flaggor]
 
-  --root DIR    projektrot ($PWD om ej satt via ROOT)
-  -h, --help    visa denna hjälp; för build_user_words.py-flaggor: ./build_user_words.sh -- --help
+Wrapper-flaggor:
+  --root DIR              projektrot ($PWD om ej satt via ROOT)
+  -h, --help              visa denna hjälp
 
-Övriga flaggor (t.ex. --min-freq, --out, --text-dir) skickas vidare till build_user_words.py.
+Skickas vidare till build_user_words.py (alla okända flaggor passerar igenom):
+  --text-dir DIR          katalog med .txt-filer (default: text/)
+  --user-words FILE       befintlig swe.user-words att slå ihop med
+  --out FILE              output-fil (default: tessdata/swe.user-words.auto)
+  --min-freq N            minsta frekvens; 0 = auto (10 med hunspell, annars 30)
+
+För full build_user_words.py-hjälp: ./build_user_words.sh -- --help
 EOF
 }
 

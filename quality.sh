@@ -13,12 +13,22 @@ set -eu
 
 usage() {
   cat <<EOF
-Användning: $(basename "$0") [flaggor] [-- quality.py-flaggor...]
+Användning: $(basename "$0") [flaggor]
 
-  --root DIR    projektrot ($PWD om ej satt via ROOT)
-  -h, --help    visa denna hjälp; för quality.py-flaggor: ./quality.sh -- --help
+Wrapper-flaggor:
+  --root DIR              projektrot ($PWD om ej satt via ROOT)
+  -h, --help              visa denna hjälp
 
-Övriga flaggor (t.ex. --top, --per-page, --limit, --out) skickas vidare till quality.py.
+Skickas vidare till quality.py (alla okända flaggor passerar igenom):
+  --top N                 visa även värsta N i terminalen
+  --out FILE              output-CSV (default: quality.csv)
+  --limit N               bara N första filerna (för testkörning)
+  --per-page              skriv även quality_pages.jsonl
+  --pages-out FILE        sökväg för per-sida-output
+  --text-dir DIR          katalog med .txt-filer att bedöma (default: text/)
+  --files-dir DIR         katalog med original-PDF:er (default: files/)
+
+För full quality.py-hjälp: ./quality.sh -- --help
 EOF
 }
 
