@@ -29,7 +29,7 @@ except Exception:  # pragma: no cover
     def log_error(component: str, item: str, message: str) -> None:
         pass
 
-ROOT = Path(os.environ.get("ROOT") or Path(__file__).resolve().parent)
+ROOT = Path(os.environ.get("ROOT") or Path(__file__).resolve().parents[1])
 TEXT_DIR = Path(os.environ.get("TEXT_DIR") or (ROOT / "text"))
 FILES_DIR = Path(os.environ.get("FILES_DIR") or (ROOT / "files"))
 MIN_TEXT_CHARS = int(os.environ.get("MIN_TEXT_CHARS", "200"))  # samma tröskel som ocr.sh
