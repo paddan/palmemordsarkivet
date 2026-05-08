@@ -50,6 +50,8 @@ Flaggor (default visas inom parentes):
   --csv FILE              quality.csv (\$ROOT/quality.csv)
   --pages-jsonl FILE      quality_pages.jsonl (\$ROOT/quality_pages.jsonl)
   --pages-out DIR         output-katalog för per-sida (\$ROOT/text_pages)
+  --no-update-pdf         hoppa PDF-textlager-patchen efter Surya per sida
+                          (default: textlagret i \$OCR/<stem>.pdf uppdateras)
   -h, --help              visa denna hjälp
 EOF
 }
@@ -58,6 +60,7 @@ ROOT=${ROOT:-$(cd "$(dirname "$0")" && pwd)}
 THRESHOLD=${THRESHOLD:-50}
 SKIP_REDO=0
 REDO_ONLY=0
+NO_UPDATE_PDF=0
 MODE=${MODE:-pages}
 SOURCE=${SOURCE:-any}
 JOBS=${JOBS:-4}
@@ -75,6 +78,7 @@ while [ $# -gt 0 ]; do
     --threshold)       THRESHOLD="$2"; shift 2 ;;
     --skip-redo)       SKIP_REDO=1; shift ;;
     --redo)            REDO_ONLY=1; shift ;;
+    --no-update-pdf)   NO_UPDATE_PDF=1; shift ;;
     --mode)            MODE="$2"; shift 2 ;;
     --source)          SOURCE="$2"; shift 2 ;;
     --jobs)            JOBS="$2"; shift 2 ;;
@@ -126,7 +130,9 @@ if [ "$REDO_ONLY" = "0" ]; then
     echo "Installera med:  .venv/bin/pip install surya-ocr 'transformers<5'"
   else
     step "3/4  Om-OCR med Surya på sidor < $THRESHOLD (./ocr.sh --redo --mode pages)"
-    ./ocr.sh --redo --mode pages --threshold "$THRESHOLD" --jobs "$JOBS" --per-file-jobs "$PER_FILE_JOBS"
+    redo_extra=()
+    [ "$NO_UPDATE_PDF" = "1" ] && redo_extra+=(--no-update-pdf)
+    ./ocr.sh --redo --mode pages --threshold "$THRESHOLD" --jobs "$JOBS" --per-file-jobs "$PER_FILE_JOBS" ${redo_extra[@]+"${redo_extra[@]}"}
 
     step "4/4  Uppdaterad kvalitetsbedömning"
     ./quality.sh
@@ -156,12 +162,12 @@ if [ "$MODE" = "pages" ]; then
   PYBIN="$ROOT/.venv/bin/python"
   [ -x "$PYBIN" ] || PYBIN="python3"
 
-  "$PYBIN" - "$PAGES_JSONL" "$THRESHOLD" "$IN" "$PAGES_OUT" "$ROOT" <<'PYEOF'
+  "$PYBIN" - "$PAGES_JSONL" "$THRESHOLD" "$IN" "$PAGES_OUT" "$ROOT" "$OCR" "$NO_UPDATE_PDF" <<'PYEOF'
 import json, subprocess, sys
 from collections import defaultdict
 from pathlib import Path
 
-jsonl, thr, in_dir, out_dir, root = sys.argv[1:6]
+jsonl, thr, in_dir, out_dir, root, ocr_dir, no_update = sys.argv[1:8]
 thr = float(thr)
 in_dir = Path(in_dir); out_dir = Path(out_dir); root = Path(root)
 
@@ -194,7 +200,10 @@ for txt_name, pages in bad.items():
         "--out-dir", str(out_dir),
         "--engine", "surya",
         "--pages", pages_arg,
+        "--ocr-dir", ocr_dir,
     ]
+    if no_update == "1":
+        cmd.append("--no-update-pdf")
     print(f"[redo-pages] {stem}: sidor {pages_arg}")
     subprocess.run(cmd, check=False)
 PYEOF

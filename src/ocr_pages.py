@@ -111,6 +111,82 @@ def ocr_surya(image) -> str:
     return "\n".join(lines)
 
 
+def ocr_surya_lines(image) -> tuple[str, list[dict]]:
+    """Som ocr_surya men returnerar även bboxes per rad i bildkoordinater."""
+    rec, det = _surya_load()
+    preds = rec([image], det_predictor=det)
+    if not preds:
+        return "", []
+    lines: list[dict] = []
+    for ln in preds[0].text_lines:
+        if not ln.text.strip():
+            continue
+        x0, y0, x1, y1 = ln.bbox
+        lines.append({"text": ln.text, "bbox": [x0, y0, x1, y1]})
+    return "\n".join(line["text"] for line in lines), lines
+
+
+def update_pdf_text_layer(
+    src_pdf: Path, dst_pdf: Path, page_lines: dict[int, list[dict]], dpi: int
+) -> int:
+    """Skriv ny PDF där angivna sidor får Surya-rader som osynligt textlager.
+
+    src_pdf läses, befintligt textlager på de berörda sidorna redaktas bort,
+    och Surya-textraderna skrivs in via insert_textbox med render_mode=3
+    (osynlig). Övriga sidor lämnas orörda. Skrivs till dst_pdf (kan vara
+    samma som src_pdf — vi använder en tempfil).
+
+    Returnerar antal sidor som faktiskt patchades.
+    """
+    import pymupdf  # local import — pymupdf är optional
+
+    scale = 72.0 / dpi
+    doc = pymupdf.open(str(src_pdf))
+    patched = 0
+    try:
+        for page_num, lines in page_lines.items():
+            if page_num < 1 or page_num > len(doc) or not lines:
+                continue
+            page = doc[page_num - 1]
+            # Rensa befintligt textlager på sidan
+            for block in page.get_text("dict")["blocks"]:
+                if block.get("type") == 0:  # text-block
+                    page.add_redact_annot(block["bbox"])
+            page.apply_redactions(images=0, graphics=0)
+
+            # Lägg in Surya-text osynligt
+            for line in lines:
+                x0, y0, x1, y1 = line["bbox"]
+                rect = pymupdf.Rect(
+                    x0 * scale, y0 * scale, x1 * scale, y1 * scale
+                )
+                fontsize = max(1.0, (y1 - y0) * scale * 0.85)
+                for _ in range(5):
+                    rc = page.insert_textbox(
+                        rect, line["text"],
+                        fontsize=fontsize, fontname="helv",
+                        render_mode=3, align=0,
+                    )
+                    if rc >= 0:
+                        break
+                    fontsize = max(1.0, fontsize * 0.5)
+            patched += 1
+
+        # Skriv via tempfil om src == dst
+        if dst_pdf.resolve() == src_pdf.resolve():
+            tmp = dst_pdf.with_suffix(dst_pdf.suffix + ".tmp")
+            doc.save(str(tmp), garbage=4, deflate=True)
+            doc.close()
+            tmp.replace(dst_pdf)
+        else:
+            doc.save(str(dst_pdf), garbage=4, deflate=True)
+            doc.close()
+    except Exception:
+        doc.close()
+        raise
+    return patched
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -135,6 +211,13 @@ def main() -> int:
     ap.add_argument("--pages",
                     default=os.environ.get("PAGES"),
                     help="kommaseparerade sidnummer (1-baserade); default alla")
+    ap.add_argument("--ocr-dir",
+                    default=os.environ.get("OCR_DIR"),
+                    help="om satt + engine=surya: patcha textlagret i "
+                         "<ocr-dir>/<stem>.pdf med Surya-text på de "
+                         "OCR:ade sidorna (default: av)")
+    ap.add_argument("--no-update-pdf", action="store_true",
+                    help="stäng av PDF-textlager-patchen även om --ocr-dir är satt")
     args = ap.parse_args()
 
     pdf = Path(args.inp)
@@ -155,6 +238,12 @@ def main() -> int:
             return 1
 
     page_texts: dict[int, str] = {}
+    page_lines: dict[int, list[dict]] = {}
+    want_pdf_patch = (
+        args.engine == "surya"
+        and args.ocr_dir
+        and not args.no_update_pdf
+    )
     n_total = 0
     n_skipped = 0
     n_done = 0
@@ -182,7 +271,11 @@ def main() -> int:
 
         try:
             if args.engine == "surya":
-                text = ocr_surya(image)
+                if want_pdf_patch:
+                    text, lines = ocr_surya_lines(image)
+                    page_lines[page_num] = lines
+                else:
+                    text = ocr_surya(image)
             else:
                 # spara PNG (idempotent)
                 if not png_path.exists():
@@ -222,6 +315,21 @@ def main() -> int:
 
     print(f"Klart {pdf.stem}: {n_done} OCR:ade, {n_skipped} hoppade, "
           f"{n_total} sidor totalt.")
+
+    if want_pdf_patch and page_lines:
+        ocr_pdf = Path(args.ocr_dir) / f"{pdf.stem}.pdf"
+        if not ocr_pdf.exists():
+            print(f"  [pdf-patch] {ocr_pdf} finns inte — hoppar.",
+                  file=sys.stderr)
+        else:
+            try:
+                n = update_pdf_text_layer(
+                    ocr_pdf, ocr_pdf, page_lines, args.dpi
+                )
+                print(f"  [pdf-patch] {ocr_pdf.name}: patchade {n} sidor")
+            except Exception as e:  # noqa: BLE001
+                print(f"  [pdf-patch] FEL: {e}", file=sys.stderr)
+                log_error("ocr_pages.pdf_patch", pdf.name, str(e))
     return 0
 
 
