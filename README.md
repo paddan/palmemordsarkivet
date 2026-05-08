@@ -90,14 +90,10 @@ Tunables via flaggor (env-vars fungerar fortfarande som fallback):
 JOBS=8 PER_FILE_JOBS=2 PSM=4 ./ocr.sh        # bakåtkompatibelt
 ```
 
-Lägen:
-
-```bash
-./ocr.sh                       # normal: OCR:a sidor utan textlager
-./ocr.sh --redo-text-layer     # kör om OCR på alla PDF:er som har textlager
-                               # (för PDF:er med inbäddat OCR-skräp)
-REDO_TEXT_LAYER=1 ./ocr.sh     # bakåtkompatibelt — env-var fungerar
-```
+`ocr.sh` triggar automatiskt `--redo-ocr` på filer vars befintliga textlager
+inte klarar kvalitetschecken (alnum-andel, andel korta ord, siffer-i-ord).
+För riktad om-OCR mot specifika filer eller score-trösklar — använd
+[`./redo_ocr.sh`](redo_ocr.sh) (se nedan).
 
 Vid riktiga fel skrivs `[fel] <namn>` följt av indragen ocrmypdf-logg. Tesseracts
 varningar för blanka sidor (`Too few characters. Skipping this page` /

@@ -30,7 +30,6 @@ motsvarande env-var (versaler, understreck) — flagga vinner över env-var.
   --jobs N                antal filer parallellt (4)
   --per-file-jobs N       OCR-trådar per fil (2)
   --min-text-chars N      tröskel för "har redan text" (200)
-  --redo-text-layer       kör om OCR på filer som redan har textlager
   --image-dpi N           bild-DPI för OCR (300)
   --errors-log FILE       logg-fil för fel (\$ROOT/errors.log)
   -h, --help              visa denna hjälp och avsluta
@@ -50,7 +49,6 @@ LANGS=${LANGS:-swe}
 JOBS=${JOBS:-4}
 PER_FILE_JOBS=${PER_FILE_JOBS:-2}
 MIN_TEXT_CHARS=${MIN_TEXT_CHARS:-200}
-REDO_TEXT_LAYER=${REDO_TEXT_LAYER:-0}
 IMAGE_DPI=${IMAGE_DPI:-300}
 ERRORS_LOG=${ERRORS_LOG:-}
 
@@ -69,7 +67,6 @@ while [ $# -gt 0 ]; do
     --jobs)             JOBS="$2"; shift 2 ;;
     --per-file-jobs)    PER_FILE_JOBS="$2"; shift 2 ;;
     --min-text-chars)   MIN_TEXT_CHARS="$2"; shift 2 ;;
-    --redo-text-layer)  REDO_TEXT_LAYER=1; shift ;;
     --image-dpi)        IMAGE_DPI="$2"; shift 2 ;;
     --errors-log)       ERRORS_LOG="$2"; shift 2 ;;
     -h|--help)          usage; exit 0 ;;
@@ -188,22 +185,6 @@ process_one() {
   has_text=0
   [ "$existing" -gt "$MIN_TEXT_CHARS" ] && has_text=1
 
-  if [ "$REDO_TEXT_LAYER" = "1" ]; then
-    if [ "$has_text" != "1" ]; then
-      echo "[hoppar-ej-text] $base"
-      return 0
-    fi
-    echo "[redo] $base"
-    rm -f "$out_pdf" "$out_txt"
-    if run_ocr redo "$f" "$out_pdf"; then
-      pdftotext -layout "$out_pdf" "$out_txt"
-    else
-      return 1
-    fi
-    return 0
-  fi
-
-  # Normalt läge
   [ -s "$out_txt" ] && { echo "[hoppar] $base"; return 0; }
 
   if [ "$has_text" = "1" ]; then
@@ -232,7 +213,7 @@ process_one() {
   fi
 }
 export -f process_one run_ocr log_err
-export IN OCR TXT PER_FILE_JOBS MIN_TEXT_CHARS REDO_TEXT_LAYER LANGS PSM \
+export IN OCR TXT PER_FILE_JOBS MIN_TEXT_CHARS LANGS PSM \
        USER_WORDS USER_WORDS_AUTO TESS_CONFIG TESSDATA_PREFIX IMAGE_DPI ERRORS_LOG
 
 find "$IN" -name '*.pdf' -print0 \
