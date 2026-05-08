@@ -132,9 +132,9 @@ def main() -> int:
         *[pa.field(f, pa.string()) for f in NAME_FIELDS],
     ])
 
-    if args.rebuild and TABLE in db.table_names():
+    if args.rebuild and TABLE in db.list_tables().tables:
         db.drop_table(TABLE)
-    if TABLE in db.table_names():
+    if TABLE in db.list_tables().tables:
         table = db.open_table(TABLE)
         already = {r["source"] for r in table.search().select(["source"]).limit(10**9).to_list()}
     else:
