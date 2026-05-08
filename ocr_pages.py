@@ -1,0 +1,213 @@
+#!/usr/bin/env python3
+"""Per-sida OCR-pipeline.
+
+Renderar en PDF sida för sida och OCR:ar varje sida individuellt så att
+enskilda dåliga sidor kan om-OCR:as med en annan motor utan att hela filen
+måste köras om.
+
+Output i ``<out_dir>/<stem>/``:
+    page-NNN.png   — render (raderas inte; idempotency)
+    page-NNN.txt   — OCR-text
+    page-NNN.json  — text + score (heuristik från quality.score_text)
+
+Sammansatt ``<out_dir>/<stem>.txt`` skrivs på slutet, sidor separerade med ``\f``.
+
+Engines:
+    tesseract  — subprocess till `tesseract`
+    vision     — subprocess till `ocrit` (macOS Vision Framework)
+    surya      — Surya-modeller, samma stack som ocr_surya.py
+
+Kör:
+    python ocr_pages.py --in path/to/foo.pdf --out-dir text_pages
+    python ocr_pages.py --in foo.pdf --out-dir out --engine surya
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT))
+
+try:
+    from quality import score_text  # type: ignore
+except Exception:  # pragma: no cover
+    def score_text(text: str, use_hunspell: bool = False) -> dict:
+        return {"chars": len(text), "score": 0.0}
+
+try:
+    from errors_log import log_error
+except Exception:  # pragma: no cover
+    def log_error(component: str, item: str, message: str) -> None:
+        pass
+
+
+def render_pages(pdf_path: Path, dpi: int):
+    import pypdfium2 as pdfium  # local import — Surya/Vision-pad kanske saknar
+    pdf = pdfium.PdfDocument(str(pdf_path))
+    for i, page in enumerate(pdf, start=1):
+        yield i, page.render(scale=dpi / 72).to_pil()
+
+
+def ocr_tesseract(png_path: Path, langs: str = "swe") -> str:
+    if not shutil.which("tesseract"):
+        raise RuntimeError("tesseract saknas i PATH")
+    cmd = ["tesseract", str(png_path), "-", "-l", langs]
+    out = subprocess.run(cmd, capture_output=True, timeout=600, check=False)
+    if out.returncode != 0:
+        raise RuntimeError(out.stderr.decode("utf-8", errors="replace")[:400])
+    return out.stdout.decode("utf-8", errors="replace")
+
+
+def ocr_vision(png_path: Path) -> str:
+    if not shutil.which("ocrit"):
+        raise RuntimeError("ocrit saknas — installera: brew install insidegui/tap/ocrit")
+    with tempfile.TemporaryDirectory() as tmp:
+        tmpdir = Path(tmp)
+        cmd = ["ocrit", str(png_path), "-o", str(tmpdir)]
+        out = subprocess.run(cmd, capture_output=True, timeout=600, check=False)
+        if out.returncode != 0:
+            raise RuntimeError(out.stderr.decode("utf-8", errors="replace")[:400])
+        # ocrit skriver <stem>.txt till -o-katalogen
+        candidate = tmpdir / (png_path.stem + ".txt")
+        if candidate.exists():
+            return candidate.read_text(encoding="utf-8", errors="replace")
+        # fallback: första .txt:n
+        for f in tmpdir.glob("*.txt"):
+            return f.read_text(encoding="utf-8", errors="replace")
+    return ""
+
+
+class _SuryaState:
+    rec = None
+    det = None
+
+
+def _surya_load():
+    if _SuryaState.rec is not None:
+        return _SuryaState.rec, _SuryaState.det
+    from surya.detection import DetectionPredictor
+    from surya.foundation import FoundationPredictor
+    from surya.recognition import RecognitionPredictor
+    foundation = FoundationPredictor()
+    _SuryaState.rec = RecognitionPredictor(foundation)
+    _SuryaState.det = DetectionPredictor()
+    return _SuryaState.rec, _SuryaState.det
+
+
+def ocr_surya(image) -> str:
+    rec, det = _surya_load()
+    preds = rec([image], det_predictor=det)
+    if not preds:
+        return ""
+    lines = [ln.text for ln in preds[0].text_lines]
+    return "\n".join(lines)
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--in", dest="inp", required=True, help="PDF-fil")
+    ap.add_argument("--out-dir", required=True, help="output-katalog")
+    ap.add_argument("--engine", default="tesseract",
+                    choices=["tesseract", "vision", "surya"])
+    ap.add_argument("--langs", default="swe", help="tesseract-språk")
+    ap.add_argument("--dpi", type=int, default=300)
+    ap.add_argument("--pages", help="kommaseparerade sidnummer (1-baserade); default alla")
+    args = ap.parse_args()
+
+    pdf = Path(args.inp)
+    if not pdf.exists():
+        print(f"Saknar {pdf}", file=sys.stderr)
+        return 1
+
+    out_dir = Path(args.out_dir)
+    stem_dir = out_dir / pdf.stem
+    stem_dir.mkdir(parents=True, exist_ok=True)
+
+    only_pages: set[int] | None = None
+    if args.pages:
+        try:
+            only_pages = {int(x) for x in args.pages.split(",") if x.strip()}
+        except ValueError:
+            print("--pages ska vara kommaseparerade heltal", file=sys.stderr)
+            return 1
+
+    page_texts: dict[int, str] = {}
+    n_total = 0
+    n_skipped = 0
+    n_done = 0
+    for page_num, image in render_pages(pdf, args.dpi):
+        n_total += 1
+        if only_pages is not None and page_num not in only_pages:
+            # Behåll möjligheten att läsa befintlig text för slutsamlad txt
+            existing = stem_dir / f"page-{page_num:03d}.txt"
+            if existing.exists():
+                page_texts[page_num] = existing.read_text(
+                    encoding="utf-8", errors="replace"
+                )
+            continue
+
+        txt_path = stem_dir / f"page-{page_num:03d}.txt"
+        json_path = stem_dir / f"page-{page_num:03d}.json"
+        png_path = stem_dir / f"page-{page_num:03d}.png"
+
+        if txt_path.exists() and txt_path.stat().st_size > 0:
+            page_texts[page_num] = txt_path.read_text(
+                encoding="utf-8", errors="replace"
+            )
+            n_skipped += 1
+            continue
+
+        try:
+            if args.engine == "surya":
+                text = ocr_surya(image)
+            else:
+                # spara PNG (idempotent)
+                if not png_path.exists():
+                    image.save(str(png_path))
+                if args.engine == "vision":
+                    text = ocr_vision(png_path)
+                else:
+                    text = ocr_tesseract(png_path, args.langs)
+        except Exception as e:  # noqa: BLE001
+            print(f"  [{pdf.stem} p{page_num}] FEL: {e}", file=sys.stderr)
+            log_error("ocr_pages", f"{pdf.name}#p{page_num}", str(e))
+            continue
+
+        try:
+            scored = score_text(text, use_hunspell=False)
+        except Exception:
+            scored = {"chars": len(text), "score": 0.0}
+
+        txt_path.write_text(text, encoding="utf-8")
+        meta = {
+            "file": pdf.name,
+            "page": page_num,
+            "engine": args.engine,
+            **scored,
+        }
+        json_path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+        page_texts[page_num] = text
+        n_done += 1
+        print(f"  [{pdf.stem} p{page_num:03d}] {len(text):5d} tecken "
+              f"score={scored.get('score', 0)}", flush=True)
+
+    # Slutsamla
+    combined = out_dir / f"{pdf.stem}.txt"
+    if page_texts:
+        ordered = [page_texts[i] for i in sorted(page_texts.keys())]
+        combined.write_text("\f".join(ordered), encoding="utf-8")
+
+    print(f"Klart {pdf.stem}: {n_done} OCR:ade, {n_skipped} hoppade, "
+          f"{n_total} sidor totalt.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

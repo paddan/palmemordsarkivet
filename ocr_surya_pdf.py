@@ -37,7 +37,9 @@ def write_searchable_pdf(src_pdf: Path, dst_pdf: Path, predictions, dpi: int):
     (1 pt = 1/72 tum). Skala: pt = px * 72 / dpi.
 
     PyMuPDF Page-koordinater: origo uppe vänster, y växer nedåt, enhet pt.
-    page.insert_text((x, y), text) sätter textens baslinje vid (x, y).
+    insert_textbox lägger texten i en rektangel med ord-wrap, vilket placerar
+    sig bättre relativt Suryas bbox än insert_text(point). Auto-skala fontsize:
+    börja från bbox-höjden och halvera tills texten ryms (max 5 iterationer).
     render_mode=3 = osynlig (varken fyllning eller kontur).
     """
     scale = 72.0 / dpi
@@ -50,20 +52,44 @@ def write_searchable_pdf(src_pdf: Path, dst_pdf: Path, predictions, dpi: int):
             if not line.text.strip():
                 continue
             x0, y0, x1, y1 = line.bbox
-            pdf_x = x0 * scale
-            pdf_y_baseline = y1 * scale  # baslinje vid bbox-botten
-            fontsize = max(1.0, (y1 - y0) * scale * 0.85)
-            try:
-                page.insert_text(
-                    (pdf_x, pdf_y_baseline),
-                    line.text,
-                    fontsize=fontsize,
-                    fontname="helv",
-                    render_mode=3,
-                )
-            except Exception:
-                # icke-renderbara glyfer → hoppa just den raden
-                pass
+            rect = pymupdf.Rect(
+                x0 * scale,
+                y0 * scale,
+                x1 * scale,
+                y1 * scale,
+            )
+            initial = max(1.0, (y1 - y0) * scale * 0.85)
+            fontsize = initial
+            placed = False
+            for _ in range(5):
+                try:
+                    rc = page.insert_textbox(
+                        rect,
+                        line.text,
+                        fontsize=fontsize,
+                        fontname="helv",
+                        render_mode=3,
+                    )
+                except Exception:
+                    rc = -1
+                if rc is not None and rc >= 0:
+                    placed = True
+                    break
+                fontsize = fontsize / 2.0
+                if fontsize < 0.5:
+                    break
+            if not placed:
+                # fallback: insert_text vid baslinje
+                try:
+                    page.insert_text(
+                        (x0 * scale, y1 * scale),
+                        line.text,
+                        fontsize=max(1.0, initial),
+                        fontname="helv",
+                        render_mode=3,
+                    )
+                except Exception:
+                    pass
     doc.save(str(dst_pdf), garbage=4, deflate=True)
     doc.close()
 
