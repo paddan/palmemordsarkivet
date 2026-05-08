@@ -68,4 +68,4 @@ if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && [ -z "${ANTHROPIC_API_KEY:-}" ]; the
   fi
 fi
 
-exec python rag/ask.py $rerank_flag "${args[@]}"
+exec python rag/ask.py $rerank_flag ${args[@]+"${args[@]}"}
