@@ -139,15 +139,11 @@ Hybrid-workflow:
 För att bara ta värsta filerna, symlinka över de PDF:er där `quality.csv`-poäng
 < 50 till en separat katalog och kör `./ocr_surya.sh` mot den.
 
-`ocr_surya.sh` skriver bara `.txt`. För att få sökbara PDF:er med
-Surya-textlager (motsvarande Tesseracts output i `ocr/`) finns
-`./ocr_surya_pdf.sh` som kör Surya och bäddar in osynligt textöverdrag i en
-kopia av PDF:en via PyMuPDF:
-
-```bash
-.venv/bin/pip install pymupdf
-./ocr_surya_pdf.sh --in <indir> --out ocr --text-out text_surya
-```
+`ocr_surya.sh` skriver bara `.txt`. RAG-pipen i `text/` hämtar texten där och
+bryr sig inte om sökbara PDF:er, så för normal användning räcker det. Vill du
+manuellt läsa Surya-OCR:ade PDF:er med korrekt textlager (kopiera/söka i
+Preview), kör `./ocr_pages.sh --engine surya` per fil — den producerar texten,
+men inte en sökbar PDF i `ocr/`. Den funktionen är borttagen.
 
 #### Per-sida OCR (`ocr_pages.sh`)
 
@@ -173,16 +169,6 @@ Kombo med `./quality.sh --per-page` + `./ocr.sh --redo --mode pages` kör om
 bara de sidor som ligger under tröskeln (med Surya som default). Alla skript
 har `--help` som listar tillgängliga flaggor; env-vars fungerar fortfarande
 som fallback.
-
-#### macOS Vision (`ocr_vision.sh`)
-
-Tunn wrapper kring `ocrit` för PDF eller bildkatalog:
-
-```bash
-brew install insidegui/tap/ocrit
-./ocr_vision.sh --in files --out text_vision
-./ocr_vision.sh --in files/foo.pdf --out text_vision
-```
 
 #### Auto-byggda user-words (`build_user_words.sh`)
 
@@ -271,9 +257,7 @@ OAuth-token genereras med `claude setup-token` (engångsåtgärd).
 | `ocr.sh` | Full OCR-pipeline (Tesseract → kvalitet → Surya på dåliga sidor); `--redo` kör om dåliga filer/sidor |
 | `ocr_tesseract.sh` | Bara Tesseract-steget (textextraktion + ocrmypdf) |
 | `ocr_surya.sh` → `src/ocr_surya.py` | Surya-OCR till `.txt` (alternativ, högre kvalitet på svåra scans) |
-| `ocr_surya_pdf.sh` → `src/ocr_surya_pdf.py` | Surya-OCR + inbäddat osynligt textlager i sökbar PDF |
 | `ocr_pages.sh` → `src/ocr_pages.py` | Per-sida OCR (Tesseract/Vision/Surya) med sidor i `\f`-separerad txt |
-| `ocr_vision.sh` → `src/ocr_vision.py` | macOS Vision Framework via `ocrit` (PDF eller bilder) |
 | `build_user_words.sh` → `src/build_user_words.py` | Bygg `tessdata/swe.user-words.auto` från `text/*.txt` |
 | `quality.sh` → `src/quality.py` | Heuristisk kvalitetsbedömning av `text/*.txt` (`--per-page` finns) |
 | `ingest.sh` → `src/rag/ingest.py` | Bygg vektorindex |
