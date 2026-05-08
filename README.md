@@ -22,7 +22,13 @@ cd palmemordsarkivet
 
 python3 -m venv .venv
 .venv/bin/pip install --upgrade pip
+# Antingen via requirements (kompakt):
 .venv/bin/pip install gdown requests sentence-transformers lancedb pyarrow claude-agent-sdk streamlit
+# Eller via pyproject (gör det enklare att lägga till extras):
+.venv/bin/pip install -e .            # core
+.venv/bin/pip install -e .[webui]     # + Streamlit/OpenAI
+.venv/bin/pip install -e .[surya]     # + Surya-OCR
+.venv/bin/pip install -e .[dev]       # + pytest
 
 brew install ocrmypdf tesseract-lang poppler unpaper claude-code
 ```
@@ -119,6 +125,49 @@ För att bara ta värsta filerna, symlinka över de PDF:er där `quality.csv`-po
 .venv/bin/python ocr_surya_pdf.py --in <indir> --out ocr --text-out text_surya
 ```
 
+#### Per-sida OCR (`ocr_pages.py`)
+
+För ännu finare granularitet — om bara enstaka sidor i en fil är dåliga.
+Renderar PDF:en sida för sida, OCR:ar varje sida individuellt och skriver
+``page-NNN.txt`` + ``page-NNN.json`` (text + score) i en undermapp. Slutsamlar
+till ``<stem>.txt`` med ``\f`` som sidbrytare.
+
+```bash
+.venv/bin/python ocr_pages.py --in files/foo.pdf --out-dir text_pages --engine tesseract
+.venv/bin/python ocr_pages.py --in files/foo.pdf --out-dir text_pages --engine surya
+.venv/bin/python ocr_pages.py --in files/foo.pdf --out-dir text_pages --engine vision
+.venv/bin/python ocr_pages.py --in files/foo.pdf --out-dir text_pages --pages 3,7,12
+```
+
+`--engine vision` kräver `ocrit` (macOS Vision Framework):
+
+```bash
+brew install insidegui/tap/ocrit
+```
+
+Kombo med `quality.py --per-page` + `MODE=pages ./redo_ocr.sh` kör om bara de
+sidor som ligger under tröskeln (med Surya som default).
+
+#### macOS Vision (`ocr_vision.py`)
+
+Tunn wrapper kring `ocrit` för PDF eller bildkatalog:
+
+```bash
+brew install insidegui/tap/ocrit
+.venv/bin/python ocr_vision.py --in files --out text_vision
+.venv/bin/python ocr_vision.py --in files/foo.pdf --out text_vision
+```
+
+#### Auto-byggda user-words (`build_user_words.py`)
+
+Bygg `tessdata/swe.user-words.auto` från befintliga `text/*.txt`. Filtrerar
+mot hunspell sv_SE om installerat, annars freq ≥ 30. Plockas upp automatiskt
+av `ocr.sh`:
+
+```bash
+.venv/bin/python build_user_words.py
+```
+
 ### 3. Indexera i vektor-DB
 
 ```bash
@@ -141,6 +190,7 @@ export CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...
 
 .venv/bin/python rag/ask.py "Vad sa Annett Kohut om kvällen 28 februari?"
 .venv/bin/python rag/ask.py --rerank "..."   # bättre precision (laddar ned 568 MB modell)
+.venv/bin/python rag/ask.py --hybrid "..."   # vector + BM25 sammanslaget med RRF
 .venv/bin/python rag/ask.py                  # interaktiv repl
 
 # Eller via wrapper-skriptet (aktiverar venv, läser in token, --rerank som default):
@@ -195,7 +245,10 @@ OAuth-token genereras med `claude setup-token` (engångsåtgärd).
 | `ocr.sh` | Tesseract-OCR + textextraktion |
 | `ocr_surya.py` | Surya-OCR till `.txt` (alternativ, högre kvalitet på svåra scans) |
 | `ocr_surya_pdf.py` | Surya-OCR + inbäddat osynligt textlager i sökbar PDF |
-| `quality.py` | Heuristisk kvalitetsbedömning av `text/*.txt` |
+| `ocr_pages.py` | Per-sida OCR (Tesseract/Vision/Surya) med sidor i `\f`-separerad txt |
+| `ocr_vision.py` | macOS Vision Framework via `ocrit` (PDF eller bilder) |
+| `build_user_words.py` | Bygg `tessdata/swe.user-words.auto` från `text/*.txt` |
+| `quality.py` | Heuristisk kvalitetsbedömning av `text/*.txt` (`--per-page` finns) |
 | `redo_ocr.sh` | Kör om OCR med `--redo-ocr` på filer med dåligt textlager |
 | `rag/ingest.py` | Bygg vektorindex |
 | `rag/ask.py` | Frågefronten |
@@ -234,6 +287,23 @@ curl -L -o ~/Library/Spelling/sv_SE.dic \
   https://raw.githubusercontent.com/LibreOffice/dictionaries/master/sv_SE/sv_SE.dic
 echo "katt hus blabla" | hunspell -d sv_SE -l   # ska skriva ut "blabla"
 ```
+
+## Tester
+
+```bash
+.venv/bin/pip install pytest
+.venv/bin/pytest tests/
+```
+
+Testerna täcker `score_text`, `chunk_text`, `extract_drive_id` och
+`sniff_extension`. Fixturen som genererar en mini-PDF med pymupdf skipas
+gracefully om pymupdf inte är installerat.
+
+## Felloggning
+
+Skript skriver tab-separerade rader till `errors.log` i projekt-roten:
+``ISO8601\tcomponent\titem\tmessage``. Python-skript via `errors_log.log_error`,
+bash via `>> "$ROOT/errors.log"`. Append-only, idempotent.
 
 ## Datafiler (gitignorerade)
 

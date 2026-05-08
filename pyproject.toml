@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "palmemordsarkivet"
+version = "0.1.0"
+description = "Skript för att ladda ner, OCR-tolka och söka i palmemordsarkivet.se"
+requires-python = ">=3.11"
+readme = "README.md"
+dependencies = [
+    "requests",
+    "gdown",
+    "sentence-transformers",
+    "lancedb",
+    "pyarrow",
+    "claude-agent-sdk",
+    "pypdfium2",
+]
+
+[project.optional-dependencies]
+surya = [
+    "surya-ocr",
+    "transformers<5",
+    "pymupdf",
+    "pypdfium2",
+]
+dev = [
+    "pytest",
+]
+webui = [
+    "streamlit",
+    "openai",
+]
+
+[tool.setuptools]
+py-modules = [
+    "download",
+    "quality",
+    "ocr_surya",
+    "ocr_surya_pdf",
+    "ocr_pages",
+    "ocr_vision",
+    "build_user_words",
+    "errors_log",
+]
