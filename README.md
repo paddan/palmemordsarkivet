@@ -278,9 +278,10 @@ Viktig insikt: `text-layer` betyder inte automatiskt "bra" — vissa PDF:er har
 gammalt OCR-skräp inbäddat fastän originalbilden är fullt läsbar. Sortera
 efter `score`, inte efter källa. För dessa: kör `./redo_ocr.sh` som anropar
 `ocrmypdf --redo-ocr` (tar bort det dåliga textlagret och OCR:ar om från
-bilden). Tröskel via flagga: `./redo_ocr.sh --threshold 70` (eller env
-`THRESHOLD=70`). Inkludera även dåliga Tesseract-filer:
-`./redo_ocr.sh --source any`. `./redo_ocr.sh --help` listar alla flaggor.
+bilden). Default tar med både `text-layer`- och `ocr`-källor. Tröskel via
+flagga: `./redo_ocr.sh --threshold 70` (eller env `THRESHOLD=70`). Begränsa
+till en källa: `./redo_ocr.sh --source text-layer`. `./redo_ocr.sh --help`
+listar alla flaggor.
 
 Valfritt: installera hunspell + svensk ordlista så fylls `pct_swe`-kolumnen i:
 

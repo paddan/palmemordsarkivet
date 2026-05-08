@@ -24,7 +24,7 @@ flaggor vinner.
   --csv FILE              quality.csv (\$ROOT/quality.csv)
   --pages-jsonl FILE      quality_pages.jsonl (\$ROOT/quality_pages.jsonl)
   --threshold N           score-tröskel; sidor/filer under detta körs om (50)
-  --source S              text-layer | ocr | any (text-layer)
+  --source S              text-layer | ocr | any (any)
   --jobs N                antal filer parallellt (4)
   --per-file-jobs N       OCR-trådar per fil (2)
   --mode MODE             files | pages (files)
@@ -40,7 +40,7 @@ TXT=${TXT:-}
 CSV=${CSV:-}
 PAGES_JSONL=${PAGES_JSONL:-}
 THRESHOLD=${THRESHOLD:-50}
-SOURCE=${SOURCE:-text-layer}
+SOURCE=${SOURCE:-any}
 JOBS=${JOBS:-4}
 PER_FILE_JOBS=${PER_FILE_JOBS:-2}
 MODE=${MODE:-files}
