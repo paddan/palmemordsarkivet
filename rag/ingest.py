@@ -10,6 +10,7 @@ Kör:
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import sys
 import time
@@ -92,17 +93,35 @@ def is_useful(chunk: str) -> bool:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--rebuild", action="store_true", help="börja om från noll")
     ap.add_argument("--limit", type=int, help="max antal filer att indexera")
+    ap.add_argument("--text-dir",
+                    default=os.environ.get("TEXT_DIR", str(TEXT_DIR)),
+                    help=f"katalog med .txt-filer (default: {TEXT_DIR})")
+    ap.add_argument("--db-dir",
+                    default=os.environ.get("DB_DIR", str(DB_DIR)),
+                    help=f"LanceDB-katalog (default: {DB_DIR})")
+    ap.add_argument("--chunk-chars", type=int,
+                    default=int(os.environ.get("CHUNK_CHARS", str(CHUNK_CHARS))),
+                    help=f"chunk-storlek i tecken (default: {CHUNK_CHARS})")
+    ap.add_argument("--chunk-overlap", type=int,
+                    default=int(os.environ.get("CHUNK_OVERLAP", str(CHUNK_OVERLAP))),
+                    help=f"chunk-överlapp i tecken (default: {CHUNK_OVERLAP})")
+    ap.add_argument("--model",
+                    default=os.environ.get("EMBED_MODEL", MODEL_NAME),
+                    help=f"embedding-modell (default: {MODEL_NAME})")
     args = ap.parse_args()
 
-    if not TEXT_DIR.exists():
-        print(f"Saknar {TEXT_DIR}/ — kör ocr.sh först.", file=sys.stderr)
+    text_dir = Path(args.text_dir)
+    db_dir = Path(args.db_dir)
+    if not text_dir.exists():
+        print(f"Saknar {text_dir}/ — kör ocr.sh först.", file=sys.stderr)
         return 1
 
-    DB_DIR.mkdir(exist_ok=True)
-    db = lancedb.connect(str(DB_DIR))
+    db_dir.mkdir(exist_ok=True)
+    db = lancedb.connect(str(db_dir))
 
     schema = pa.schema([
         pa.field("vector", pa.list_(pa.float32(), EMBED_DIM)),
@@ -122,10 +141,10 @@ def main() -> int:
         table = db.create_table(TABLE, schema=schema)
         already = set()
 
-    print(f"Laddar embedding-modell {MODEL_NAME} (första gången tar några minuter)…")
-    model = SentenceTransformer(MODEL_NAME)
+    print(f"Laddar embedding-modell {args.model} (första gången tar några minuter)…")
+    model = SentenceTransformer(args.model)
 
-    files = sorted(TEXT_DIR.glob("*.txt"))
+    files = sorted(text_dir.glob("*.txt"))
     if args.limit:
         files = files[: args.limit]
 
@@ -146,7 +165,7 @@ def main() -> int:
         rows = []
         chunk_idx = 0
         for page_idx, page in enumerate(split_pages(raw), start=1):
-            for _, _, chunk in chunk_text(page, CHUNK_CHARS, CHUNK_OVERLAP):
+            for _, _, chunk in chunk_text(page, args.chunk_chars, args.chunk_overlap):
                 if not is_useful(chunk):
                     continue
                 rows.append({

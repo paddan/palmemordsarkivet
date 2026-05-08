@@ -171,17 +171,18 @@ async def main_async(args) -> int:
             file=sys.stderr,
         )
         return 1
-    if not DB_DIR.exists():
-        print(f"Saknar {DB_DIR}/ — kör ingest.py först.", file=sys.stderr)
+    db_dir = Path(args.db_dir)
+    if not db_dir.exists():
+        print(f"Saknar {db_dir}/ — kör ingest.py först.", file=sys.stderr)
         return 1
 
-    db = lancedb.connect(str(DB_DIR))
+    db = lancedb.connect(str(db_dir))
     if TABLE not in db.list_tables().tables:
         print(f"Tabell '{TABLE}' finns inte — kör ingest.py först.", file=sys.stderr)
         return 1
     table = db.open_table(TABLE)
     print(f"Index: {table.count_rows()} chunks. Laddar embedding-modell…")
-    embed_model = SentenceTransformer(EMBED_MODEL)
+    embed_model = SentenceTransformer(args.model)
 
     if args.query:
         await run_query(table, embed_model, " ".join(args.query),
@@ -202,13 +203,27 @@ async def main_async(args) -> int:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("query", nargs="*", help="frågan; lämna tom för repl")
-    ap.add_argument("--top-k", type=int, default=20, help="antal kandidater från vektor-DB")
-    ap.add_argument("--top-n", type=int, default=6, help="antal som skickas till Claude")
-    ap.add_argument("--rerank", action="store_true", help="omranka med cross-encoder")
+    ap.add_argument("--top-k", type=int,
+                    default=int(os.environ.get("TOP_K", "20")),
+                    help="antal kandidater från vektor-DB (default: 20)")
+    ap.add_argument("--top-n", type=int,
+                    default=int(os.environ.get("TOP_N", "6")),
+                    help="antal som skickas till Claude (default: 6)")
+    ap.add_argument("--rerank", action="store_true",
+                    default=os.environ.get("RERANK", "").lower() in ("1", "true", "yes"),
+                    help="omranka med cross-encoder")
     ap.add_argument("--hybrid", action="store_true",
+                    default=os.environ.get("HYBRID", "").lower() in ("1", "true", "yes"),
                     help="hybridsök: vector + BM25 sammanslaget med RRF")
+    ap.add_argument("--db-dir",
+                    default=os.environ.get("DB_DIR", str(DB_DIR)),
+                    help=f"LanceDB-katalog (default: {DB_DIR})")
+    ap.add_argument("--model",
+                    default=os.environ.get("EMBED_MODEL", EMBED_MODEL),
+                    help=f"embedding-modell (default: {EMBED_MODEL})")
     args = ap.parse_args()
     return asyncio.run(main_async(args))
 

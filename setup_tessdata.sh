@@ -7,8 +7,29 @@
 
 set -eu
 
+usage() {
+  cat <<EOF
+Användning: $(basename "$0") [flaggor]
+
+  --root DIR    projektrot (\$HOME/projects/palmemordsarkivet eller env ROOT)
+  --dest DIR    målkatalog för tessdata (\$ROOT/tessdata)
+  -h, --help    visa hjälp
+EOF
+}
+
 ROOT=${ROOT:-$HOME/projects/palmemordsarkivet}
-DEST="$ROOT/tessdata"
+DEST=${DEST:-}
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --root)    ROOT="$2"; shift 2 ;;
+    --dest)    DEST="$2"; shift 2 ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "okänd flagga: $1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+
+DEST=${DEST:-$ROOT/tessdata}
 SYS_TESSDATA="$(brew --prefix)/share/tessdata"
 
 mkdir -p "$DEST"

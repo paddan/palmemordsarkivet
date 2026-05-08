@@ -12,6 +12,7 @@ Idempotent.
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import shutil
 import subprocess
@@ -68,13 +69,26 @@ def hunspell_known(words: list[str]) -> set[str]:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--text-dir", default=str(TEXT_DIR))
-    ap.add_argument("--out", default=str(OUT))
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--text-dir",
+                    default=os.environ.get("TEXT_DIR", str(TEXT_DIR)),
+                    help=f"katalog med .txt-filer (default: {TEXT_DIR})")
+    ap.add_argument("--out",
+                    default=os.environ.get("OUT", str(OUT)),
+                    help=f"output-fil (default: {OUT})")
+    ap.add_argument("--user-words",
+                    default=os.environ.get("USER_WORDS", str(USER_WORDS)),
+                    help=f"befintliga user-words att slå ihop med (default: {USER_WORDS})")
+    ap.add_argument("--min-freq",
+                    type=int,
+                    default=int(os.environ.get("MIN_FREQ", "0")),
+                    help="minsta frekvens; 0 = auto (10 med hunspell, annars 30)")
     args = ap.parse_args()
 
     text_dir = Path(args.text_dir)
     out_path = Path(args.out)
+    user_words_path = Path(args.user_words)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     if not text_dir.exists():
@@ -96,7 +110,10 @@ def main() -> int:
     print(f"Läste {n_files} filer, {len(counter)} unika ord.", file=sys.stderr)
 
     use_hunspell = has_hunspell_swe()
-    threshold = MIN_FREQ_HUNSPELL if use_hunspell else MIN_FREQ_NO_HUNSPELL
+    if args.min_freq > 0:
+        threshold = args.min_freq
+    else:
+        threshold = MIN_FREQ_HUNSPELL if use_hunspell else MIN_FREQ_NO_HUNSPELL
     candidates = [w for w, c in counter.items() if c >= threshold]
     print(f"Kandidater med freq >= {threshold}: {len(candidates)}", file=sys.stderr)
 
@@ -106,8 +123,8 @@ def main() -> int:
         print(f"Efter hunspell-filter: {len(candidates)}", file=sys.stderr)
 
     existing: set[str] = set()
-    if USER_WORDS.exists():
-        for line in USER_WORDS.read_text(encoding="utf-8").splitlines():
+    if user_words_path.exists():
+        for line in user_words_path.read_text(encoding="utf-8").splitlines():
             w = line.strip()
             if w:
                 existing.add(w)

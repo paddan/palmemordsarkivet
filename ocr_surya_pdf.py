@@ -14,23 +14,19 @@ Kör:
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 from pathlib import Path
 
-import pymupdf
-import pypdfium2 as pdfium
-from surya.detection import DetectionPredictor
-from surya.foundation import FoundationPredictor
-from surya.recognition import RecognitionPredictor
-
-
 def render_pdf(pdf_path: Path, dpi: int):
+    import pypdfium2 as pdfium
     pdf = pdfium.PdfDocument(str(pdf_path))
     return [page.render(scale=dpi / 72).to_pil() for page in pdf]
 
 
 def write_searchable_pdf(src_pdf: Path, dst_pdf: Path, predictions, dpi: int):
+    import pymupdf
     """Skriv kopia av src_pdf med osynlig textöverdrag baserat på Surya-bboxes.
 
     Surya-koordinater är i renderad bildupplösning (dpi). PDF använder punkter
@@ -95,14 +91,22 @@ def write_searchable_pdf(src_pdf: Path, dst_pdf: Path, predictions, dpi: int):
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--in", dest="indir", required=True,
-                    help="katalog med ingångs-PDF:er")
-    ap.add_argument("--out", dest="outdir", required=True,
-                    help="katalog för PDF:er med inbäddad Surya-text")
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--in", dest="indir",
+                    default=os.environ.get("IN"),
+                    required=not os.environ.get("IN"),
+                    help="katalog med ingångs-PDF:er (env: IN)")
+    ap.add_argument("--out", dest="outdir",
+                    default=os.environ.get("OUT"),
+                    required=not os.environ.get("OUT"),
+                    help="katalog för PDF:er med inbäddad Surya-text (env: OUT)")
     ap.add_argument("--text-out", dest="text_outdir",
-                    help="valfri katalog för .txt-filer")
-    ap.add_argument("--dpi", type=int, default=200)
+                    default=os.environ.get("TEXT_OUT"),
+                    help="valfri katalog för .txt-filer (env: TEXT_OUT)")
+    ap.add_argument("--dpi", type=int,
+                    default=int(os.environ.get("DPI", "200")),
+                    help="render-DPI (default: 200)")
     args = ap.parse_args()
 
     indir = Path(args.indir)
@@ -118,6 +122,9 @@ def main() -> int:
         return 1
 
     print("Laddar Surya-modeller…", file=sys.stderr)
+    from surya.detection import DetectionPredictor
+    from surya.foundation import FoundationPredictor
+    from surya.recognition import RecognitionPredictor
     foundation = FoundationPredictor()
     rec = RecognitionPredictor(foundation)
     det = DetectionPredictor()

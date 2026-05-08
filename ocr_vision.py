@@ -14,6 +14,7 @@ Förkrav:
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import subprocess
 import sys
@@ -117,10 +118,19 @@ def process(in_path: Path, out_dir: Path, dpi: int) -> int:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--in", dest="inp", required=True)
-    ap.add_argument("--out", dest="outdir", required=True)
-    ap.add_argument("--dpi", type=int, default=300)
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--in", dest="inp",
+                    default=os.environ.get("IN"),
+                    required=not os.environ.get("IN"),
+                    help="PDF eller katalog med PDF/bilder (env: IN)")
+    ap.add_argument("--out", dest="outdir",
+                    default=os.environ.get("OUT"),
+                    required=not os.environ.get("OUT"),
+                    help="output-katalog för .txt (env: OUT)")
+    ap.add_argument("--dpi", type=int,
+                    default=int(os.environ.get("DPI", "300")),
+                    help="render-DPI för PDF-sidor (default: 300)")
     args = ap.parse_args()
 
     ensure_ocrit()

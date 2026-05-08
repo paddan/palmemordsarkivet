@@ -6,15 +6,77 @@
 # - Parallelliserar över filer med xargs -P
 # - Idempotent: hoppar över filer där .txt redan finns
 #
-# Lägen:
-#   ./ocr.sh                       # normal: OCR:a sidor utan textlager
-#   REDO_TEXT_LAYER=1 ./ocr.sh     # kör om OCR på alla PDF:er som har textlager
-#
 # Krav: brew install ocrmypdf tesseract-lang poppler unpaper
 
 set -u
 
+usage() {
+  cat <<EOF
+Användning: $(basename "$0") [flaggor]
+
+Default-värden visas inom parentes. Alla flaggor kan också sättas via
+motsvarande env-var (versaler, understreck) — flagga vinner över env-var.
+
+  --root DIR              projektrot ($PWD om ej satt via ROOT)
+  --in DIR                ingångskatalog med PDF:er (\$ROOT/files)
+  --ocr DIR               output-katalog för OCR:ade PDF:er (\$ROOT/ocr)
+  --txt DIR               output-katalog för .txt (\$ROOT/text)
+  --tessdata DIR          tessdata-katalog (\$ROOT/tessdata)
+  --user-words FILE       sökväg till swe.user-words (\$TESSDATA/swe.user-words)
+  --user-words-auto FILE  sökväg till swe.user-words.auto
+  --tess-config FILE      tesseract.config (\$TESSDATA/tesseract.config)
+  --psm N                 tesseract page segmentation mode (6)
+  --langs S               tesseract-språk (swe)
+  --jobs N                antal filer parallellt (4)
+  --per-file-jobs N       OCR-trådar per fil (2)
+  --min-text-chars N      tröskel för "har redan text" (200)
+  --redo-text-layer       kör om OCR på filer som redan har textlager
+  --image-dpi N           bild-DPI för OCR (300)
+  --errors-log FILE       logg-fil för fel (\$ROOT/errors.log)
+  -h, --help              visa denna hjälp och avsluta
+EOF
+}
+
 ROOT=${ROOT:-$(cd "$(dirname "$0")" && pwd)}
+IN=${IN:-}
+OCR=${OCR:-}
+TXT=${TXT:-}
+TESSDATA=${TESSDATA:-}
+USER_WORDS=${USER_WORDS:-}
+USER_WORDS_AUTO=${USER_WORDS_AUTO:-}
+TESS_CONFIG=${TESS_CONFIG:-}
+PSM=${PSM:-6}
+LANGS=${LANGS:-swe}
+JOBS=${JOBS:-4}
+PER_FILE_JOBS=${PER_FILE_JOBS:-2}
+MIN_TEXT_CHARS=${MIN_TEXT_CHARS:-200}
+REDO_TEXT_LAYER=${REDO_TEXT_LAYER:-0}
+IMAGE_DPI=${IMAGE_DPI:-300}
+ERRORS_LOG=${ERRORS_LOG:-}
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --root)             ROOT="$2"; shift 2 ;;
+    --in)               IN="$2"; shift 2 ;;
+    --ocr)              OCR="$2"; shift 2 ;;
+    --txt)              TXT="$2"; shift 2 ;;
+    --tessdata)         TESSDATA="$2"; shift 2 ;;
+    --user-words)       USER_WORDS="$2"; shift 2 ;;
+    --user-words-auto)  USER_WORDS_AUTO="$2"; shift 2 ;;
+    --tess-config)      TESS_CONFIG="$2"; shift 2 ;;
+    --psm)              PSM="$2"; shift 2 ;;
+    --langs)            LANGS="$2"; shift 2 ;;
+    --jobs)             JOBS="$2"; shift 2 ;;
+    --per-file-jobs)    PER_FILE_JOBS="$2"; shift 2 ;;
+    --min-text-chars)   MIN_TEXT_CHARS="$2"; shift 2 ;;
+    --redo-text-layer)  REDO_TEXT_LAYER=1; shift ;;
+    --image-dpi)        IMAGE_DPI="$2"; shift 2 ;;
+    --errors-log)       ERRORS_LOG="$2"; shift 2 ;;
+    -h|--help)          usage; exit 0 ;;
+    *) echo "okänd flagga: $1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+
 IN=${IN:-$ROOT/files}
 OCR=${OCR:-$ROOT/ocr}
 TXT=${TXT:-$ROOT/text}
@@ -22,13 +84,6 @@ TESSDATA=${TESSDATA:-$ROOT/tessdata}
 USER_WORDS=${USER_WORDS:-$TESSDATA/swe.user-words}
 USER_WORDS_AUTO=${USER_WORDS_AUTO:-$TESSDATA/swe.user-words.auto}
 TESS_CONFIG=${TESS_CONFIG:-$TESSDATA/tesseract.config}
-PSM=${PSM:-6}                      # 6 = uniform block of text (bra för förhör)
-LANGS=${LANGS:-swe}                # default svenska; sätt swe+eng för engelska sidor
-JOBS=${JOBS:-4}                    # antal filer parallellt
-PER_FILE_JOBS=${PER_FILE_JOBS:-2}  # OCR-trådar per fil
-MIN_TEXT_CHARS=${MIN_TEXT_CHARS:-200}  # tröskel för "har redan text"
-REDO_TEXT_LAYER=${REDO_TEXT_LAYER:-0}
-IMAGE_DPI=${IMAGE_DPI:-300}
 ERRORS_LOG=${ERRORS_LOG:-$ROOT/errors.log}
 
 mkdir -p "$OCR" "$TXT"

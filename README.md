@@ -82,14 +82,21 @@ Sen:
 - Parallelliserar över filer med `xargs -P` (default 4 jobb).
 - Idempotent.
 
-Tunables via env: `JOBS=8 PER_FILE_JOBS=2 PSM=4 ./ocr.sh`.
+Tunables via flaggor (env-vars fungerar fortfarande som fallback):
+
+```bash
+./ocr.sh --jobs 8 --per-file-jobs 2 --psm 4
+./ocr.sh --help                              # alla flaggor
+JOBS=8 PER_FILE_JOBS=2 PSM=4 ./ocr.sh        # bakåtkompatibelt
+```
 
 Lägen:
 
 ```bash
 ./ocr.sh                       # normal: OCR:a sidor utan textlager
-REDO_TEXT_LAYER=1 ./ocr.sh     # kör om OCR på alla PDF:er som har textlager
+./ocr.sh --redo-text-layer     # kör om OCR på alla PDF:er som har textlager
                                # (för PDF:er med inbäddat OCR-skräp)
+REDO_TEXT_LAYER=1 ./ocr.sh     # bakåtkompatibelt — env-var fungerar
 ```
 
 Vid riktiga fel skrivs `[fel] <namn>` följt av indragen ocrmypdf-logg. Tesseracts
@@ -145,8 +152,10 @@ till ``<stem>.txt`` med ``\f`` som sidbrytare.
 brew install insidegui/tap/ocrit
 ```
 
-Kombo med `quality.py --per-page` + `MODE=pages ./redo_ocr.sh` kör om bara de
-sidor som ligger under tröskeln (med Surya som default).
+Kombo med `quality.py --per-page` + `./redo_ocr.sh --mode pages` kör om bara
+de sidor som ligger under tröskeln (med Surya som default). Alla skript har
+`--help` som listar tillgängliga flaggor; env-vars fungerar fortfarande som
+fallback.
 
 #### macOS Vision (`ocr_vision.py`)
 
@@ -273,8 +282,9 @@ Viktig insikt: `text-layer` betyder inte automatiskt "bra" — vissa PDF:er har
 gammalt OCR-skräp inbäddat fastän originalbilden är fullt läsbar. Sortera
 efter `score`, inte efter källa. För dessa: kör `./redo_ocr.sh` som anropar
 `ocrmypdf --redo-ocr` (tar bort det dåliga textlagret och OCR:ar om från
-bilden). Tröskel via env: `THRESHOLD=70 ./redo_ocr.sh`. Inkludera även
-dåliga Tesseract-filer: `SOURCE=any ./redo_ocr.sh`.
+bilden). Tröskel via flagga: `./redo_ocr.sh --threshold 70` (eller env
+`THRESHOLD=70`). Inkludera även dåliga Tesseract-filer:
+`./redo_ocr.sh --source any`. `./redo_ocr.sh --help` listar alla flaggor.
 
 Valfritt: installera hunspell + svensk ordlista så fylls `pct_swe`-kolumnen i:
 

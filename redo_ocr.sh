@@ -5,25 +5,71 @@
 # raderar deras .txt + .pdf i ocr/, och kör ocrmypdf --redo-ocr som
 # tar bort det dåliga textlagret och OCR:ar om från originalbilden.
 #
-# Kör:
+# Förkrav:
 #   python quality.py            # generera/uppdatera quality.csv
-#   ./redo_ocr.sh                # tröskel 50, bara source=text-layer
-#   THRESHOLD=70 ./redo_ocr.sh   # mer aggressiv
-#   SOURCE=ocr ./redo_ocr.sh     # kör om dåliga Tesseract-filer också
 
 set -u
 
+usage() {
+  cat <<EOF
+Användning: $(basename "$0") [flaggor]
+
+Default visas inom parentes. Env-vars (versaler) fungerar som fallback men
+flaggor vinner.
+
+  --root DIR              projektrot ($PWD om ej satt via ROOT)
+  --in DIR                ingångskatalog med PDF:er (\$ROOT/files)
+  --ocr DIR               output-katalog för OCR-PDF:er (\$ROOT/ocr)
+  --txt DIR               output-katalog för .txt (\$ROOT/text)
+  --csv FILE              quality.csv (\$ROOT/quality.csv)
+  --pages-jsonl FILE      quality_pages.jsonl (\$ROOT/quality_pages.jsonl)
+  --threshold N           score-tröskel; sidor/filer under detta körs om (50)
+  --source S              text-layer | ocr | any (text-layer)
+  --jobs N                antal filer parallellt (4)
+  --per-file-jobs N       OCR-trådar per fil (2)
+  --mode MODE             files | pages (files)
+  --pages-out DIR         output-katalog för per-sida (\$ROOT/text_pages)
+  -h, --help              visa denna hjälp
+EOF
+}
+
 ROOT=${ROOT:-$(cd "$(dirname "$0")" && pwd)}
+IN=${IN:-}
+OCR=${OCR:-}
+TXT=${TXT:-}
+CSV=${CSV:-}
+PAGES_JSONL=${PAGES_JSONL:-}
+THRESHOLD=${THRESHOLD:-50}
+SOURCE=${SOURCE:-text-layer}
+JOBS=${JOBS:-4}
+PER_FILE_JOBS=${PER_FILE_JOBS:-2}
+MODE=${MODE:-files}
+PAGES_OUT=${PAGES_OUT:-}
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --root)            ROOT="$2"; shift 2 ;;
+    --in)              IN="$2"; shift 2 ;;
+    --ocr)             OCR="$2"; shift 2 ;;
+    --txt)             TXT="$2"; shift 2 ;;
+    --csv)             CSV="$2"; shift 2 ;;
+    --pages-jsonl)     PAGES_JSONL="$2"; shift 2 ;;
+    --threshold)       THRESHOLD="$2"; shift 2 ;;
+    --source)          SOURCE="$2"; shift 2 ;;
+    --jobs)            JOBS="$2"; shift 2 ;;
+    --per-file-jobs)   PER_FILE_JOBS="$2"; shift 2 ;;
+    --mode)            MODE="$2"; shift 2 ;;
+    --pages-out)       PAGES_OUT="$2"; shift 2 ;;
+    -h|--help)         usage; exit 0 ;;
+    *) echo "okänd flagga: $1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+
 IN=${IN:-$ROOT/files}
 OCR=${OCR:-$ROOT/ocr}
 TXT=${TXT:-$ROOT/text}
 CSV=${CSV:-$ROOT/quality.csv}
 PAGES_JSONL=${PAGES_JSONL:-$ROOT/quality_pages.jsonl}
-THRESHOLD=${THRESHOLD:-50}
-SOURCE=${SOURCE:-text-layer}      # text-layer | ocr | any
-JOBS=${JOBS:-4}
-PER_FILE_JOBS=${PER_FILE_JOBS:-2}
-MODE=${MODE:-files}               # files | pages
 PAGES_OUT=${PAGES_OUT:-$ROOT/text_pages}
 
 if [ "$MODE" = "pages" ]; then

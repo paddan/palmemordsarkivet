@@ -6,13 +6,16 @@ via länkarna i kolumnen "Länk till kopia".
 Användning:
     pip install gdown requests
     python download.py [målmapp]
+    python download.py --out files --sheet-id <ID>
 
 Skriver `manifest.csv` i målmappen som idempotency-key.
 """
 
+import argparse
 import csv
 import hashlib
 import io
+import os
 import re
 import sys
 import time
@@ -214,11 +217,24 @@ def append_manifest(path: Path, row: dict) -> None:
 
 
 def main() -> int:
-    out_dir = Path(sys.argv[1] if len(sys.argv) > 1 else "files")
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("out", nargs="?",
+                    default=os.environ.get("OUT", "files"),
+                    help="målmapp (positionellt eller via env OUT, default: files)")
+    ap.add_argument("--out", dest="out_flag",
+                    help="alternativ till positionellt argument")
+    ap.add_argument("--sheet-id",
+                    default=os.environ.get("SHEET_ID", SHEET_ID),
+                    help=f"Google Sheets-ID (default: {SHEET_ID[:12]}…)")
+    args = ap.parse_args()
+
+    out_dir = Path(args.out_flag or args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"Hämtar kalkylbladet från {CSV_URL}")
-    r = requests.get(CSV_URL, timeout=60)
+    csv_url = f"https://docs.google.com/spreadsheets/d/{args.sheet_id}/export?format=csv"
+    print(f"Hämtar kalkylbladet från {csv_url}")
+    r = requests.get(csv_url, timeout=60)
     r.raise_for_status()
     r.encoding = "utf-8"
 

@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -111,14 +112,29 @@ def ocr_surya(image) -> str:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--in", dest="inp", required=True, help="PDF-fil")
-    ap.add_argument("--out-dir", required=True, help="output-katalog")
-    ap.add_argument("--engine", default="tesseract",
-                    choices=["tesseract", "vision", "surya"])
-    ap.add_argument("--langs", default="swe", help="tesseract-språk")
-    ap.add_argument("--dpi", type=int, default=300)
-    ap.add_argument("--pages", help="kommaseparerade sidnummer (1-baserade); default alla")
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--in", dest="inp",
+                    default=os.environ.get("IN"),
+                    required=not os.environ.get("IN"),
+                    help="PDF-fil (env: IN)")
+    ap.add_argument("--out-dir",
+                    default=os.environ.get("OUT_DIR"),
+                    required=not os.environ.get("OUT_DIR"),
+                    help="output-katalog (env: OUT_DIR)")
+    ap.add_argument("--engine",
+                    default=os.environ.get("ENGINE", "tesseract"),
+                    choices=["tesseract", "vision", "surya"],
+                    help="OCR-motor (default: tesseract)")
+    ap.add_argument("--langs",
+                    default=os.environ.get("LANGS", "swe"),
+                    help="tesseract-språk (default: swe)")
+    ap.add_argument("--dpi", type=int,
+                    default=int(os.environ.get("DPI", "300")),
+                    help="render-DPI (default: 300)")
+    ap.add_argument("--pages",
+                    default=os.environ.get("PAGES"),
+                    help="kommaseparerade sidnummer (1-baserade); default alla")
     args = ap.parse_args()
 
     pdf = Path(args.inp)
