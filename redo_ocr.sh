@@ -6,7 +6,7 @@
 # tar bort det dåliga textlagret och OCR:ar om från originalbilden.
 #
 # Förkrav:
-#   python quality.py            # generera/uppdatera quality.csv
+#   ./quality.sh                 # generera/uppdatera quality.csv
 
 set -u
 
@@ -73,7 +73,7 @@ PAGES_JSONL=${PAGES_JSONL:-$ROOT/quality_pages.jsonl}
 PAGES_OUT=${PAGES_OUT:-$ROOT/text_pages}
 
 if [ "$MODE" = "pages" ]; then
-  [ -f "$PAGES_JSONL" ] || { echo "Saknar $PAGES_JSONL — kör 'python quality.py --per-page' först."; exit 1; }
+  [ -f "$PAGES_JSONL" ] || { echo "Saknar $PAGES_JSONL — kör './quality.sh --per-page' först."; exit 1; }
 else
   [ -f "$CSV" ] || { echo "Saknar $CSV — kör quality.py först."; exit 1; }
   command -v ocrmypdf >/dev/null || { echo "saknar ocrmypdf"; exit 1; }
@@ -192,4 +192,4 @@ printf '%s\0' "${TARGETS[@]}" \
   | xargs -0 -I {} -P "$JOBS" bash -c 'redo_one "$@"' _ {}
 
 echo
-echo "Klart. Kör 'python quality.py' igen för att se förbättringen."
+echo "Klart. Kör './quality.sh' igen för att se förbättringen."
