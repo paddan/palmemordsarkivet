@@ -45,4 +45,4 @@ cd "$ROOT"
 # shellcheck disable=SC1091
 source .venv/bin/activate
 
-exec python build_user_words.py ${extra[@]+"${extra[@]}"}
+exec python src/build_user_words.py ${extra[@]+"${extra[@]}"}

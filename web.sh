@@ -43,4 +43,4 @@ if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && [ -z "${ANTHROPIC_API_KEY:-}" ]; the
   fi
 fi
 
-exec streamlit run webui.py ${extra[@]+"${extra[@]}"}
+exec streamlit run src/webui.py ${extra[@]+"${extra[@]}"}

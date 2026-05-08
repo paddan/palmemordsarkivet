@@ -119,7 +119,7 @@ for txt_name, pages in bad.items():
         continue
     pages_arg = ",".join(str(p) for p in sorted(set(pages)))
     cmd = [
-        sys.executable, str(root / "ocr_pages.py"),
+        sys.executable, str(root / "src" / "ocr_pages.py"),
         "--in", str(pdf),
         "--out-dir", str(out_dir),
         "--engine", "surya",

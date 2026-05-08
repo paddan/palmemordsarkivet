@@ -38,7 +38,7 @@ from claude_agent_sdk import (  # noqa: E402
     query,
 )
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[1]
 
 st.set_page_config(page_title="Palmemordsarkivet", layout="wide")
 st.title("Palmemordsarkivet")
@@ -47,7 +47,7 @@ st.caption("Fråga arkivet — sökning + Claude Opus 4.7 med källhänvisningar
 
 @st.cache_resource(show_spinner="Laddar embedding-modell…")
 def load():
-    db = lancedb.connect("rag/lancedb")
+    db = lancedb.connect(str(ROOT / "rag" / "lancedb"))
     table = db.open_table(TABLE)
     embed = SentenceTransformer(EMBED_MODEL)
     return table, embed

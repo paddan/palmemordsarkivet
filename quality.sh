@@ -49,4 +49,4 @@ cd "$ROOT"
 # shellcheck disable=SC1091
 source .venv/bin/activate
 
-exec python quality.py ${extra[@]+"${extra[@]}"}
+exec python src/quality.py ${extra[@]+"${extra[@]}"}

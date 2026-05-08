@@ -43,4 +43,12 @@ py-modules = [
     "ocr_vision",
     "build_user_words",
     "errors_log",
+    "webui",
 ]
+
+[tool.setuptools.package-dir]
+"" = "src"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["rag*"]

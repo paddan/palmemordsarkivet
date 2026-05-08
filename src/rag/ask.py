@@ -31,7 +31,7 @@ from claude_agent_sdk import (
 )
 from sentence_transformers import SentenceTransformer
 
-DB_DIR = Path(__file__).resolve().parent / "lancedb"
+DB_DIR = Path(__file__).resolve().parents[2] / "rag" / "lancedb"
 TABLE = "chunks"
 EMBED_MODEL = "intfloat/multilingual-e5-large"
 RERANK_MODEL = "BAAI/bge-reranker-v2-m3"

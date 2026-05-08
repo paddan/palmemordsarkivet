@@ -5,10 +5,10 @@
 # Användning:
 #   ./ask.sh "Vem var Stig Engström?"
 #   ./ask.sh --no-rerank "snabbare men sämre"
-#   ./ask.sh --help                              # visar denna och rag/ask.py:s --help
+#   ./ask.sh --help                              # visar denna och src/rag/ask.py:s --help
 #   ./ask.sh                                     # interaktiv repl
 #
-# Alla okända flaggor skickas vidare till rag/ask.py.
+# Alla okända flaggor skickas vidare till src/rag/ask.py.
 
 set -eu
 
@@ -18,9 +18,9 @@ Användning: $(basename "$0") [flaggor] [fråga ...]
 
   --root DIR     projektrot ($PWD om ej satt via ROOT)
   --no-rerank    stäng av cross-encoder-omrankning (på som default)
-  -h, --help     visa denna hjälp; för rag/ask.py-flaggor: ./ask.sh -- --help
+  -h, --help     visa denna hjälp; för src/rag/ask.py-flaggor: ./ask.sh -- --help
 
-Övriga flaggor (t.ex. --top-k, --top-n, --hybrid) skickas vidare till rag/ask.py.
+Övriga flaggor (t.ex. --top-k, --top-n, --hybrid) skickas vidare till src/rag/ask.py.
 EOF
 }
 
@@ -68,4 +68,4 @@ if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && [ -z "${ANTHROPIC_API_KEY:-}" ]; the
   fi
 fi
 
-exec python rag/ask.py $rerank_flag ${args[@]+"${args[@]}"}
+exec python src/rag/ask.py $rerank_flag ${args[@]+"${args[@]}"}
