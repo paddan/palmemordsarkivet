@@ -69,19 +69,41 @@ Förbered tessdata (engångsåtgärd — laddar ner swe_best, mer noggrann model
 ./setup_tessdata.sh
 ```
 
-Sen:
+#### Rekommenderad workflow: `auto_ocr.sh`
+
+Kör hela OCR-pipelinen i ett enda kommando — Tesseract på allt, kvalitets-
+bedömning, Surya på sidor som inte når tröskeln, och slutbedömning:
 
 ```bash
-./ocr.sh
+./auto_ocr.sh                    # full pipeline (rekommenderas)
+./auto_ocr.sh --threshold 60     # mer aggressiv om-OCR
+./auto_ocr.sh --skip-redo        # bara Tesseract + bedömning, ingen Surya
+./auto_ocr.sh --help
 ```
 
-- Snabbkoll först: om PDF:en redan har textlager extraheras det direkt utan OCR.
-- Annars `ocrmypdf -l swe+eng --rotate-pages --deskew --clean` med PSM 6
-  (förhörsprotokoll-vänlig page-segmentation), `swe_best.traineddata` från
-  `tessdata/`, och `tessdata/swe.user-words` (Palme-specifika namn, Q/A-markörer,
-  ärendenummer-prefix).
-- Parallelliserar över filer med `xargs -P` (default 4 jobb).
-- Idempotent.
+Surya-steget hoppas automatiskt över om paketet inte är installerat. Skriptet
+är idempotent — kan avbrytas och köras om utan dubbelarbete.
+
+#### Manuell kontroll
+
+Vill du köra stegen individuellt (för felsökning eller delkörningar) anropar
+du delarna direkt:
+
+```bash
+./ocr.sh                         # Tesseract på alla nya filer
+./quality.sh --per-page          # bygg quality.csv + quality_pages.jsonl
+./redo_ocr.sh --mode pages       # Surya på sidor under tröskeln
+./quality.sh                     # uppdaterad bedömning
+```
+
+`ocr.sh`:s interna logik:
+- Snabbkoll först: om PDF:en redan har användbart textlager extraheras det
+  direkt utan OCR (kvalitetscheck: alnum-andel, andel korta ord, siffer-i-ord).
+- Skräpigt textlager → `ocrmypdf --redo-ocr` (tar bort det och OCR:ar om).
+- Inget textlager → `ocrmypdf --skip-text --deskew --clean --rotate-pages` med
+  PSM 6, `swe_best.traineddata`, och `tessdata/swe.user-words` (Palme-specifika
+  namn, Q/A-markörer, ärendenummer-prefix).
+- Parallelliserar över filer med `xargs -P` (default 4 jobb). Idempotent.
 
 Tunables via flaggor (env-vars fungerar fortfarande som fallback):
 
@@ -91,10 +113,9 @@ Tunables via flaggor (env-vars fungerar fortfarande som fallback):
 JOBS=8 PER_FILE_JOBS=2 PSM=4 ./ocr.sh        # bakåtkompatibelt
 ```
 
-`ocr.sh` triggar automatiskt `--redo-ocr` på filer vars befintliga textlager
-inte klarar kvalitetschecken (alnum-andel, andel korta ord, siffer-i-ord).
-För riktad om-OCR mot specifika filer eller score-trösklar — använd
-[`./redo_ocr.sh`](redo_ocr.sh) (se nedan).
+`ocr.sh` byter aldrig OCR-engine på egen hand — för Surya/Vision på dåliga
+sidor använder du `auto_ocr.sh` ovan eller [`./redo_ocr.sh`](redo_ocr.sh)
+manuellt.
 
 Vid riktiga fel skrivs `[fel] <namn>` följt av indragen ocrmypdf-logg. Tesseracts
 varningar för blanka sidor (`Too few characters. Skipping this page` /
@@ -248,6 +269,7 @@ OAuth-token genereras med `claude setup-token` (engångsåtgärd).
 |---|---|
 | `download.sh` → `src/download.py` | Hämta PDF:er från Drive |
 | `setup_tessdata.sh` | Sätt upp projekt-lokal `tessdata/` med swe_best |
+| `auto_ocr.sh` | Full OCR-pipeline (Tesseract → kvalitet → Surya på dåliga sidor) |
 | `ocr.sh` | Tesseract-OCR + textextraktion |
 | `ocr_surya.sh` → `src/ocr_surya.py` | Surya-OCR till `.txt` (alternativ, högre kvalitet på svåra scans) |
 | `ocr_surya_pdf.sh` → `src/ocr_surya_pdf.py` | Surya-OCR + inbäddat osynligt textlager i sökbar PDF |
