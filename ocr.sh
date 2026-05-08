@@ -123,32 +123,24 @@ text_quality_ok() {
   #   alnum-andel >= 0.55
   #   andel 1-2-tecken-ord <= 0.30
   #   andel siffror-i-ord <= 0.10
-  awk '
-    BEGIN { chars=0; alnum=0; words=0; short=0; digit_in=0 }
-    {
-      n = length($0)
-      for (i=1; i<=n; i++) {
-        c = substr($0, i, 1)
-        chars++
-        if (c ~ /[A-Za-z0-9ÅÄÖåäö]/) alnum++
-      }
-      for (i=1; i<=NF; i++) {
-        w = $i
-        words++
-        wl = length(w)
-        if (wl <= 2) short++
-        if (w ~ /[0-9]/ && w ~ /[A-Za-zÅÄÖåäö]/) digit_in++
-      }
-    }
-    END {
-      if (chars == 0 || words == 0) { exit 1 }
-      ar = alnum / chars
-      sr = short / words
-      dr = digit_in / words
-      if (ar >= 0.55 && sr <= 0.30 && dr <= 0.10) exit 0
-      exit 1
-    }
-  '
+  # Implementerad i python för att tåla ogiltig UTF-8 (U+FFFD från pdftotext).
+  python3 -c '
+import re, sys
+t = sys.stdin.buffer.read().decode("utf-8", errors="replace")
+chars = len(t)
+if not chars:
+    sys.exit(1)
+alnum = sum(1 for c in t if c.isalnum())
+tokens = t.split()
+if not tokens:
+    sys.exit(1)
+short = sum(1 for w in tokens if len(w) <= 2)
+digit_in = sum(1 for w in tokens if re.search(r"\d", w) and re.search(r"[^\W\d_]", w))
+ar = alnum / chars
+sr = short / len(tokens)
+dr = digit_in / len(tokens)
+sys.exit(0 if (ar >= 0.55 and sr <= 0.30 and dr <= 0.10) else 1)
+'
 }
 export -f text_quality_ok
 
