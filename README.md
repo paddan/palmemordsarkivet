@@ -45,10 +45,9 @@ Surya 0.17 fungerar inte med transformers 5.x — pinnen är medvetet vald.
 
 ### 1. Ladda ner PDF-filerna
 
-`download.py` saknar shell-wrapper — kör direkt:
-
 ```bash
-.venv/bin/python src/download.py files
+./download.sh
+./download.sh --out files --help
 ```
 
 - Hämtar Google Sheet som CSV, plockar ut Drive-ID från "Länk till kopia".
@@ -59,7 +58,7 @@ Surya 0.17 fungerar inte med transformers 5.x — pinnen är medvetet vald.
 För hela arkivet (tar några timmar), kör i bakgrunden:
 
 ```bash
-nohup .venv/bin/python src/download.py files > log.txt 2>&1 &
+nohup ./download.sh > log.txt 2>&1 &
 ```
 
 ### 2. OCR till text
@@ -112,25 +111,25 @@ markant högre kvalitet — i stickprov på 50 svåra filer: medelpoäng 60 → 
 Hybrid-workflow:
 
 ```bash
-./ocr.sh                                                       # full Tesseract-omgång
-./quality.sh                                                   # bygg quality.csv
-.venv/bin/python src/ocr_surya.py --in files --out text_surya  # eller bara värsta filerna
+./ocr.sh                                            # full Tesseract-omgång
+./quality.sh                                        # bygg quality.csv
+./ocr_surya.sh --in files --out text_surya          # eller bara värsta filerna
 ```
 
 För att bara ta värsta filerna, symlinka över de PDF:er där `quality.csv`-poäng
-< 50 till en separat katalog och kör `src/ocr_surya.py` mot den.
+< 50 till en separat katalog och kör `./ocr_surya.sh` mot den.
 
-`src/ocr_surya.py` skriver bara `.txt`. För att få sökbara PDF:er med
+`ocr_surya.sh` skriver bara `.txt`. För att få sökbara PDF:er med
 Surya-textlager (motsvarande Tesseracts output i `ocr/`) finns
-`src/ocr_surya_pdf.py` som kör Surya och bäddar in osynligt textöverdrag i en
+`./ocr_surya_pdf.sh` som kör Surya och bäddar in osynligt textöverdrag i en
 kopia av PDF:en via PyMuPDF:
 
 ```bash
 .venv/bin/pip install pymupdf
-.venv/bin/python src/ocr_surya_pdf.py --in <indir> --out ocr --text-out text_surya
+./ocr_surya_pdf.sh --in <indir> --out ocr --text-out text_surya
 ```
 
-#### Per-sida OCR (`ocr_pages.py`)
+#### Per-sida OCR (`ocr_pages.sh`)
 
 För ännu finare granularitet — om bara enstaka sidor i en fil är dåliga.
 Renderar PDF:en sida för sida, OCR:ar varje sida individuellt och skriver
@@ -138,10 +137,10 @@ Renderar PDF:en sida för sida, OCR:ar varje sida individuellt och skriver
 till ``<stem>.txt`` med ``\f`` som sidbrytare.
 
 ```bash
-.venv/bin/python src/ocr_pages.py --in files/foo.pdf --out-dir text_pages --engine tesseract
-.venv/bin/python src/ocr_pages.py --in files/foo.pdf --out-dir text_pages --engine surya
-.venv/bin/python src/ocr_pages.py --in files/foo.pdf --out-dir text_pages --engine vision
-.venv/bin/python src/ocr_pages.py --in files/foo.pdf --out-dir text_pages --pages 3,7,12
+./ocr_pages.sh --in files/foo.pdf --out-dir text_pages --engine tesseract
+./ocr_pages.sh --in files/foo.pdf --out-dir text_pages --engine surya
+./ocr_pages.sh --in files/foo.pdf --out-dir text_pages --engine vision
+./ocr_pages.sh --in files/foo.pdf --out-dir text_pages --pages 3,7,12
 ```
 
 `--engine vision` kräver `ocrit` (macOS Vision Framework):
@@ -155,14 +154,14 @@ de sidor som ligger under tröskeln (med Surya som default). Alla skript har
 `--help` som listar tillgängliga flaggor; env-vars fungerar fortfarande som
 fallback.
 
-#### macOS Vision (`ocr_vision.py`)
+#### macOS Vision (`ocr_vision.sh`)
 
 Tunn wrapper kring `ocrit` för PDF eller bildkatalog:
 
 ```bash
 brew install insidegui/tap/ocrit
-.venv/bin/python src/ocr_vision.py --in files --out text_vision
-.venv/bin/python src/ocr_vision.py --in files/foo.pdf --out text_vision
+./ocr_vision.sh --in files --out text_vision
+./ocr_vision.sh --in files/foo.pdf --out text_vision
 ```
 
 #### Auto-byggda user-words (`build_user_words.sh`)
@@ -247,13 +246,13 @@ OAuth-token genereras med `claude setup-token` (engångsåtgärd).
 
 | Fil | Vad |
 |---|---|
-| `src/download.py` | Hämta PDF:er från Drive |
+| `download.sh` → `src/download.py` | Hämta PDF:er från Drive |
 | `setup_tessdata.sh` | Sätt upp projekt-lokal `tessdata/` med swe_best |
 | `ocr.sh` | Tesseract-OCR + textextraktion |
-| `src/ocr_surya.py` | Surya-OCR till `.txt` (alternativ, högre kvalitet på svåra scans) |
-| `src/ocr_surya_pdf.py` | Surya-OCR + inbäddat osynligt textlager i sökbar PDF |
-| `src/ocr_pages.py` | Per-sida OCR (Tesseract/Vision/Surya) med sidor i `\f`-separerad txt |
-| `src/ocr_vision.py` | macOS Vision Framework via `ocrit` (PDF eller bilder) |
+| `ocr_surya.sh` → `src/ocr_surya.py` | Surya-OCR till `.txt` (alternativ, högre kvalitet på svåra scans) |
+| `ocr_surya_pdf.sh` → `src/ocr_surya_pdf.py` | Surya-OCR + inbäddat osynligt textlager i sökbar PDF |
+| `ocr_pages.sh` → `src/ocr_pages.py` | Per-sida OCR (Tesseract/Vision/Surya) med sidor i `\f`-separerad txt |
+| `ocr_vision.sh` → `src/ocr_vision.py` | macOS Vision Framework via `ocrit` (PDF eller bilder) |
 | `build_user_words.sh` → `src/build_user_words.py` | Bygg `tessdata/swe.user-words.auto` från `text/*.txt` |
 | `quality.sh` → `src/quality.py` | Heuristisk kvalitetsbedömning av `text/*.txt` (`--per-page` finns) |
 | `redo_ocr.sh` | Kör om OCR med `--redo-ocr` på filer med dåligt textlager |
@@ -316,7 +315,7 @@ bash via `>> "$ROOT/errors.log"`. Append-only, idempotent.
 ## Datafiler (gitignorerade)
 
 `files/`, `ocr/`, `text/`, `text_surya/`, `rag/lancedb/`, `tessdata/*.traineddata`
-— åter-skapas helt av skripten (`text_surya/` av `src/ocr_surya.py`,
+— åter-skapas helt av skripten (`text_surya/` av `ocr_surya.sh`,
 `tessdata/swe.traineddata` av `setup_tessdata.sh`).
 
 ## Starta om
