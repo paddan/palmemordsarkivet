@@ -142,10 +142,14 @@ def main() -> int:
         db.drop_table(TABLE)
     if TABLE in db.list_tables().tables:
         table = db.open_table(TABLE)
-        # Läs bara source-kolumnen — laddar inte vektorer i minnet
-        already = set(
-            table.to_lance().to_table(columns=["source"]).column("source").to_pylist()
-        )
+        try:
+            # Effektivt: lance-scanner laddar bara source utan att läsa vektorer
+            already = set(
+                table.to_lance().to_table(columns=["source"]).column("source").to_pylist()
+            )
+        except ImportError:
+            # lance inte installerat (vanligt på Python 3.14): full scan via pandas
+            already = set(table.to_pandas()["source"].tolist())
     else:
         table = db.create_table(TABLE, schema=schema)
         already = set()
