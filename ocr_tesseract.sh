@@ -228,7 +228,9 @@ process_one() {
   [ -s "$out_txt" ] && { echo "[hoppar] $base"; return 0; }
 
   local raw_text
-  raw_text=$(pdftotext -q -layout "$f" - 2>/dev/null || true)
+  # Utan -layout: roterade PDF:er (Page rot: 90/270) ger annars enormt whitespace
+  # som sänker alnum-ration och ger falska "text-skräp"-klassningar.
+  raw_text=$(pdftotext -q "$f" - 2>/dev/null || true)
   existing=$(printf '%s' "$raw_text" | tr -d '[:space:]' | wc -c | tr -d ' ')
   has_text=0
   [ "$existing" -gt "$MIN_TEXT_CHARS" ] && has_text=1
