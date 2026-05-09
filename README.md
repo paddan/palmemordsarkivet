@@ -1,5 +1,7 @@
 # palmemordsarkivet
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 Skript för att ladda ner, OCR-tolka och söka i materialet på
 [palmemordsarkivet.se](https://palmemordsarkivet.se) — ett publikt Google Sheet
 med drygt 3 700 PDF-filer (~33 000 sidor) som länkas via "Länk till kopia".
