@@ -17,7 +17,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --root)    ROOT="$2"; shift 2 ;;
     -h|--help)
-      echo "Användning: $(basename "$0") [--dry-run] [--da-only] [--rebuild] [--out DIR]"
+      echo "Användning: $(basename "$0") [--dry-run] [--id-only] [--rebuild] [--out DIR]"
       echo "Kör ./download_wpu.sh -- --help för fullständig hjälp."
       exit 0 ;;
     --) shift; extra+=("$@"); break ;;
