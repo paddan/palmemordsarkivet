@@ -8,6 +8,7 @@ version = "0.1.0"
 description = "Skript för att ladda ner, OCR-tolka och söka i palmemordsarkivet.se"
 requires-python = ">=3.11"
 readme = "README.md"
+license = {text = "MIT"}
 dependencies = [
     "requests",
     "gdown",
