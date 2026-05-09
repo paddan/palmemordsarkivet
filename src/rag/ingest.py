@@ -57,6 +57,9 @@ def chunk_text(text: str, size: int, overlap: int) -> list[tuple[int, int, str]]
     OBS: chunkar INOM en sida; ``\f`` får aldrig förekomma i text som skickas hit.
     Korta sidor blir egna (en) chunk.
     """
+    # Kollapsa multipla horisontella blanksteg (pdftotext -layout-artefakter)
+    # men bevara radbrytningar (används vid chunk-gränsval).
+    text = re.sub(r"[^\S\n]+", " ", text)
     text = text.strip()
     if not text:
         return []
