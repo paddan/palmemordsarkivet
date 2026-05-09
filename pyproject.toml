@@ -11,6 +11,8 @@ readme = "README.md"
 dependencies = [
     "requests",
     "gdown",
+    "tenacity",
+    "langdetect",
     "sentence-transformers<5",
     "lancedb",
     "pyarrow",
@@ -27,11 +29,27 @@ surya = [
 ]
 dev = [
     "pytest",
+    "mypy",
+    "ruff",
 ]
 webui = [
     "streamlit",
     "openai",
 ]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_ignores = true
+ignore_missing_imports = true
 
 [tool.setuptools]
 py-modules = [

@@ -31,6 +31,8 @@ from claude_agent_sdk import (
 )
 from sentence_transformers import SentenceTransformer
 
+MCP_SERVER = Path(__file__).resolve().parent / "mcp_server.py"
+
 DB_DIR = Path(__file__).resolve().parents[2] / "rag" / "lancedb"
 TABLE = "chunks"
 EMBED_MODEL = "intfloat/multilingual-e5-large"
@@ -45,6 +47,16 @@ Regler:
 - Om svaret inte framgår av utdragen, säg "framgår inte av materialet" — gissa aldrig.
 - Citera ordagrant när det är klargörande, men håll citaten korta.
 - OCR-fel kan förekomma. Säg till om en passage verkar vara skadad eller obegriplig."""
+
+MCP_SYSTEM_PROMPT = """Du är en utredningsassistent med tillgång till Palmemordsarkivets ~33 000 sidor via verktyg.
+
+Regler:
+- Svara på svenska.
+- Använd search_archive för att hitta relevant material. Sök gärna flera gånger med olika termer.
+- Använd get_page för att läsa mer kontext kring ett intressant stycke.
+- Stötta varje påstående med [Nr X, sida Y].
+- Om du inte hittar svar efter rimliga sökningar, säg det — gissa aldrig.
+- OCR-fel kan förekomma i materialet."""
 
 
 SELECT_COLS = ["text", "source", "page", "nr", "titel", "anmarkning"]
@@ -65,7 +77,8 @@ def search(table, model, q: str, top_k: int) -> list[dict]:
 
 
 def _hit_key(h: dict) -> tuple:
-    return (h.get("source", ""), int(h.get("page") or 0), h.get("text", "")[:64])
+    # source + page + chunk_idx är unikt per chunk — undviker kollisioner på korta texter
+    return (h.get("source", ""), int(h.get("page") or 0), int(h.get("chunk_idx") or -1))
 
 
 def search_hybrid(table, model, q: str, top_k: int) -> list[dict]:
@@ -164,6 +177,38 @@ async def run_query(table, embed_model, q: str, top_k: int, top_n: int,
     await ask_claude(q, format_context(hits))
 
 
+async def run_mcp(q: str, db_dir: Path, model_name: str) -> None:
+    """Kör frågan i MCP-läge — Claude söker själv med search_archive/get_page."""
+    python = sys.executable
+    env = {
+        "DB_DIR": str(db_dir),
+        "EMBED_MODEL": model_name,
+        **{k: v for k, v in os.environ.items()
+           if k in ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY",
+                    "PATH", "HOME", "VIRTUAL_ENV")},
+    }
+    options = ClaudeAgentOptions(
+        system_prompt=MCP_SYSTEM_PROMPT,
+        model=CLAUDE_MODEL,
+        mcp_servers={"arkiv": {"command": python, "args": [str(MCP_SERVER)], "env": env}},
+        allowed_tools=["mcp__arkiv__search_archive", "mcp__arkiv__get_page"],
+        thinking=ThinkingConfigAdaptive(type="adaptive"),
+        effort="high",
+        max_turns=10,
+        setting_sources=[],
+    )
+    print("\n— Utredningsläge (MCP) — Claude söker autonomt —\n")
+    async for message in query(prompt=q, options=options):
+        if isinstance(message, AssistantMessage):
+            for block in message.content:
+                if isinstance(block, TextBlock):
+                    print(block.text, end="", flush=True)
+        elif isinstance(message, ResultMessage):
+            print()
+            if getattr(message, "is_error", False):
+                print(f"\n(fel: {message})", file=sys.stderr)
+
+
 async def main_async(args) -> int:
     if not (os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") or os.environ.get("ANTHROPIC_API_KEY")):
         print(
@@ -175,6 +220,21 @@ async def main_async(args) -> int:
     if not db_dir.exists():
         print(f"Saknar {db_dir}/ — kör ingest.py först.", file=sys.stderr)
         return 1
+
+    if args.mcp:
+        if args.query:
+            await run_mcp(" ".join(args.query), db_dir, args.model)
+            return 0
+        print("Utredningsläge (MCP) — tom rad eller Ctrl-D avslutar.\n")
+        try:
+            while True:
+                q = input("frågan> ").strip()
+                if not q:
+                    break
+                await run_mcp(q, db_dir, args.model)
+        except (EOFError, KeyboardInterrupt):
+            print()
+        return 0
 
     db = lancedb.connect(str(db_dir))
     if TABLE not in db.list_tables().tables:
@@ -218,6 +278,9 @@ def main() -> int:
     ap.add_argument("--hybrid", action="store_true",
                     default=os.environ.get("HYBRID", "").lower() in ("1", "true", "yes"),
                     help="hybridsök: vector + BM25 sammanslaget med RRF")
+    ap.add_argument("--mcp", action="store_true",
+                    default=os.environ.get("MCP", "").lower() in ("1", "true", "yes"),
+                    help="utredningsläge: Claude söker autonomt via MCP-verktyg (långsammare, bättre på komplexa frågor)")
     ap.add_argument("--db-dir",
                     default=os.environ.get("DB_DIR", str(DB_DIR)),
                     help=f"LanceDB-katalog (default: {DB_DIR})")

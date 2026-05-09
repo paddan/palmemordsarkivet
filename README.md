@@ -8,41 +8,53 @@ Efter nedladdning, ocr-scanning så finns det ett web-gränssnitt som man kan st
 
 ![Web-gränssnitt](web-ui.png)
 
+## Kom igång
+
+```bash
+./install.sh           # installera alla beroenden (brew, Python-paket, tessdata)
+```
+
+Sätt sedan en API-nyckel:
+
+```bash
+export CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...   # Pro/Max-abonnemang (rekommenderas)
+# eller:
+export ANTHROPIC_API_KEY=sk-ant-...               # API-credits
+```
+
+Kör sedan pipeline:
+
+```bash
+./download.sh          # 1. Ladda ner alla PDF:er (~3 700 st, tar några timmar)
+./ocr.sh               # 2. OCR → text (Tesseract + Surya på svåra sidor, tar flera timmar)
+./ingest.sh            # 3. Bygg vektorindex i LanceDB
+./web.sh               # 4. Starta webgränssnittet och ställ frågor
+```
+
+Varje steg är idempotent — avbryt och fortsätt när som helst.
+
 ## Krav
 
 - macOS (testat på Darwin 25), Python 3.11+
-- Homebrew för OCR-verktygen och `claude` CLI
-- Claude Pro/Max-abonnemang (OAuth-token) eller Anthropic API-nyckel för `src/rag/ask.py`
+- [Homebrew](https://brew.sh)
+- Claude Pro/Max-abonnemang (OAuth-token) eller Anthropic API-nyckel
 
-## Installation
+## Vad install.sh gör
 
-```bash
-git clone git@github.com:paddan/palmemordsarkivet.git
-cd palmemordsarkivet
+`install.sh` sköter allt via Homebrew och pip:
 
-python3 -m venv .venv
-.venv/bin/pip install --upgrade pip
-# Antingen via requirements (kompakt):
-.venv/bin/pip install gdown requests 'sentence-transformers<5' lancedb pyarrow claude-agent-sdk streamlit
-# Eller via pyproject (gör det enklare att lägga till extras):
-.venv/bin/pip install -e .            # core
-.venv/bin/pip install -e .[webui]     # + Streamlit/OpenAI
-.venv/bin/pip install -e .[surya]     # + Surya-OCR
-.venv/bin/pip install -e .[dev]       # + pytest
+- `ocrmypdf`, `tesseract-lang`, `poppler`, `unpaper`, `hunspell` via brew
+- sv_SE-ordlista länkad till `~/Library/Spelling/` (för qualitets-scoring)
+- `.venv/` med `pip install -e .[webui]`
+- Laddar ner `swe_best.traineddata` (~12 MB) via `setup_tessdata.sh`
 
-brew install ocrmypdf tesseract-lang poppler unpaper claude-code
-```
-
-Valfritt för Surya-OCR (alternativ till Tesseract, högre kvalitet på degraderade scans):
+Surya-OCR ingår som standard. Hoppa över det (snabbare install) med:
 
 ```bash
-.venv/bin/pip install surya-ocr 'transformers<5'
+./install.sh --no-surya
 ```
 
-Surya 0.17 fungerar inte med transformers 5.x — pinnen är medvetet vald.
-`sentence-transformers<5` är också medvetet pinnat eftersom 5.x försöker
-använda AutoProcessor för cross-encoders, vilket inte stöder
-`BAAI/bge-reranker-v2-m3` som används i `--rerank`-flaggan.
+> **Beroendepinnar:** `sentence-transformers<5` och `transformers<5` är medvetet pinnade — 5.x-versionerna bryter cross-encoder-laddning och Surya-integrationen.
 
 ## Användning
 
@@ -65,12 +77,6 @@ nohup ./download.sh > log.txt 2>&1 &
 ```
 
 ### 2. OCR till text
-
-Förbered tessdata (engångsåtgärd — laddar ner swe_best, mer noggrann modell):
-
-```bash
-./setup_tessdata.sh
-```
 
 #### Rekommenderad workflow: `ocr.sh`
 

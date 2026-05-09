@@ -31,6 +31,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from functools import lru_cache
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -85,21 +86,16 @@ def ocr_vision(png_path: Path) -> str:
     return ""
 
 
-class _SuryaState:
-    rec = None
-    det = None
-
-
+@lru_cache(maxsize=1)
 def _surya_load():
-    if _SuryaState.rec is not None:
-        return _SuryaState.rec, _SuryaState.det
+    """Laddar Surya-modellerna en gång per process (cachas via lru_cache)."""
     from surya.detection import DetectionPredictor
     from surya.foundation import FoundationPredictor
     from surya.recognition import RecognitionPredictor
     foundation = FoundationPredictor()
-    _SuryaState.rec = RecognitionPredictor(foundation)
-    _SuryaState.det = DetectionPredictor()
-    return _SuryaState.rec, _SuryaState.det
+    rec = RecognitionPredictor(foundation)
+    det = DetectionPredictor()
+    return rec, det
 
 
 def ocr_surya(image) -> str:

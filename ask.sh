@@ -18,6 +18,7 @@ Användning: $(basename "$0") [flaggor] [fråga ...]
 
   --root DIR     projektrot ($PWD om ej satt via ROOT)
   --no-rerank    stäng av cross-encoder-omrankning (på som default)
+  --mcp          utredningsläge: Claude söker autonomt (långsammare, bättre på komplexa frågor)
   -h, --help     visa denna hjälp; för src/rag/ask.py-flaggor: ./ask.sh -- --help
 
 Övriga flaggor (t.ex. --top-k, --top-n, --hybrid) skickas vidare till src/rag/ask.py.

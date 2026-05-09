@@ -10,6 +10,7 @@ Kör:
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import re
 import sys
@@ -141,7 +142,10 @@ def main() -> int:
         db.drop_table(TABLE)
     if TABLE in db.list_tables().tables:
         table = db.open_table(TABLE)
-        already = {r["source"] for r in table.search().select(["source"]).limit(10**9).to_list()}
+        # Läs bara source-kolumnen — laddar inte vektorer i minnet
+        already = set(
+            table.to_lance().to_table(columns=["source"]).column("source").to_pylist()
+        )
     else:
         table = db.create_table(TABLE, schema=schema)
         already = set()
@@ -196,6 +200,11 @@ def main() -> int:
             convert_to_numpy=True,
             normalize_embeddings=True,
         )
+        for idx, v in enumerate(embeddings):
+            if not all(math.isfinite(x) for x in v):
+                raise ValueError(f"{f.name} chunk {idx}: embedding innehåller NaN/Inf")
+            if not any(v):
+                raise ValueError(f"{f.name} chunk {idx}: embedding är all-nollor")
         for r, v in zip(rows, embeddings):
             r["vector"] = v.tolist()
 
@@ -213,10 +222,14 @@ def main() -> int:
     # Bygg/uppdatera FTS-index (BM25). Kräver lancedb med tantivy/native FTS.
     try:
         table.create_fts_index("text", replace=True)
-        print("FTS-index uppdaterat (BM25 på 'text').")
+        print("✓ FTS-index uppdaterat (BM25 på 'text') — hybridsök tillgängligt.")
     except Exception as e:  # noqa: BLE001
-        print(f"VARNING: kunde inte skapa FTS-index ({e}). "
-              f"Uppgradera lancedb om du vill ha hybridsök.", file=sys.stderr)
+        print(
+            f"⚠ FTS-index kunde inte skapas ({e}).\n"
+            f"  Hybridsök (--hybrid) fungerar inte förrän det fixas.\n"
+            f"  Prova: pip install --upgrade lancedb",
+            file=sys.stderr,
+        )
 
     print(f"\nKlart. Tabell '{TABLE}' har {table.count_rows()} chunks.")
 

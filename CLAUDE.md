@@ -1,0 +1,294 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Project Overview
+
+**palmemordsarkivet** is a Swedish language project that downloads, OCR-processes, and provides searchable access to ~3,700 PDF documents (~33,000 pages) from [palmemordsarkivet.se](https://palmemordsarkivet.se), a public Google Sheet archive related to the Palme murder investigation.
+
+The system combines multiple components:
+- PDF download and manifest tracking
+- Multi-stage OCR pipeline (Tesseract + optional Surya transformer-OCR)
+- OCR quality assessment with heuristics
+- Vector embedding and LanceDB indexing
+- RAG-based Q&A interface with Claude Opus 4.7 (via Claude Agent SDK)
+- Streamlit web UI with multiple AI backend support
+
+All components are Swedish-language facing; comments and docstrings are in Swedish.
+
+## Directory Structure
+
+```
+.
+├── src/                      # Core Python modules
+│   ├── download.py          # Google Drive PDF downloader with manifest tracking
+│   ├── quality.py           # OCR quality scoring (heuristics + optional hunspell)
+│   ├── ocr_surya.py        # Transformer-based OCR (Surya alternative to Tesseract)
+│   ├── ocr_pages.py        # Per-page OCR pipeline (Tesseract/Vision/Surya)
+│   ├── build_user_words.py  # Generate Tesseract user-words from OCR text
+│   ├── errors_log.py        # Centralized error logging (tab-separated)
+│   ├── webui.py            # Streamlit web interface
+│   └── rag/
+│       ├── ingest.py       # LanceDB vector index builder
+│       └── ask.py          # RAG query interface with Claude integration
+├── tests/                   # pytest test suite
+│   ├── test_quality.py      # Tests for score_text heuristics
+│   ├── test_chunk.py        # Tests for text chunking logic
+│   ├── test_download.py     # Tests for download utilities
+│   └── conftest.py          # pytest fixtures
+├── *.sh                     # Bash wrapper scripts for Python modules
+├── pyproject.toml          # Package definition with optional dependencies
+├── tessdata/               # Tesseract language data + config
+│   ├── swe.user-words      # Manual Palme-specific terms
+│   └── tesseract.config    # Tesseract settings (preserve_interword_spaces)
+└── README.md               # Detailed Swedish-language documentation
+```
+
+Data directories (gitignored, auto-generated):
+- `files/` — downloaded PDFs
+- `text/` — extracted OCR text
+- `text_surya/` — Surya-OCR output (optional)
+- `ocr/` — searchable PDFs with embedded text layers
+- `rag/lancedb/` — vector index
+- `test_files/`, `test_ocr/`, `test_txt/` — test artifacts
+
+## Build, Run, and Test Commands
+
+### Installation
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install --upgrade pip
+
+# Core dependencies
+.venv/bin/pip install -e .
+
+# Optional extras
+.venv/bin/pip install -e .[webui]     # Streamlit + OpenAI
+.venv/bin/pip install -e .[surya]     # Surya OCR (transformers<5, pymupdf)
+.venv/bin/pip install -e .[dev]       # pytest
+
+# System dependencies (macOS)
+brew install ocrmypdf tesseract-lang poppler unpaper claude-code
+brew install hunspell  # optional, for Swedish dictionary checks
+```
+
+Download Swedish Tesseract model and hunspell dictionary:
+```bash
+./setup_tessdata.sh
+# hunspell: place sv_SE.aff and sv_SE.dic in ~/Library/Spelling/
+```
+
+### Running Tests
+
+```bash
+# Run all tests
+.venv/bin/pytest tests/
+
+# Run specific test file
+.venv/bin/pytest tests/test_quality.py -v
+
+# Run single test
+.venv/bin/pytest tests/test_quality.py::test_perfect_text_high_score -v
+
+# Show test output + print statements
+.venv/bin/pytest tests/ -s
+```
+
+Test coverage:
+- `test_quality.py`: `score_text()` heuristic function
+- `test_chunk.py`: `chunk_text()` chunking logic
+- `test_download.py`: `extract_drive_id()`, `sniff_extension()` utilities
+- All tests use fixtures from `conftest.py` (includes optional pymupdf fixture)
+
+### Main Workflow Scripts
+
+All scripts are idempotent and can be re-run safely. They skip already-completed work.
+
+```bash
+# 1. Download PDFs from Google Sheet
+./download.sh [--out files] [--sheet-id ID]
+
+# 2. OCR pipeline (recommended: full pipeline)
+./ocr.sh                    # Tesseract → quality → Surya on bad pages
+./ocr.sh --skip-redo        # Just Tesseract + quality scoring
+./ocr.sh --redo --mode files  # Re-OCR entire files (--threshold 50)
+./ocr.sh --redo --mode pages  # Surya on specific pages (--threshold 50)
+
+# Manual OCR steps (if needed)
+./ocr_tesseract.sh [--jobs 8] [--per-file-jobs 2] [--psm 4]
+./quality.sh [--top 30]      # Build quality.csv, optionally show worst N
+./quality.sh --per-page      # Also write quality_pages.jsonl (per-page scores)
+
+# 3. Build/update vector index
+./ingest.sh [--rebuild]      # Index text/ → LanceDB
+./ingest.sh --limit 100      # Test with subset
+
+# 4. Query the archive
+./ask.sh "Din fråga här"     # Single query
+./ask.sh --no-rerank         # Skip cross-encoder (faster)
+./ask.sh --hybrid            # Vector + BM25 hybrid search
+./ask.sh                     # Interactive REPL
+
+# 5. Web UI
+./web.sh                     # Launch Streamlit in browser
+```
+
+Each `.sh` wrapper:
+- Activates `.venv`
+- Reads `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` from environment
+- Passes through unknown flags to underlying Python script
+- Supports `--help` for both wrapper and Python script
+
+### Environment Variables
+
+Required for querying:
+```bash
+# Pro/Max Claude subscription (preferred, counts against subscription hours)
+export CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...
+
+# OR use API credits
+export ANTHROPIC_API_KEY=sk-ant-...
+
+# Optional: other backends in web UI
+export OPENAI_API_KEY=...
+export DEEPSEEK_API_KEY=...
+```
+
+Common flags (most scripts):
+```bash
+ROOT=...              # Project root (auto-detected, rarely needed)
+TEXT_DIR=...          # OCR text directory (default: text/)
+FILES_DIR=...         # PDF directory (default: files/)
+DB_DIR=...            # LanceDB directory (default: rag/lancedb/)
+THRESHOLD=50          # Quality score threshold for re-OCR
+JOBS=4                # Parallel file jobs (ocr_tesseract.sh)
+PER_FILE_JOBS=2       # Threads per file (ocr_tesseract.sh)
+```
+
+## Architecture and Data Flow
+
+### The Four-Stage Pipeline
+
+1. **Download** (`download.py`):
+   - Fetches CSV from public Google Sheet (column: "Länk till kopia")
+   - Extracts Google Drive IDs via regex
+   - Downloads files with retries + exponential backoff
+   - Detects file type via magic bytes
+   - Tracks completion in `manifest.csv` (idempotency key)
+   - Detects and logs duplicates (SHA1)
+
+2. **OCR** (multi-step):
+   - **Tesseract** (`ocr_tesseract.sh`): Default workhorse
+     - Fast inline check: if PDF has usable text layer, extract with `pdftotext` (no OCR)
+     - Otherwise: `ocrmypdf --skip-text --deskew --clean --rotate-pages` with PSM 6
+     - Uses `tessdata/swe_best.traineddata` + user-words
+     - Parallel: 4 files × 2 threads/file (configurable)
+   - **Quality scoring** (`quality.py`): Heuristic-based assessment (0–100 score)
+     - Junk character ratio, short word ratio, vowel balance, OCR-specific artifacts
+     - Optional hunspell dictionary check for Swedish words
+     - Marks source as `text-layer` (original PDF had text) or `ocr` (Tesseract)
+     - Output: `quality.csv` (sortable by score)
+   - **Surya** (`ocr.sh --redo`, optional): Fallback for low-scoring pages
+     - Transformer-based (multilingual e5), slower but higher quality on degraded scans
+     - Runs only on pages/files below threshold (default 50)
+   - **Re-scoring**: Quality metrics updated after Surya pass
+
+3. **Ingest** (`ingest.py`):
+   - Reads `text/*.txt` files
+   - Chunks with 800-char size, 150-char overlap (breaks on line/space boundaries)
+   - Filters out low-quality chunks (<55% alphanumeric)
+   - Embeds using `intfloat/multilingual-e5-large` (1024-dim vectors)
+   - Stores in LanceDB with metadata: `nr`, `titel`, `sida`, `anmärkning`
+   - Creates FTS (full-text search / BM25) index on `text` column
+   - Writes `unusable.txt` if any file produces zero chunks
+
+4. **Query** (RAG interface):
+   - User submits question
+   - Search retrieves top-20 chunks (vector + optional BM25 hybrid)
+   - Rerank with cross-encoder (`BAAI/bge-reranker-v2-m3`) → top-6
+   - Format chunks with source metadata as context
+   - Stream Claude Opus 4.7 response with system prompt (Swedish, cite sources)
+   - Render citations as clickable PDF links (Streamlit only)
+
+### Key Design Patterns
+
+**Idempotency & Resumability**: All shell scripts track progress via output files (PDFs by filename, OCR by `.txt` existence, index by LanceDB table content). Interrupted runs continue from last successful file.
+
+**Quality-Driven Re-OCR**: Instead of blanket re-OCR, the system scores text, identifies problematic files/pages, and targets improvements. Threshold configurable.
+
+**Hybrid Search**: Vector search alone is good but imperfect. LanceDB FTS + RRF (reciprocal rank fusion, k=60) combines semantic and keyword matching.
+
+**Chunking Strategy**: Documents split at 800-char boundaries but prefer line breaks (preserves semantic continuity). Overlap (150 chars) prevents information loss at boundaries. Per-page `\f` separators enable page-level metadata tracking.
+
+**Error Logging**: All scripts append to `errors.log` (ISO8601, tab-sep: timestamp, component, item, message) for audit trails and debugging.
+
+## Core Modules Reference
+
+### `download.py`
+
+Key functions:
+- `extract_drive_id(url: str)` → file_id or None (regex on Drive URLs)
+- `sniff_extension(path: Path)` → extension string (magic bytes + filetype library)
+- `build_filename(values: dict)` → sanitized filename (removes special chars)
+- `drive_download(file_id, dest, session)` → SHA1 hex (handles virus-scan confirmation)
+
+### `quality.py`
+
+- `score_text(text: str, use_hunspell: bool) → dict`: Returns 0–100 score + detailed metrics (junk ratio, short words, vowel balance, etc.)
+- `original_had_text(stem: str) → bool`: Checks if original PDF has usable text layer (uses `pdftotext` probe)
+- `hunspell_pct(words: list) → float`: Percentage of words hunspell accepts as Swedish
+
+Scoring formula: 100 - penalties for junk, short words, long words, digit-mixing, vowel imbalance, non-Swedish words.
+
+### `src/rag/ingest.py`
+
+- `chunk_text(text: str, size: int, overlap: int) → list[tuple]`: Smart chunking (prefers line breaks)
+- `parse_filename(stem: str) → dict`: Extracts metadata from filename pattern
+- `is_useful(chunk: str) → bool`: Filters chunks with <55% alphanumeric
+
+Schema: vector (1024 dims), text, source, page, chunk_idx, plus metadata fields (nr, titel, etc.).
+
+### `src/rag/ask.py`
+
+- `search(table, model, q, top_k) → list[dict]`: Vector search
+- `search_hybrid(table, model, q, top_k) → list[dict]`: Vector + FTS with RRF
+- `rerank(q, hits, top_n) → list[dict]`: Cross-encoder reranking
+- `format_context(hits) → str`: Formats chunks for Claude prompt
+
+System prompt (Swedish): Instructions to answer on archive material, cite with [Nr X, sida Y], admit when material is insufficient.
+
+### `src/webui.py`
+
+Streamlit app with:
+- Multiple AI backend selector (Claude via Agent SDK, OpenAI, DeepSeek, custom OpenAI-compatible)
+- Reranking toggle + top-K/top-N sliders
+- Citation links: click to open original PDF locally (base64-encoded path in query param)
+- Hidden iframe prevents main page reload when opening PDFs
+
+## Testing
+
+Run tests with pytest. All tests located in `tests/` and assume `src/` is in `sys.path` (set up by `conftest.py`).
+
+Notable: The `tiny_pdf` fixture creates a minimal PDF with pymupdf; skipped gracefully if unavailable.
+
+## Common Gotchas
+
+1. **Dependency Versions**: `sentence-transformers<5` and `transformers<5` are intentionally pinned. Version 5.x breaks cross-encoder loading and AutoProcessor usage.
+
+2. **Tesseract User-Words**: The `swe.user-words` file contains Palme-specific terminology (Q/A markers, case numbers). Auto-generated words go to `swe.user-words.auto`.
+
+3. **Quality Scoring**: A "text-layer" source doesn't guarantee quality—some PDFs have old OCR junk embedded. Sort by score, not by source.
+
+4. **Surya Performance**: Much slower than Tesseract (~30–100 s/page vs ~1 s/page) but higher quality on degraded scans. Only runs on below-threshold pages.
+
+5. **Database Indexing**: FTS requires modern lancedb with tantivy support. If missing, vector-only search is used (hybrid falls back gracefully).
+
+6. **OAuth vs API Key**: `CLAUDE_CODE_OAUTH_TOKEN` counts against Pro/Max subscription hours; `ANTHROPIC_API_KEY` uses API credits. Choose based on your plan.
+
+## Performance Tuning
+
+- **OCR Parallelism**: `./ocr_tesseract.sh --jobs 8 --per-file-jobs 2` for faster multi-core systems
+- **Chunking**: Adjust `--chunk-chars` and `--chunk-overlap` in `ingest.sh` (larger chunks = fewer total, faster embedding but less granular search)
+- **Search Top-K**: Increase if you want more reranking candidates; `--top-n` controls final context size sent to Claude
+- **Quality Threshold**: Lower `--threshold` to re-OCR more aggressively; higher to skip more files

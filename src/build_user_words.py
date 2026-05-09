@@ -6,12 +6,14 @@ hunspell sv_SE om tillgängligt; annars kräver freq >= 30. Slår ihop med
 befintliga `tessdata/swe.user-words` (om finns), dedupar, skriver
 `swe.user-words.auto`.
 
-Idempotent.
+Idempotent. Cachar ordfrekvenser per fil i `tessdata/user_words_state.json`
+så att bara nya/ändrade filer läses om vid inkrementella körningar.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import shutil
@@ -33,6 +35,7 @@ TEXT_DIR = ROOT / "text"
 TESSDATA = ROOT / "tessdata"
 USER_WORDS = TESSDATA / "swe.user-words"
 OUT = TESSDATA / "swe.user-words.auto"
+STATE_FILE = TESSDATA / "user_words_state.json"
 
 ALPHA_WORD_RE = re.compile(r"[A-Za-zÅÄÖåäö]{4,}")
 MIN_FREQ_HUNSPELL = 10
@@ -68,6 +71,26 @@ def hunspell_known(words: list[str]) -> set[str]:
     return {w for w in words if w not in bad}
 
 
+def _load_state(path: Path) -> dict:
+    """Ladda inkrementell state: {mtimes: {filename: mtime}, counts: {word: n}}."""
+    if not path.exists():
+        return {"mtimes": {}, "counts": {}}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(data.get("mtimes"), dict) and isinstance(data.get("counts"), dict):
+            return data
+    except Exception:
+        pass
+    return {"mtimes": {}, "counts": {}}
+
+
+def _save_state(path: Path, state: dict) -> None:
+    try:
+        path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+    except OSError as e:
+        log_error("build_user_words", "state_save", str(e))
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -84,6 +107,8 @@ def main() -> int:
                     type=int,
                     default=int(os.environ.get("MIN_FREQ", "0")),
                     help="minsta frekvens; 0 = auto (10 med hunspell, annars 30)")
+    ap.add_argument("--rebuild", action="store_true",
+                    help="ignorera cache och läs om alla filer")
     args = ap.parse_args()
 
     text_dir = Path(args.text_dir)
@@ -95,9 +120,36 @@ def main() -> int:
         print(f"Saknar {text_dir}/", file=sys.stderr)
         return 1
 
-    counter: Counter[str] = Counter()
+    state = {"mtimes": {}, "counts": {}} if args.rebuild else _load_state(STATE_FILE)
+    cached_mtimes: dict[str, float] = state["mtimes"]
+    cached_counts: dict[str, int] = state["counts"]
+
+    counter: Counter[str] = Counter(cached_counts)
     n_files = 0
-    for f in sorted(text_dir.glob("*.txt")):
+    n_cached = 0
+    n_updated = 0
+
+    all_files = sorted(text_dir.glob("*.txt"))
+
+    # Ta bort borttagna filer från cachen
+    gone = set(cached_mtimes) - {f.name for f in all_files}
+    if gone:
+        for name in gone:
+            cached_mtimes.pop(name, None)
+            # Vi kan inte ta bort enskilda filbidrag utan att räkna om från grunden
+            # — enklaste lösning: markera som dirty och räkna om
+        counter = Counter()
+        cached_mtimes.clear()
+
+    for f in all_files:
+        try:
+            mtime = f.stat().st_mtime
+        except OSError:
+            continue
+        if not args.rebuild and f.name in cached_mtimes and cached_mtimes[f.name] == mtime:
+            n_cached += 1
+            continue
+        # Ny eller ändrad fil — läs om
         try:
             text = f.read_text(encoding="utf-8", errors="replace")
         except OSError as e:
@@ -105,9 +157,18 @@ def main() -> int:
             continue
         for w in ALPHA_WORD_RE.findall(text):
             counter[w.lower()] += 1
+        cached_mtimes[f.name] = mtime
         n_files += 1
+        n_updated += 1
 
-    print(f"Läste {n_files} filer, {len(counter)} unika ord.", file=sys.stderr)
+    n_files = len(all_files)
+    print(f"Läste {n_updated} nya/ändrade filer ({n_cached} cachadde), "
+          f"{len(counter)} unika ord.", file=sys.stderr)
+
+    # Spara uppdaterad state
+    state["mtimes"] = cached_mtimes
+    state["counts"] = dict(counter)
+    _save_state(STATE_FILE, state)
 
     use_hunspell = has_hunspell_swe()
     if args.min_freq > 0:

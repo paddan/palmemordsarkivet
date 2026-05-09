@@ -115,6 +115,28 @@ log_err() {
   } >> "$ERRORS_LOG"
 }
 
+detect_lang() {
+  # Läser text på stdin, skriver "eng", "swe" eller "swe+eng" på stdout.
+  # "swe+eng" returneras bara om stdin är tom (okänt — använd båda).
+  python3 -c '
+import sys
+text = sys.stdin.buffer.read().decode("utf-8", errors="replace").strip()
+if not text:
+    print("swe+eng")
+    sys.exit(0)
+try:
+    from langdetect import detect_langs
+    langs = {l.lang: l.prob for l in detect_langs(text[:8000])}
+    if langs.get("en", 0) > 0.80:
+        print("eng")
+    else:
+        print("swe")
+except Exception:
+    print("swe")
+'
+}
+export -f detect_lang
+
 text_quality_ok() {
   # Läser text på stdin, returnerar 0 om kvaliteten godkänns. Kriterier:
   #   alnum-andel >= 0.55
@@ -141,36 +163,60 @@ sys.exit(0 if (ar >= 0.55 and sr <= 0.30 and dr <= 0.10) else 1)
 }
 export -f text_quality_ok
 
+_run_ocrmypdf() {
+  # Hjälpfunktion: kör ocrmypdf med givna flaggor, returnerar 0/1.
+  # $1 = log-fil, resten = flaggor + in/ut
+  local log="$1"; shift
+  ocrmypdf -l "$LANGS" --jobs "$PER_FILE_JOBS" --optimize 0 --quiet "$@" 2>"$log"
+}
+
 run_ocr() {
   # $1 = mode (skip|redo), $2 = input pdf, $3 = output pdf
+  # Försök 1: fullt förbehandlingsläge (rotate+clean+deskew).
+  # Försök 2: utan --clean om försök 1 misslyckas (unpaper kraschar på konstiga sidor).
+  # Försök 3: utan --clean och --deskew.
   local mode="$1" pdf="$2" out_pdf="$3" log base
   base=$(basename "$pdf" .pdf)
   log=$(mktemp)
-  local extra=(--rotate-pages --clean --tesseract-pagesegmode "$PSM" --image-dpi "$IMAGE_DPI")
+
+  local base_flags=(--rotate-pages --tesseract-pagesegmode "$PSM" --image-dpi "$IMAGE_DPI")
+  [ -n "${USER_WORDS:-}" ]      && base_flags+=(--user-words "$USER_WORDS")
+  [ -n "${USER_WORDS_AUTO:-}" ] && base_flags+=(--user-words "$USER_WORDS_AUTO")
+  [ -n "${TESS_CONFIG:-}" ]     && base_flags+=(--tesseract-config "$TESS_CONFIG")
+
+  local mode_flags=()
   if [ "$mode" = "redo" ]; then
-    # --redo-ocr är inkompatibel med --deskew (och --clean-final, --remove-background)
-    extra+=(--redo-ocr)
+    mode_flags=(--redo-ocr)
   else
-    extra+=(--skip-text --deskew)
+    mode_flags=(--skip-text --deskew)
   fi
-  [ -n "${USER_WORDS:-}" ] && extra+=(--user-words "$USER_WORDS")
-  [ -n "${USER_WORDS_AUTO:-}" ] && extra+=(--user-words "$USER_WORDS_AUTO")
-  [ -n "${TESS_CONFIG:-}" ] && extra+=(--tesseract-config "$TESS_CONFIG")
-  if ocrmypdf \
-        -l "$LANGS" \
-        --jobs "$PER_FILE_JOBS" \
-        --quiet \
-        "${extra[@]}" \
-        "$pdf" "$out_pdf" 2>"$log"; then
-    rm -f "$log"
-    return 0
-  else
-    echo "[fel] $base — se loggen nedan:" >&2
-    sed 's/^/    /' "$log" >&2
-    log_err "$base" "$log"
-    rm -f "$log"
-    return 1
+
+  # Försök 1: med --clean
+  if _run_ocrmypdf "$log" "${base_flags[@]}" --clean "${mode_flags[@]}" "$pdf" "$out_pdf"; then
+    rm -f "$log"; return 0
   fi
+
+  # Försök 2: utan --clean (unpaper-fel är vanligaste orsaken)
+  echo "[retry utan --clean] $base" >&2
+  truncate -s 0 "$log"
+  if _run_ocrmypdf "$log" "${base_flags[@]}" "${mode_flags[@]}" "$pdf" "$out_pdf"; then
+    rm -f "$log"; return 0
+  fi
+
+  # Försök 3: utan --clean och utan --deskew
+  if [ "$mode" != "redo" ]; then
+    echo "[retry utan --clean/--deskew] $base" >&2
+    truncate -s 0 "$log"
+    if _run_ocrmypdf "$log" "${base_flags[@]}" --skip-text "$pdf" "$out_pdf"; then
+      rm -f "$log"; return 0
+    fi
+  fi
+
+  echo "[fel] $base — se loggen nedan:" >&2
+  sed 's/^/    /' "$log" >&2
+  log_err "$base" "$log"
+  rm -f "$log"
+  return 1
 }
 
 process_one() {
@@ -179,13 +225,21 @@ process_one() {
   out_pdf="$OCR/$base.pdf"
   out_txt="$TXT/$base.txt"
 
+  [ -s "$out_txt" ] && { echo "[hoppar] $base"; return 0; }
+
   local raw_text
   raw_text=$(pdftotext -q -layout "$f" - 2>/dev/null || true)
   existing=$(printf '%s' "$raw_text" | tr -d '[:space:]' | wc -c | tr -d ' ')
   has_text=0
   [ "$existing" -gt "$MIN_TEXT_CHARS" ] && has_text=1
 
-  [ -s "$out_txt" ] && { echo "[hoppar] $base"; return 0; }
+  # Detektera språk och sätt LANGS för denna fil (subshell — påverkar inte parallella jobb)
+  if [ "$has_text" = "1" ]; then
+    LANGS=$(printf '%s' "$raw_text" | detect_lang)
+  else
+    LANGS="swe+eng"  # skannat dokument — okänt språk, kör båda
+  fi
+  [ "$LANGS" != "swe" ] && echo "[lang: $LANGS] $base"
 
   if [ "$has_text" = "1" ]; then
     if printf '%s' "$raw_text" | text_quality_ok; then
@@ -212,7 +266,7 @@ process_one() {
     return 1
   fi
 }
-export -f process_one run_ocr log_err
+export -f process_one run_ocr _run_ocrmypdf log_err
 export IN OCR TXT PER_FILE_JOBS MIN_TEXT_CHARS LANGS PSM \
        USER_WORDS USER_WORDS_AUTO TESS_CONFIG TESSDATA_PREFIX IMAGE_DPI ERRORS_LOG
 

@@ -15,6 +15,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+MCP_SERVER = Path(__file__).resolve().parent / "rag" / "mcp_server.py"
+
 import lancedb
 import streamlit as st
 from sentence_transformers import SentenceTransformer
@@ -156,8 +158,15 @@ with st.sidebar:
                 "API-nyckel (valfritt)", value="", type="password",
                 help="Lämna tomt för Ollama/lokala servrar utan auth"),
         }
+    mcp_mode = st.toggle(
+        "Utredningsläge (MCP)",
+        value=False,
+        help="Claude söker autonomt med egna verktyg — bättre på komplexa frågor, men långsammare.",
+        disabled=backend["kind"] != "claude",
+    )
     do_rerank = st.toggle("Använd cross-encoder reranker", value=True,
-                          help="Långsammare första gången (laddar ~568 MB) men bättre precision.")
+                          help="Långsammare första gången (laddar ~568 MB) men bättre precision.",
+                          disabled=mcp_mode)
     top_k = st.slider(
         "Hämta top-K kandidater", 5, 50, 20,
         help="Antal chunks som vektorsökningen plockar fram ur indexet i första "
@@ -194,7 +203,11 @@ if "pdf" in qp:
         token = qp["pdf"]
         token += "=" * (-len(token) % 4)
         path = Path(base64.urlsafe_b64decode(token).decode()).resolve()
-        if path.is_file() and ROOT in path.parents:
+        if (
+            path.is_file()
+            and path.suffix.lower() == ".pdf"
+            and ROOT in path.parents
+        ):
             subprocess.Popen(["open", str(path)])
     except Exception:
         pass
@@ -205,6 +218,35 @@ with st.form("ask"):
     q = st.text_input("Din fråga", placeholder="Vem är Stig Engström?",
                       value=ss.question)
     submitted = st.form_submit_button("Fråga", type="primary")
+
+
+async def stream_mcp(q: str, placeholder, parts: list[str]) -> None:
+    """Utredningsläge: Claude anropar search_archive/get_page autonomt."""
+    db_dir = ROOT / "rag" / "lancedb"
+    env = {
+        "DB_DIR": str(db_dir),
+        **{k: v for k, v in os.environ.items()
+           if k in ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY",
+                    "PATH", "HOME", "VIRTUAL_ENV", "EMBED_MODEL")},
+    }
+    from ask import MCP_SYSTEM_PROMPT  # type: ignore
+    options = ClaudeAgentOptions(
+        system_prompt=MCP_SYSTEM_PROMPT,
+        model=CLAUDE_MODEL,
+        mcp_servers={"arkiv": {"command": sys.executable,
+                                "args": [str(MCP_SERVER)], "env": env}},
+        allowed_tools=["mcp__arkiv__search_archive", "mcp__arkiv__get_page"],
+        thinking=ThinkingConfigAdaptive(type="adaptive"),
+        effort="high",
+        max_turns=10,
+        setting_sources=[],
+    )
+    async for message in query(prompt=q, options=options):
+        if isinstance(message, AssistantMessage):
+            for block in message.content:
+                if isinstance(block, TextBlock):
+                    parts.append(block.text)
+                    placeholder.markdown("".join(parts))
 
 
 async def stream_claude(user_msg: str, placeholder, parts: list[str]) -> None:
@@ -238,9 +280,15 @@ async def stream_openai(user_msg: str, placeholder, parts: list[str], cfg) -> No
         stream=True,
     )
     async for chunk in stream:
-        delta = chunk.choices[0].delta.content if chunk.choices else None
-        if delta:
-            parts.append(delta)
+        if not chunk.choices:
+            continue
+        delta = chunk.choices[0].delta.content
+        if delta is None:
+            continue
+        parts.append(delta)
+        placeholder.markdown("".join(parts))
+        if chunk.choices[0].finish_reason == "length":
+            parts.append("\n\n*[svar avklippt — öka kontextgränsen]*")
             placeholder.markdown("".join(parts))
 
 
@@ -257,24 +305,39 @@ async def stream_to_string(hits, q, cfg) -> str:
     return final
 
 
+async def stream_mcp_to_string(q: str) -> str:
+    placeholder = st.empty()
+    parts: list[str] = []
+    await stream_mcp(q, placeholder, parts)
+    final = "".join(parts)
+    placeholder.markdown(final, unsafe_allow_html=True)
+    return final
+
+
 if submitted and q.strip():
     ss.question = q
-    with st.status("Söker i indexet…", expanded=False) as status:
-        hits = search(table, embed_model, q, top_k)
-        if not hits:
-            status.update(label="Inga träffar", state="error")
-            ss.hits, ss.answer = None, ""
-            st.stop()
-        if do_rerank:
-            status.update(label="Omrankar med cross-encoder…")
-            hits = rerank(q, hits, top_n)
-        else:
-            hits = hits[:top_n]
-        status.update(label=f"Hittade {len(hits)} relevanta chunks", state="complete")
-    ss.hits = hits
 
-    st.subheader(f"Svar ({backend_name})")
-    ss.answer = asyncio.run(stream_to_string(hits, q, backend))
+    if mcp_mode and backend["kind"] == "claude":
+        st.subheader("Svar (utredningsläge)")
+        ss.hits = []
+        ss.answer = asyncio.run(stream_mcp_to_string(q))
+    else:
+        with st.status("Söker i indexet…", expanded=False) as status:
+            hits = search(table, embed_model, q, top_k)
+            if not hits:
+                status.update(label="Inga träffar", state="error")
+                ss.hits, ss.answer = None, ""
+                st.stop()
+            if do_rerank:
+                status.update(label="Omrankar med cross-encoder…")
+                hits = rerank(q, hits, top_n)
+            else:
+                hits = hits[:top_n]
+            status.update(label=f"Hittade {len(hits)} relevanta chunks", state="complete")
+        ss.hits = hits
+
+        st.subheader(f"Svar ({backend_name})")
+        ss.answer = asyncio.run(stream_to_string(hits, q, backend))
 
 # Rendera resultat från session_state (även efter rerun från PDF-knappar)
 if ss.hits:

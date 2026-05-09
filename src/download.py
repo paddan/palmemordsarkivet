@@ -23,6 +23,12 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import requests
+from tenacity import (
+    retry,
+    retry_if_exception,
+    stop_after_attempt,
+    wait_random_exponential,
+)
 
 try:  # valfri snyggare format-sniff
     import filetype as _filetype  # type: ignore
@@ -102,23 +108,27 @@ def build_filename(values: dict[str, str], maxlen: int = 180) -> str:
 _TRANSIENT_STATUS = {408, 429, 500, 502, 503, 504}
 
 
+def _is_transient(exc: BaseException) -> bool:
+    if isinstance(exc, (requests.ConnectionError, requests.Timeout)):
+        return True
+    if isinstance(exc, requests.HTTPError):
+        resp = getattr(exc, "response", None)
+        return resp is not None and resp.status_code in _TRANSIENT_STATUS
+    return False
+
+
+@retry(
+    stop=stop_after_attempt(5),
+    wait=wait_random_exponential(multiplier=1, max=16),
+    retry=retry_if_exception(_is_transient),
+    reraise=True,
+)
 def _request_with_retry(session: requests.Session, url: str, **kwargs):
-    """GET med exponential backoff på transienta fel. Max 5 försök, 1→16 s."""
-    last_exc: Exception | None = None
-    for attempt in range(5):
-        try:
-            r = session.get(url, **kwargs)
-            if r.status_code in _TRANSIENT_STATUS:
-                raise requests.HTTPError(f"HTTP {r.status_code}", response=r)
-            return r
-        except (requests.ConnectionError, requests.Timeout, requests.HTTPError) as e:
-            last_exc = e
-            if attempt == 4:
-                break
-            sleep_for = 1 << attempt  # 1, 2, 4, 8, 16
-            time.sleep(sleep_for)
-    assert last_exc is not None
-    raise last_exc
+    """GET med random-exponential backoff på transienta fel. Max 5 försök."""
+    r = session.get(url, **kwargs)
+    if r.status_code in _TRANSIENT_STATUS:
+        raise requests.HTTPError(f"HTTP {r.status_code}", response=r)
+    return r
 
 
 def drive_download(file_id: str, dest: Path, session: requests.Session) -> str:

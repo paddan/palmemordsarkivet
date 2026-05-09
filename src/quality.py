@@ -39,17 +39,34 @@ PUNCT = set('.,;:!?"\'()-—–…/\\[]{}<>')
 WORD_RE = re.compile(r"\S+")
 ALPHA_WORD_RE = re.compile(r"[A-Za-zÅÄÖåäö\-]+")
 
+# Vikter för score_text(). Justera här för att kalibrera bedömningen.
+# Formeln: score = 100 - sum(ratio * weight) för varje dimension.
+WEIGHT_JUNK = 200         # 50 % skräptecken → -100 p
+WEIGHT_SHORT_WORD = 80    # korta ord (≤2 tecken) — vanligt i OCR-brus
+WEIGHT_LONG_WORD = 100    # långa ord (≥18 tecken) — troligen hopklistrade
+WEIGHT_DIGIT_MIXED = 150  # bokstäver+siffror i samma token — OCR-fel
+VOWEL_TARGET = 0.40       # idealvokaltäthet för svenska
+WEIGHT_VOWEL = 100        # avvikelse från VOWEL_TARGET
+WEIGHT_HUNSPELL = 60      # andel icke-svenska ord enligt hunspell
+
+_hunspell_available: bool | None = None  # cachat resultat
+
 
 def has_hunspell_swe() -> bool:
+    global _hunspell_available
+    if _hunspell_available is not None:
+        return _hunspell_available
     if not shutil.which("hunspell"):
+        _hunspell_available = False
         return False
     try:
         out = subprocess.run(
             ["hunspell", "-D"], input=b"", capture_output=True, timeout=10
         )
-        return b"sv_SE" in out.stderr or b"sv_SE" in out.stdout
+        _hunspell_available = b"sv_SE" in out.stderr or b"sv_SE" in out.stdout
     except subprocess.SubprocessError:
-        return False
+        _hunspell_available = False
+    return _hunspell_available
 
 
 def original_had_text(stem: str, files_dir: Path = FILES_DIR) -> bool:
@@ -122,15 +139,15 @@ def score_text(text: str, use_hunspell: bool) -> dict:
         pct = hunspell_pct(words)
         out["pct_swe"] = round(pct, 3) if pct is not None else None
 
-    # Sammanvägd 0–100 (högre = bättre).
+    # Sammanvägd 0–100 (högre = bättre). Vikter definierade som konstanter ovan.
     score = 100.0
-    score -= out["junk_ratio"] * 200          # 50 % junk → -100
-    score -= out["short_word_ratio"] * 80
-    score -= out["long_word_ratio"] * 100
-    score -= out["digit_in_word_ratio"] * 150
-    score -= abs(out["vowel_ratio"] - 0.40) * 100
+    score -= out["junk_ratio"] * WEIGHT_JUNK
+    score -= out["short_word_ratio"] * WEIGHT_SHORT_WORD
+    score -= out["long_word_ratio"] * WEIGHT_LONG_WORD
+    score -= out["digit_in_word_ratio"] * WEIGHT_DIGIT_MIXED
+    score -= abs(out["vowel_ratio"] - VOWEL_TARGET) * WEIGHT_VOWEL
     if out["pct_swe"] is not None:
-        score -= (1 - out["pct_swe"]) * 60
+        score -= (1 - out["pct_swe"]) * WEIGHT_HUNSPELL
     out["score"] = round(max(0.0, min(100.0, score)), 1)
     return out
 
