@@ -3,14 +3,18 @@
 __pycache__/
 *.pyc
 *.pyo
+*.egg-info/
 
 # Nedladdade och bearbetade arkivdata (stora, åter-skapas av skripten)
 files/
+files_wpu/
 ocr/
 text/
 text_surya/
+text_wpu
 log.txt
 *.pdf
+unusable.txt
 
 # Vektorindex
 rag/lancedb/
