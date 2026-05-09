@@ -146,7 +146,7 @@ Tunables via flaggor (env-vars fungerar fortfarande som fallback):
 JOBS=8 PER_FILE_JOBS=2 PSM=4 ./ocr_tesseract.sh    # bakåtkompatibelt
 ```
 
-`ocr_tesseract.sh` byter aldrig OCR-engine på egen hand — för Surya/Vision på
+`ocr_tesseract.sh` byter aldrig OCR-engine på egen hand — för Surya på
 dåliga sidor använder du `./ocr.sh` ovan eller `./ocr.sh --redo` manuellt.
 
 Vid riktiga fel skrivs `[fel] <namn>` följt av indragen ocrmypdf-logg. Tesseracts
@@ -188,14 +188,7 @@ till ``<stem>.txt`` med ``\f`` som sidbrytare.
 ```bash
 ./ocr_pages.sh --in files/foo.pdf --out-dir text_pages --engine tesseract
 ./ocr_pages.sh --in files/foo.pdf --out-dir text_pages --engine surya
-./ocr_pages.sh --in files/foo.pdf --out-dir text_pages --engine vision
 ./ocr_pages.sh --in files/foo.pdf --out-dir text_pages --pages 3,7,12
-```
-
-`--engine vision` kräver `ocrit` (macOS Vision Framework):
-
-```bash
-brew install insidegui/tap/ocrit
 ```
 
 Kombo med `./quality.sh --per-page` + `./ocr.sh --redo --mode pages` kör om
@@ -328,7 +321,7 @@ lokalt (via `open`) i en gömd iframe så huvudsidan inte laddas om.
 | `ocr.sh` | Full OCR-pipeline (Tesseract → kvalitet → Surya på dåliga sidor); `--redo` kör om dåliga filer/sidor |
 | `ocr_tesseract.sh` | Bara Tesseract-steget (textextraktion + ocrmypdf) |
 | `ocr_surya.sh` → `src/ocr_surya.py` | Surya-OCR till `.txt` (alternativ, högre kvalitet på svåra scans) |
-| `ocr_pages.sh` → `src/ocr_pages.py` | Per-sida OCR (Tesseract/Vision/Surya) med sidor i `\f`-separerad txt |
+| `ocr_pages.sh` → `src/ocr_pages.py` | Per-sida OCR (Tesseract/Surya) med sidor i `\f`-separerad txt |
 | `build_user_words.sh` → `src/build_user_words.py` | Bygg `tessdata/swe.user-words.auto` från `text/*.txt` |
 | `quality.sh` → `src/quality.py` | Heuristisk kvalitetsbedömning av `text/*.txt` (`--per-page` finns) |
 | `ingest.sh` → `src/rag/ingest.py` | Bygg vektorindex (LanceDB + BM25 FTS) |
