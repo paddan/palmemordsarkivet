@@ -91,6 +91,25 @@ def find_txt(source_txt: str) -> Path | None:
 CITE_RE = re.compile(r"Nr (\d+(?:[.,]\d+)*),\s*sida (\d+)")
 
 
+def extract_cited_sources(answer: str) -> list[dict]:
+    """Bygg källlista ur ett MCP-svar genom att parsa unika Nr-citat."""
+    nr_to_pdf = build_nr_to_pdf()
+    seen: dict[str, dict] = {}
+    for m in CITE_RE.finditer(answer):
+        nr = m.group(1)
+        if nr in seen or nr not in nr_to_pdf:
+            continue
+        pdf = nr_to_pdf[nr]
+        parts = [p.strip() for p in pdf.stem.split(" — ")]
+        seen[nr] = {
+            "source": pdf.stem + ".txt",
+            "page": None,
+            "nr": nr,
+            "titel": parts[1] if len(parts) > 1 else pdf.stem,
+        }
+    return list(seen.values())
+
+
 def linkify_citations(text: str) -> str:
     """Förvandla "Nr X, sida Y" till små inline-knappar som öppnar PDF lokalt
     via ?pdf=<base64>-handlern högst upp i scriptet (oberoende av session_state).
@@ -332,6 +351,7 @@ if submitted and q.strip():
         st.subheader("Svar (utredningsläge)")
         ss.hits = []
         ss.answer = asyncio.run(stream_mcp_to_string(q))
+        ss.hits = extract_cited_sources(ss.answer)
     else:
         with st.status("Söker i indexet…", expanded=False) as status:
             hits = search(table, embed_model, q, top_k)
@@ -366,7 +386,8 @@ if ss.hits:
                 cols = st.columns([5, 2, 2])
                 with cols[0]:
                     st.markdown(f"**{stem}**")
-                    st.caption(f"sida {h['page']}")
+                    if h.get("page"):
+                        st.caption(f"sida {h['page']}")
                 with cols[1]:
                     if pdf and st.button("Öppna PDF", key=f"open_pdf_{i}",
                                          use_container_width=True):
