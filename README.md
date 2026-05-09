@@ -76,6 +76,30 @@ För hela arkivet (tar några timmar), kör i bakgrunden:
 nohup ./download.sh > log.txt 2>&1 &
 ```
 
+#### Komplettera med wpu.nu
+
+[wpu.nu](https://wpu.nu/wiki/Dokument) publicerar en del av samma material men ibland med bättre skanningar. Ladda ner hela wpu-samlingen till en separat katalog:
+
+```bash
+./download_wpu.sh          # ladda ner alla PDF:er → files_wpu/
+./download_wpu.sh --dry-run  # lista utan att ladda ner
+```
+
+`ocr.sh` kör automatiskt `merge_wpu.sh` i slutet om `files_wpu/` finns. Skriptet jämför textkvaliteten (0–100-poäng) per fil och väljer det bästa alternativet:
+
+| wpu-text      | Match i palme? | Utfall                      |
+| ------------- | -------------- | --------------------------- |
+| OK (≥ 30 p)   | Ja             | Bäst vinner (margin 5 p)    |
+| Dålig (< 30 p)| Ja             | Behåll palme-texten         |
+| OK            | Nej            | Skriv som ny fil i `text/`  |
+| Dålig         | Nej            | OCR-skanna wpu-filen        |
+
+```bash
+./merge_wpu.sh             # kör om manuellt
+./merge_wpu.sh --dry-run   # visa vad som skulle hända
+./merge_wpu.sh --rebuild   # ignorera .done-markeringar
+```
+
 ### 2. OCR till text
 
 #### Rekommenderad workflow: `ocr.sh`
@@ -298,6 +322,8 @@ lokalt (via `open`) i en gömd iframe så huvudsidan inte laddas om.
 | Fil | Vad |
 |---|---|
 | `download.sh` → `src/download.py` | Hämta PDF:er från Drive |
+| `download_wpu.sh` → `src/download_wpu.py` | Ladda ner alla PDF:er från wpu.nu → `files_wpu/` |
+| `merge_wpu.sh` → `src/merge_wpu.py` | Jämför wpu- och palme-text per fil, behåll bäst kvalitet |
 | `setup_tessdata.sh` | Sätt upp projekt-lokal `tessdata/` med swe_best |
 | `ocr.sh` | Full OCR-pipeline (Tesseract → kvalitet → Surya på dåliga sidor); `--redo` kör om dåliga filer/sidor |
 | `ocr_tesseract.sh` | Bara Tesseract-steget (textextraktion + ocrmypdf) |
@@ -364,7 +390,7 @@ bash via `>> "$ROOT/errors.log"`. Append-only, idempotent.
 
 ## Datafiler (gitignorerade)
 
-`files/`, `ocr/`, `text/`, `text_surya/`, `rag/lancedb/`, `tessdata/*.traineddata`
+`files/`, `files_wpu/`, `ocr/`, `text/`, `text_surya/`, `text_wpu/`, `rag/lancedb/`, `tessdata/*.traineddata`
 — åter-skapas helt av skripten (`text_surya/` av `ocr_surya.sh`,
 `tessdata/swe.traineddata` av `setup_tessdata.sh`).
 
