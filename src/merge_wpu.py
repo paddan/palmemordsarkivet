@@ -3,20 +3,26 @@
 Slår samman text från wpu.nu-filer med palmemordsarkivet.
 
 För varje PDF i files_wpu/:
-  1. Extraherar text med pdftotext (wpu-filer har redan textlager).
-  2. Beräknar textkvalitetspoäng.
-  3. Söker efter matchande palme-textfil i text/ via dokument-ID
-     (DA-14244-A ↔ DA14244-00-A, EDE-9980 ↔ EDE9980-00 osv.).
-  4a. Match hittad och wpu bättre (≥ --margin poäng): ersätter palme-texten.
-  4b. Match hittad och palme bättre: behåller palme-texten.
-  4c. Ingen match: skriver wpu-texten som ny fil i text/.
+  1. Extraherar text med pdftotext och bedömer kvalitet.
+  2. Söker matchande palme-textfil i text/ via dokument-ID.
 
-Extraherad wpu-text cachas i text_wpu/ (markerat med .done-filer).
+  Utfall beroende på kvalitet och matchning:
+
+  ┌────────────────────┬──────────────────────────────────────────────────┐
+  │                    │ Match i palme?                                   │
+  │                    ├───────────────────────┬──────────────────────────┤
+  │                    │ Ja                    │ Nej                      │
+  ├────────────────────┼───────────────────────┼──────────────────────────┤
+  │ wpu text OK        │ Jämför, bäst vinner   │ Skriv som ny fil         │
+  │ wpu text dålig     │ Behåll palme-text     │ OCR-skanna wpu-filen     │
+  └────────────────────┴───────────────────────┴──────────────────────────┘
+
+Extraherad wpu-text cachas i text_wpu/ med .done-marker (idempotent).
 
 Kör:
     python merge_wpu.py            # kör merging
     python merge_wpu.py --dry-run  # visa vad som skulle hända
-    python merge_wpu.py --rebuild  # kör om även redan behandlade filer
+    python merge_wpu.py --rebuild  # kör om alla, ignorera .done-marker
 """
 
 from __future__ import annotations
@@ -24,6 +30,7 @@ from __future__ import annotations
 import argparse
 import subprocess
 import sys
+import tempfile
 from collections import defaultdict
 from pathlib import Path
 
@@ -31,16 +38,18 @@ ROOT = Path(__file__).resolve().parents[1]
 FILES_WPU = ROOT / "files_wpu"
 TEXT_DIR = ROOT / "text"
 TEXT_WPU = ROOT / "text_wpu"
+TESSDATA = ROOT / "tessdata"
 
 sys.path.insert(0, str(ROOT / "src"))
 from download_wpu import palme_id_keys, wpu_id_keys  # noqa: E402
 from quality import score_text  # noqa: E402
 
-DEFAULT_MARGIN = 5  # wpu måste vara minst N poäng bättre för att ersätta palme
+DEFAULT_MARGIN = 5      # wpu måste vara minst N poäng bättre för att ersätta palme
+DEFAULT_OCR_THR = 30    # under detta anses wpu-texten oanvändbar → OCR behövs
 
 
 def _pdftotext(pdf: Path, layout: bool = False) -> str:
-    """Kör pdftotext och returnera texten. layout=False för kvalitetscheck."""
+    """Extrahera text ur PDF. layout=False för kvalitetscheck (undviker whitespace-inflation)."""
     cmd = ["pdftotext", "-q"]
     if layout:
         cmd.append("-layout")
@@ -50,6 +59,43 @@ def _pdftotext(pdf: Path, layout: bool = False) -> str:
         return r.stdout
     except Exception:
         return ""
+
+
+def _ocr_pdf(pdf: Path, dest_txt: Path, per_file_jobs: int = 2) -> bool:
+    """Kör ocrmypdf på en wpu-fil som saknar läsbart textlager.
+    Försöker med --clean, sedan utan om det misslyckas.
+    Returnerar True om det gick bra.
+    """
+    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+        tmp_pdf = Path(tmp.name)
+    try:
+        base_cmd = [
+            "ocrmypdf",
+            "-l", "swe",
+            "--jobs", str(per_file_jobs),
+            "--optimize", "0",
+            "--quiet",
+            "--skip-text",
+            "--rotate-pages",
+            "--deskew",
+            "--tesseract-pagesegmode", "6",
+        ]
+        cfg = TESSDATA / "tesseract.config"
+        if cfg.exists():
+            base_cmd += ["--tesseract-config", str(cfg)]
+        uw = TESSDATA / "swe.user-words"
+        if uw.exists():
+            base_cmd += ["--user-words", str(uw)]
+
+        for attempt_flags in ([["--clean"]], [[]]): # försök 1: med --clean; försök 2: utan
+            cmd = base_cmd + attempt_flags[0] + [str(pdf), str(tmp_pdf)]
+            if subprocess.run(cmd, capture_output=True).returncode == 0:
+                text = _pdftotext(tmp_pdf, layout=True)
+                dest_txt.write_text(text, encoding="utf-8")
+                return True
+        return False
+    finally:
+        tmp_pdf.unlink(missing_ok=True)
 
 
 def build_palme_key_map(text_dir: Path) -> dict[tuple, list[Path]]:
@@ -68,9 +114,11 @@ def main() -> int:
     ap.add_argument("--dry-run", action="store_true",
                     help="visa vad som skulle hända utan att göra det")
     ap.add_argument("--rebuild", action="store_true",
-                    help="kör om även redan behandlade filer (ignorerar .done-marker)")
+                    help="kör om alla, ignorera .done-marker")
     ap.add_argument("--margin", type=float, default=DEFAULT_MARGIN,
                     help=f"min poängfördel för att ersätta palme-text (default: {DEFAULT_MARGIN})")
+    ap.add_argument("--ocr-threshold", type=float, default=DEFAULT_OCR_THR,
+                    help=f"wpu-text under detta poäng anses oanvändbar (default: {DEFAULT_OCR_THR})")
     ap.add_argument("--files-wpu", default=str(FILES_WPU),
                     help=f"katalog med wpu-PDF:er (default: {FILES_WPU})")
     ap.add_argument("--text-dir", default=str(TEXT_DIR),
@@ -100,8 +148,8 @@ def main() -> int:
     n_better = 0
     n_kept = 0
     n_new = 0
+    n_ocr = 0
     n_skip = 0
-    n_no_text = 0
 
     for pdf in wpu_pdfs:
         stem = pdf.stem
@@ -112,22 +160,16 @@ def main() -> int:
             n_skip += 1
             continue
 
-        # Extrahera text för kvalitetscheck (utan -layout undviker whitespace-inflation)
+        # Extrahera text utan -layout för kvalitetscheck
         if wpu_cache.exists() and not args.rebuild:
-            raw_for_score = wpu_cache.read_text(encoding="utf-8", errors="replace")
+            raw = wpu_cache.read_text(encoding="utf-8", errors="replace")
         else:
-            raw_for_score = _pdftotext(pdf, layout=False)
+            raw = _pdftotext(pdf, layout=False)
             if not args.dry_run:
-                wpu_cache.write_text(raw_for_score, encoding="utf-8")
+                wpu_cache.write_text(raw, encoding="utf-8")
 
-        wpu_score = score_text(raw_for_score)["score"]
-
-        if wpu_score < 10:
-            print(f"[tom/skräp]  {stem[:70]}  (poäng={wpu_score:.0f})")
-            n_no_text += 1
-            if not args.dry_run:
-                marker.touch()
-            continue
+        wpu_score = score_text(raw)["score"]
+        wpu_text_ok = wpu_score >= args.ocr_threshold
 
         # Hitta matchande palme-textfiler
         keys = wpu_id_keys(pdf.name)
@@ -138,44 +180,62 @@ def main() -> int:
                     matched.append(p)
 
         if matched:
-            for palme_txt in matched:
-                palme_raw = palme_txt.read_text(encoding="utf-8", errors="replace")
+            if not wpu_text_ok:
+                # wpu-texten är dålig — behåll palme-texten
+                palme_raw = matched[0].read_text(encoding="utf-8", errors="replace")
                 palme_score = score_text(palme_raw)["score"]
+                print(
+                    f"[behåller]   {matched[0].name[:50]:50s} "
+                    f"palme={palme_score:.0f} (wpu={wpu_score:.0f} oanvändbar)"
+                )
+                n_kept += 1
+            else:
+                for palme_txt in matched:
+                    palme_raw = palme_txt.read_text(encoding="utf-8", errors="replace")
+                    palme_score = score_text(palme_raw)["score"]
 
-                if wpu_score > palme_score + args.margin:
-                    print(
-                        f"[bättre wpu] {stem[:50]:50s} "
-                        f"wpu={wpu_score:.0f} > palme={palme_score:.0f} "
-                        f"→ {palme_txt.name[:35]}"
-                    )
-                    if not args.dry_run:
-                        layout_text = _pdftotext(pdf, layout=True)
-                        palme_txt.write_text(layout_text, encoding="utf-8")
-                    n_better += 1
-                else:
-                    print(
-                        f"[behåller]   {palme_txt.name[:50]:50s} "
-                        f"palme={palme_score:.0f} >= wpu={wpu_score:.0f}"
-                    )
-                    n_kept += 1
+                    if wpu_score > palme_score + args.margin:
+                        print(
+                            f"[bättre wpu] {stem[:50]:50s} "
+                            f"wpu={wpu_score:.0f} > palme={palme_score:.0f} "
+                            f"→ {palme_txt.name[:35]}"
+                        )
+                        if not args.dry_run:
+                            layout_text = _pdftotext(pdf, layout=True)
+                            palme_txt.write_text(layout_text, encoding="utf-8")
+                        n_better += 1
+                    else:
+                        print(
+                            f"[behåller]   {palme_txt.name[:50]:50s} "
+                            f"palme={palme_score:.0f} >= wpu={wpu_score:.0f}"
+                        )
+                        n_kept += 1
         else:
-            # Ingen palme-match: lägg till som ny fil i text/
+            # Ingen palme-match
             dest = text_dir / f"{stem}.txt"
-            if not dest.exists() or args.rebuild:
+            if dest.exists() and not args.rebuild:
+                n_skip += 1
+            elif wpu_text_ok:
                 print(f"[ny]         {stem[:70]}")
                 if not args.dry_run:
                     layout_text = _pdftotext(pdf, layout=True)
                     dest.write_text(layout_text, encoding="utf-8")
                 n_new += 1
             else:
-                n_skip += 1
+                # wpu saknar textlager och finns inte i palme → OCR-skanna
+                print(f"[ocr-wpu]    {stem[:70]}  (wpu-poäng={wpu_score:.0f})")
+                if not args.dry_run:
+                    ok = _ocr_pdf(pdf, dest)
+                    if not ok:
+                        print(f"  [fel] ocrmypdf misslyckades för {stem}", file=sys.stderr)
+                n_ocr += 1
 
         if not args.dry_run:
             marker.touch()
 
     print(
-        f"\nKlart: {n_better} ersatta (wpu bättre), {n_kept} behållna (palme bättre), "
-        f"{n_new} nya, {n_no_text} tomma/skräp, {n_skip} hoppade."
+        f"\nKlart: {n_better} ersatta (wpu bättre), {n_kept} behållna (palme/wpu bättre), "
+        f"{n_new} nya (direkt), {n_ocr} OCR-skannade, {n_skip} hoppade."
     )
     return 0
 
