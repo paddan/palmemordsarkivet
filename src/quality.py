@@ -33,6 +33,7 @@ ROOT = Path(os.environ.get("ROOT") or Path(__file__).resolve().parents[1])
 TEXT_DIR = Path(os.environ.get("TEXT_DIR") or (ROOT / "text"))
 FILES_DIR = Path(os.environ.get("FILES_DIR") or (ROOT / "files"))
 MIN_TEXT_CHARS = int(os.environ.get("MIN_TEXT_CHARS", "200"))  # samma tröskel som ocr.sh
+MIN_PAGE_ALNUM = 30  # sidor med färre alfanumeriska tecken = bildsida, hoppa re-OCR
 
 VOWELS = set("aeiouyåäöAEIOUYÅÄÖ")
 PUNCT = set('.,;:!?"\'()-—–…/\\[]{}<>')
@@ -217,6 +218,11 @@ def main() -> int:
                     p_scored = score_text(page_text, use_hunspell=False)
                     p_scored["file"] = f.name
                     p_scored["page"] = p_idx
+                    alnum = sum(1 for c in page_text if c.isalnum())
+                    if alnum < MIN_PAGE_ALNUM:
+                        # Bildsida eller tom sida — ingen text att förbättra
+                        p_scored["score"] = 100.0
+                        p_scored["image_page"] = True
                     pages_fp.write(json.dumps(p_scored, ensure_ascii=False) + "\n")
     finally:
         if pages_fp is not None:
