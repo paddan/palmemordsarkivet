@@ -55,6 +55,21 @@ def load():
     return table, embed
 
 
+@st.cache_resource(show_spinner=False)
+def build_nr_to_pdf() -> dict[str, Path]:
+    """Bygg nr → PDF-sökväg från filsystemet (ocr/ föredras framför files/)."""
+    mapping: dict[str, Path] = {}
+    for d in ("files", "ocr"):  # ocr/ skriver över files/ → föredras
+        folder = ROOT / d
+        if not folder.is_dir():
+            continue
+        for pdf in folder.glob("*.pdf"):
+            nr = pdf.stem.split(" — ")[0].strip()
+            if nr:
+                mapping[nr] = pdf
+    return mapping
+
+
 def find_pdf(source_txt: str) -> Path | None:
     """Hitta original-PDF för en chunk. Föredrar ocr/ (sökbar)."""
     stem = source_txt[:-4] if source_txt.endswith(".txt") else source_txt
@@ -76,15 +91,12 @@ def find_txt(source_txt: str) -> Path | None:
 CITE_RE = re.compile(r"Nr (\d+(?:[.,]\d+)*),\s*sida (\d+)")
 
 
-def linkify_citations(text: str, hits) -> str:
+def linkify_citations(text: str) -> str:
     """Förvandla "Nr X, sida Y" till små inline-knappar som öppnar PDF lokalt
     via ?pdf=<base64>-handlern högst upp i scriptet (oberoende av session_state).
+    Fungerar i både RAG- och MCP-läge — slår upp nr → PDF direkt i filsystemet.
     """
-    nr_to_pdf = {}
-    for h in hits:
-        pdf = find_pdf(h["source"])
-        if pdf:
-            nr_to_pdf[str(h["nr"])] = pdf
+    nr_to_pdf = build_nr_to_pdf()
 
     style = (
         "display:inline-block;padding:1px 6px;margin:0 2px;"
@@ -300,7 +312,7 @@ async def stream_to_string(hits, q, cfg) -> str:
         await stream_claude(user_msg, placeholder, parts)
     else:
         await stream_openai(user_msg, placeholder, parts, cfg)
-    final = linkify_citations("".join(parts), hits)
+    final = linkify_citations("".join(parts))
     placeholder.markdown(final, unsafe_allow_html=True)
     return final
 
@@ -309,7 +321,7 @@ async def stream_mcp_to_string(q: str) -> str:
     placeholder = st.empty()
     parts: list[str] = []
     await stream_mcp(q, placeholder, parts)
-    final = "".join(parts)
+    final = linkify_citations("".join(parts))
     placeholder.markdown(final, unsafe_allow_html=True)
     return final
 
