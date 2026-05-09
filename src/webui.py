@@ -227,8 +227,7 @@ if "pdf" in qp:
 
 
 with st.form("ask"):
-    q = st.text_input("Din fråga", placeholder="Vem är Stig Engström?",
-                      value=ss.question)
+    q = st.text_input("Din fråga", placeholder="Vem är Stig Engström?")
     submitted = st.form_submit_button("Fråga", type="primary")
 
 
