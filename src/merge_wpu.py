@@ -42,7 +42,7 @@ TESSDATA = ROOT / "tessdata"
 
 sys.path.insert(0, str(ROOT / "src"))
 from download_wpu import palme_id_keys, wpu_id_keys  # noqa: E402
-from quality import score_text  # noqa: E402
+from quality import has_hunspell_swe, score_text  # noqa: E402
 
 DEFAULT_MARGIN = 5      # wpu måste vara minst N poäng bättre för att ersätta palme
 DEFAULT_OCR_THR = 30    # under detta anses wpu-texten oanvändbar → OCR behövs
@@ -138,6 +138,10 @@ def main() -> int:
     if not args.dry_run:
         TEXT_WPU.mkdir(exist_ok=True)
 
+    use_hunspell = has_hunspell_swe()
+    if not use_hunspell:
+        print("hunspell saknas — hoppar över ordbokskontroll", file=sys.stderr)
+
     print("Bygger palme-ID-karta…")
     palme_map = build_palme_key_map(text_dir)
     print(f"  {len(palme_map)} ID-nycklar i {text_dir.name}/")
@@ -168,7 +172,7 @@ def main() -> int:
             if not args.dry_run:
                 wpu_cache.write_text(raw, encoding="utf-8")
 
-        wpu_score = score_text(raw, use_hunspell=False)["score"]
+        wpu_score = score_text(raw, use_hunspell=use_hunspell)["score"]
         wpu_text_ok = wpu_score >= args.ocr_threshold
 
         # Hitta matchande palme-textfiler
@@ -183,7 +187,7 @@ def main() -> int:
             if not wpu_text_ok:
                 # wpu-texten är dålig — behåll palme-texten
                 palme_raw = matched[0].read_text(encoding="utf-8", errors="replace")
-                palme_score = score_text(palme_raw, use_hunspell=False)["score"]
+                palme_score = score_text(palme_raw, use_hunspell=use_hunspell)["score"]
                 print(
                     f"[behåller]   {matched[0].name[:50]:50s} "
                     f"palme={palme_score:.0f} (wpu={wpu_score:.0f} oanvändbar)"
@@ -192,7 +196,7 @@ def main() -> int:
             else:
                 for palme_txt in matched:
                     palme_raw = palme_txt.read_text(encoding="utf-8", errors="replace")
-                    palme_score = score_text(palme_raw, use_hunspell=False)["score"]
+                    palme_score = score_text(palme_raw, use_hunspell=use_hunspell)["score"]
 
                     if wpu_score > palme_score + args.margin:
                         print(
