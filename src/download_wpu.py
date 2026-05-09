@@ -1,25 +1,13 @@
 #!/usr/bin/env python3
 """
-Laddar ner filer från wpu.nu som saknas i palmemordsarkivet.
+Laddar ner alla PDF-filer från wpu.nu till files_wpu/.
 
-Jämför dokument-ID:n i wpu.nu-filnamn mot ID:n i befintliga
-palmemordsarkivet-filer. Stödjer alla prefix: DA, EDE, IVA, EAD, PM m.fl.
-
-Format-mappning (wpu saknar bindestreck mellan prefix och bas, version
-är alltid tvåsiffrig, multi-bokstavssuffix representerar separata dokument):
-
-  palmemordsarkivet       wpu.nu
-  DA-14259             →  DA14259-00
-  DA-14259-1           →  DA14259-01
-  DA-14244-A           →  DA14244-00-A
-  DA-14244-09-ABC      →  DA14244-09-A + DA14244-09-B + DA14244-09-C
-  EDE-9980             →  EDE9980-00  (om wpu använder samma mönster)
-  IVA-16636-B          →  IVA16636-00-B
+Idempotent — hoppar över redan nedladdade filer. Merging av text mot
+palmemordsarkivet görs separat av merge_wpu.py.
 
 Kör:
-    python download_wpu.py            # ladda ner saknade PDF:er
+    python download_wpu.py            # ladda ner alla PDF:er
     python download_wpu.py --dry-run  # lista utan att ladda ner
-    python download_wpu.py --id-only  # bara filer med känt dokument-ID
     python download_wpu.py --rebuild  # ladda ner igen även om filen finns
 """
 
@@ -44,15 +32,14 @@ OUT_DIR = ROOT / "files_wpu"
 WPU_API = "https://wpu.nu/api.php"
 USER_AGENT = "palmemordsarkivet-wpu-downloader/1.0"
 
-# wpu-format: PREFIX{digits}-{NN}[-{SUFFIX}]
-# Exempel: DA14259-00, EDE9980-00-A, IVA16636-00-B, DA14244-09-ABC
-# Lookbehind: prefix får inte föregås av bokstav (undviker JDA, EXP osv.)
+# Dokument-ID i wpu-filnamn: PREFIX{digits}-{NN}[-{SUFFIX}]
+# Exempel: DA14259-00, EDE9980-00-A, IVA16636-00-B
 WPU_ID_RE = re.compile(
     r"(?<![A-Za-z])([A-Z]{1,4})(\d+)-(\d{2})(?:-([A-Z]+))?(?![A-Za-z\d])"
 )
 
-# palmemordsarkivet-format: PREFIX-{digits}[-version|-suffix|-version-suffix]
-# Exempel: DA-14259, DA-14244-A, DA-14244-09, DA-14244-09-ABC, EDE-9980, IVA-16636-B
+# Dokument-ID i palmemordsarkivet-filnamn: PREFIX-{digits}[-version|-suffix|-version-suffix]
+# Exempel: DA-14259, DA-14244-A, DA-14244-09, EDE-9980, IVA-16636-B
 PALME_ID_RE = re.compile(
     r"(?<![A-Za-z])([A-Z]{1,4})-(\d+)"
     r"(?:"
@@ -67,14 +54,11 @@ IdKey = tuple[str, int, int, str]  # (prefix, base, version, suffix_char)
 
 
 def _expand_suffix(suffix: str) -> list[str]:
-    """'ABC' → ['A','B','C'], '' → ['']"""
     return list(suffix) if suffix else [""]
 
 
 def wpu_id_keys(filename: str) -> set[IdKey]:
-    """Extrahera dokument-ID-nycklar ur ett wpu-filnamn.
-    Multi-bokstavssuffix (ABC) expanderas till separata nycklar (A, B, C).
-    """
+    """Extrahera dokument-ID-nycklar ur ett wpu-filnamn."""
     keys: set[IdKey] = set()
     for m in WPU_ID_RE.finditer(filename):
         prefix = m.group(1)
@@ -92,29 +76,16 @@ def palme_id_keys(filename: str) -> set[IdKey]:
         prefix = m.group(1)
         base = int(m.group(2))
         if m.group(3) is not None:
-            # PREFIX-digits-version[-suffix]
             version = int(m.group(3))
             suffix = m.group(4) or ""
         elif m.group(5) is not None:
-            # PREFIX-digits-suffix (ingen explicit version → 0)
             version = 0
             suffix = m.group(5)
         else:
-            # PREFIX-digits (bara bas)
             version = 0
             suffix = ""
         for ch in _expand_suffix(suffix):
             keys.add((prefix, base, version, ch))
-    return keys
-
-
-def collect_palme_keys() -> set[IdKey]:
-    """Samla alla dokument-ID-nycklar från befintliga filer i files/."""
-    keys: set[IdKey] = set()
-    palme_dir = ROOT / "files"
-    if palme_dir.is_dir():
-        for f in palme_dir.glob("*.pdf"):
-            keys.update(palme_id_keys(f.name))
     return keys
 
 
@@ -173,30 +144,17 @@ def _download(session: requests.Session, url: str, dest: Path) -> None:
         raise
 
 
-def _id_label(keys: set[IdKey]) -> str:
-    if not keys:
-        return "(inget ID)"
-    parts = sorted(
-        f"{p}{b}-{v:02d}{'-' + s if s else ''}" for p, b, v, s in keys
-    )
-    return ", ".join(parts)
-
-
 def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     ap.add_argument(
         "--dry-run", action="store_true",
-        help="visa vad som skulle laddas ner utan att göra det",
-    )
-    ap.add_argument(
-        "--id-only", action="store_true",
-        help="ladda bara filer med känt dokument-ID i filnamnet",
+        help="lista filer utan att ladda ner",
     )
     ap.add_argument(
         "--rebuild", action="store_true",
-        help="ladda ner igen även om filen redan finns i files_wpu/",
+        help="ladda ner igen även om filen redan finns",
     )
     ap.add_argument(
         "--out", default=str(OUT_DIR),
@@ -213,40 +171,18 @@ def main() -> int:
     pdfs = [f for f in all_wpu if f["name"].lower().endswith(".pdf")]
     print(f"  {len(pdfs)} PDF-filer på wpu.nu (av {len(all_wpu)} totalt)")
 
-    print("Läser befintliga dokument-ID:n från files/…")
-    palme_keys = collect_palme_keys()
-    prefixes = sorted({p for p, *_ in palme_keys})
-    print(f"  {len(palme_keys)} ID-nycklar ({', '.join(prefixes) or 'inga'})")
-
     already_local = (
         {f.name for f in out_dir.glob("*.pdf")} if out_dir.is_dir() else set()
     )
 
-    to_download: list[dict] = []
-    n_covered = 0
-    n_skipped_local = 0
+    to_download = [
+        f for f in pdfs
+        if args.rebuild or f["name"] not in already_local
+    ]
+    n_skip = len(pdfs) - len(to_download)
 
-    for f in pdfs:
-        name = f["name"]
-
-        if not args.rebuild and name in already_local:
-            n_skipped_local += 1
-            continue
-
-        keys = wpu_id_keys(name)
-
-        if args.id_only and not keys:
-            continue
-
-        if keys and keys.issubset(palme_keys):
-            n_covered += 1
-            continue
-
-        to_download.append({"name": name, "url": f["url"], "keys": keys})
-
-    print(f"  {n_covered} wpu-filer redan täckta av palmemordsarkivet")
-    if n_skipped_local:
-        print(f"  {n_skipped_local} redan nedladdade till {out_dir.name}/")
+    if n_skip:
+        print(f"  {n_skip} redan nedladdade (hoppar över)")
     print(f"  {len(to_download)} att ladda ner")
 
     if not to_download:
@@ -254,8 +190,14 @@ def main() -> int:
         return 0
 
     if args.dry_run:
-        for f in to_download:
-            print(f"  {f['name'][:72]:72s}  [{_id_label(f['keys'])}]")
+        for f in to_download[:50]:
+            keys = wpu_id_keys(f["name"])
+            id_str = ", ".join(
+                f"{p}{b}-{v:02d}{'-'+s if s else ''}" for p, b, v, s in sorted(keys)
+            ) if keys else ""
+            print(f"  {f['name'][:70]:70s}  {id_str}")
+        if len(to_download) > 50:
+            print(f"  … och {len(to_download) - 50} till")
         return 0
 
     session = requests.Session()
@@ -272,8 +214,7 @@ def main() -> int:
         print(
             f"  [{i:>4}/{len(to_download)}] {f['name'][:65]:65s} "
             f"(eta {int(eta // 60)}m{int(eta % 60):02d}s)",
-            end="",
-            flush=True,
+            end="", flush=True,
         )
         try:
             _download(session, f["url"], dest)

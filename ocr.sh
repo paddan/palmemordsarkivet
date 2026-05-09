@@ -27,6 +27,8 @@ Default-läge (full pipeline):
   2. ./quality.sh --per-page                  # quality.csv + quality_pages.jsonl
   3. ./ocr.sh --redo --mode pages             # Surya på sidor under tröskeln
   4. ./quality.sh                             # uppdaterad quality.csv
+  5. ./merge_wpu.sh                           # wpu.nu-text vs palme, bäst vinner
+                                              # (körs bara om files_wpu/ finns)
 
 Steg 3 hoppas över om --skip-redo eller om Surya inte är installerat.
 
@@ -142,6 +144,11 @@ if [ "$REDO_ONLY" = "0" ]; then
 
     step "4/4  Uppdaterad kvalitetsbedömning"
     ./quality.sh
+  fi
+
+  if [ -d "$ROOT/files_wpu" ]; then
+    step "5/5  Sammanfoga wpu.nu-text (./merge_wpu.sh)"
+    ./merge_wpu.sh
   fi
 
   t1=$(date +%s)
