@@ -215,6 +215,7 @@ export CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...
 ./ask.sh "Vem är Stig Engström?"
 ./ask.sh --no-rerank "snabbare"
 ./ask.sh --hybrid "..."           # vector + BM25 sammanslaget med RRF
+./ask.sh --mcp "..."              # utredningsläge — Claude söker autonomt
 ./ask.sh                          # interaktiv repl
 ./ask.sh --help                   # alla flaggor
 
@@ -222,10 +223,52 @@ export CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...
 ./web.sh
 ```
 
-Webgränssnittet stödjer flera AI-backends via en väljare i sidebaren:
+OAuth-token genereras med `claude setup-token` (engångsåtgärd).
+
+#### RAG-läge (standard)
+
+Klassisk *retrieval-augmented generation*: en fast pipeline i tre steg.
+
+1. **Vektorsökning** — frågan embedas lokalt med `intfloat/multilingual-e5-large`
+   och matchas mot LanceDB-indexet (top-20 kandidater).
+2. **Hybrid + reranking (valfritt)** — `--hybrid` kombinerar vektor och BM25 (FTS)
+   med *Reciprocal Rank Fusion* (k=60). Sedan omrankar
+   `BAAI/bge-reranker-v2-m3` resultaten och plockar ut topp-6.
+3. **Claude svarar** — de 6 utdragen skickas som kontext till Claude Opus 4.7
+   (adaptive thinking). Svaret innehåller källhänvisningar `[Nr X, sida Y]`.
+
+Snabbt och förutsägbart. Passar enkla faktafrågor där ett enstaka söksteg räcker.
+
+#### MCP-läge (`--mcp`)
+
+I utredningsläget söker Claude *autonomt* via
+[Model Context Protocol](https://modelcontextprotocol.io). Istället för en fast
+pipeline startar systemet en MCP-server (`src/rag/mcp_server.py`) som subprocess
+och låter Claude anropa dessa verktyg hur många gånger det vill:
+
+| Verktyg | Vad |
+|---|---|
+| `search_archive` | Vektor- eller hybridsökning med valfri reranking; returnerar utdrag med källinfo |
+| `get_page` | Läser råtexten från en specifik sida för att få mer kontext kring en träff |
+
+Claude väljer själv söktermer, kan söka flera gånger med olika fraser, och kan
+följa upp intressanta träffar med `get_page`. Det ger markant bättre täckning på
+komplexa flerstegs-frågor — till priset av längre svarstid (upp till 10 anrop,
+~1–3 min beroende på fråga).
+
+```text
+Enkla faktafrågor  → RAG-läge (snabbt, deterministiskt)
+Komplexa utredningsfrågor  → MCP-läge (--mcp, autonomt, bättre täckning)
+```
+
+Webgränssnittet (Claude-backend) har en "Utredningsläge (MCP)"-toggle i sidebaren.
+
+#### Webgränssnittet
+
+Stödjer flera AI-backends via en väljare i sidebaren:
 
 - **Claude Opus 4.7** (default) — via `claude-agent-sdk` med adaptive thinking,
-  kräver `CLAUDE_CODE_OAUTH_TOKEN` eller `ANTHROPIC_API_KEY`.
+  kräver `CLAUDE_CODE_OAUTH_TOKEN` eller `ANTHROPIC_API_KEY`. Stödjer MCP-läge.
 - **OpenAI GPT-5 / GPT-4o** — kräver `OPENAI_API_KEY`.
 - **DeepSeek V4 / Reasoner** — kräver `DEEPSEEK_API_KEY`
   (`deepseek-chat` är V4-routern, `deepseek-reasoner` är thinking-modellen).
@@ -250,13 +293,6 @@ ollama pull llama3.1:8b
 Citat i svaret renderas som små inline-knappar — klick öppnar original-PDF:en
 lokalt (via `open`) i en gömd iframe så huvudsidan inte laddas om.
 
-Hämtar top-20 chunks från vektor-DB, ev. omrankar med `BAAI/bge-reranker-v2-m3`,
-skickar topp-6 till Claude Opus 4.7 (adaptive thinking) via Claude Agent SDK.
-Svarar på svenska med källhänvisningar `[Nr X, sida Y]`. Säger
-"framgår inte av materialet" hellre än att gissa.
-
-OAuth-token genereras med `claude setup-token` (engångsåtgärd).
-
 ## Filer
 
 | Fil | Vad |
@@ -269,9 +305,10 @@ OAuth-token genereras med `claude setup-token` (engångsåtgärd).
 | `ocr_pages.sh` → `src/ocr_pages.py` | Per-sida OCR (Tesseract/Vision/Surya) med sidor i `\f`-separerad txt |
 | `build_user_words.sh` → `src/build_user_words.py` | Bygg `tessdata/swe.user-words.auto` från `text/*.txt` |
 | `quality.sh` → `src/quality.py` | Heuristisk kvalitetsbedömning av `text/*.txt` (`--per-page` finns) |
-| `ingest.sh` → `src/rag/ingest.py` | Bygg vektorindex |
-| `ask.sh` → `src/rag/ask.py` | Frågefronten (wrapper aktiverar venv, läser token) |
-| `src/webui.py` | Streamlit-webgränssnitt för frågor |
+| `ingest.sh` → `src/rag/ingest.py` | Bygg vektorindex (LanceDB + BM25 FTS) |
+| `ask.sh` → `src/rag/ask.py` | Frågefronten — RAG-läge och `--mcp`-läge |
+| `src/rag/mcp_server.py` | MCP-server med `search_archive` och `get_page` (startas av ask.py/webui.py) |
+| `src/webui.py` | Streamlit-webgränssnitt för frågor (RAG + MCP-toggle) |
 | `web.sh` | Wrapper för Streamlit-servern |
 | `tessdata/swe.user-words` | Palme-specifika ord (committat) |
 | `tessdata/tesseract.config` | `preserve_interword_spaces 1` (committat) |
