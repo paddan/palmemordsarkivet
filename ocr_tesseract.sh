@@ -227,6 +227,8 @@ process_one() {
 
   [ -s "$out_txt" ] && { echo "[hoppar] $base"; return 0; }
 
+  echo "[skannar] $base"
+
   local raw_text
   # Utan -layout: roterade PDF:er (Page rot: 90/270) ger annars enormt whitespace
   # som sänker alnum-ration och ger falska "text-skräp"-klassningar.
