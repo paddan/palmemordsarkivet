@@ -168,7 +168,7 @@ def main() -> int:
             if not args.dry_run:
                 wpu_cache.write_text(raw, encoding="utf-8")
 
-        wpu_score = score_text(raw)["score"]
+        wpu_score = score_text(raw, use_hunspell=False)["score"]
         wpu_text_ok = wpu_score >= args.ocr_threshold
 
         # Hitta matchande palme-textfiler
@@ -183,7 +183,7 @@ def main() -> int:
             if not wpu_text_ok:
                 # wpu-texten är dålig — behåll palme-texten
                 palme_raw = matched[0].read_text(encoding="utf-8", errors="replace")
-                palme_score = score_text(palme_raw)["score"]
+                palme_score = score_text(palme_raw, use_hunspell=False)["score"]
                 print(
                     f"[behåller]   {matched[0].name[:50]:50s} "
                     f"palme={palme_score:.0f} (wpu={wpu_score:.0f} oanvändbar)"
@@ -192,7 +192,7 @@ def main() -> int:
             else:
                 for palme_txt in matched:
                     palme_raw = palme_txt.read_text(encoding="utf-8", errors="replace")
-                    palme_score = score_text(palme_raw)["score"]
+                    palme_score = score_text(palme_raw, use_hunspell=False)["score"]
 
                     if wpu_score > palme_score + args.margin:
                         print(
