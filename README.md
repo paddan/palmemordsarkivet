@@ -8,7 +8,7 @@ med drygt 3 700 PDF-filer (~33 000 sidor) som länkas via "Länk till kopia".
 
 Efter nedladdning, ocr-scanning så finns det ett web-gränssnitt som man kan ställa frågor om Palme-mordet i.
 
-Webgränssnittet har två sökägen:
+Webgränssnittet har två söklägen:
 
 **RAG (standard)** — *retrieval-augmented generation*. En fast pipeline: frågan
 embedas och matchas mot vektorindexet, de bästa utdragen rerankas, och de
