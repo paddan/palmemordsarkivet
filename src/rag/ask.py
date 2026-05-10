@@ -21,7 +21,14 @@ import sys
 from pathlib import Path
 
 import lancedb
-from claude_agent_sdk import (
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+try:
+    from errors_log import log_error  # type: ignore  # noqa: E402
+except ImportError:  # pragma: no cover
+    def log_error(component: str, item: str, message: str) -> None:
+        pass
+
+from claude_agent_sdk import (  # noqa: E402
     AssistantMessage,
     ClaudeAgentOptions,
     ResultMessage,
@@ -92,9 +99,10 @@ def search_hybrid(table, model, q: str, top_k: int) -> list[dict]:
             .select(SELECT_COLS)
             .to_list()
         )
-    except Exception as e:  # noqa: BLE001
+    except (RuntimeError, ValueError, OSError) as e:
         print(f"  (FTS otillgängligt: {e}; faller tillbaka till vektor)",
               file=sys.stderr)
+        log_error("ask.fts", q[:80], str(e))
         return vec_hits
 
     k_rrf = 60

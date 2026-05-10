@@ -234,13 +234,15 @@ if "pdf" in qp:
         token = qp["pdf"]
         token += "=" * (-len(token) % 4)
         path = Path(base64.urlsafe_b64decode(token).decode()).resolve()
+        # is_relative_to följer den fullt resolvade strängen — slipper symlink-fel
+        # där path.parents kan innehålla ROOT trots att resolve() pekar utanför.
         if (
             path.is_file()
             and path.suffix.lower() == ".pdf"
-            and ROOT in path.parents
+            and path.is_relative_to(ROOT.resolve())
         ):
             subprocess.Popen(["open", str(path)])
-    except Exception:
+    except (ValueError, OSError):
         pass
     st.query_params.clear()
 

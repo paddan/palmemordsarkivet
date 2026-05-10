@@ -16,7 +16,7 @@
 #   ./ocr.sh --redo --mode files            # om-OCR av hela filer
 #   ./ocr.sh --help                         # alla flaggor
 
-set -u
+set -eu
 
 usage() {
   cat <<EOF
@@ -120,7 +120,6 @@ step() {
 # Default-läge: full pipeline
 # --------------------------------------------------------------------
 if [ "$REDO_ONLY" = "0" ]; then
-  set -e
   t0=$(date +%s)
 
   step "1/4  Tesseract-OCR (./ocr_tesseract.sh --jobs $JOBS)"
@@ -308,8 +307,9 @@ redo_one() {
 export -f redo_one
 export IN OCR TXT PER_FILE_JOBS
 
+# || true: enskilda filfel ska inte stoppa batchen (set -e annars).
 printf '%s\0' ${TARGETS[@]+"${TARGETS[@]}"} \
-  | xargs -0 -I {} -P "$JOBS" bash -c 'redo_one "$@"' _ {}
+  | xargs -0 -I {} -P "$JOBS" bash -c 'redo_one "$@"' _ {} || true
 
 echo
 echo "Klart. Kör './quality.sh' igen för att se förbättringen."
