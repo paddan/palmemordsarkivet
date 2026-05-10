@@ -8,7 +8,24 @@ med drygt 3 700 PDF-filer (~33 000 sidor) som länkas via "Länk till kopia".
 
 Efter nedladdning, ocr-scanning så finns det ett web-gränssnitt som man kan ställa frågor om Palme-mordet i.
 
-![Web-gränssnitt](web-ui.png)
+Webgränssnittet har två sökägen:
+
+**RAG (standard)** — *retrieval-augmented generation*. En fast pipeline: frågan
+embedas och matchas mot vektorindexet, de bästa utdragen rerankas, och de
+6 mest relevanta skickas som kontext till Claude som formulerar svaret med
+källhänvisningar. Snabbt och förutsägbart — passar enkla faktafrågor där ett
+söksteg räcker.
+
+![Web-gränssnitt — RAG-läge](web-ui-2.png)
+
+**MCP (utredningsläge)** — Claude söker *autonomt* via
+[Model Context Protocol](https://modelcontextprotocol.io). Istället för en
+fast pipeline får Claude tillgång till verktyg (`search_archive`, `get_page`)
+som den anropar hur många gånger den vill — provar olika söktermer, följer
+upp intressanta träffar och läser hela sidor för mer kontext. Bättre täckning
+på komplexa flerstegs-frågor, men långsammare (~1–3 min).
+
+![Web-gränssnitt — MCP-läge](web-ui.png)
 
 ## Kom igång
 
