@@ -2,6 +2,15 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Dokumentation hålls synkad
+
+När du gör förändringar i projektet (ny funktionalitet, ändrade kommandon, nya beroenden, ändrad arkitektur, nya/borttagna filer eller skript, ändrade miljövariabler, etc.) ska du **alltid** uppdatera både `CLAUDE.md` och `README.md` så att de speglar det nya tillståndet — i samma commit som kodändringen.
+
+- `README.md` är den användarvända dokumentationen (svenska) — uppdatera installations-, körnings- och användningsinstruktioner.
+- `CLAUDE.md` är instruktioner för framtida Claude-sessioner — uppdatera arkitektur-, kommando- och modulreferenser.
+
+Om en ändring inte påverkar något i dessa filer, behöver de inte röras. Men om du är osäker — uppdatera dem hellre än att låta dem bli inaktuella.
+
 ## Project Overview
 
 **palmemordsarkivet** is a Swedish language project that downloads, OCR-processes, and provides searchable access to ~3,700 PDF documents (~33,000 pages) from [palmemordsarkivet.se](https://palmemordsarkivet.se), a public Google Sheet archive related to the Palme murder investigation.
@@ -132,6 +141,16 @@ All scripts are idempotent and can be re-run safely. They skip already-completed
 
 # 5. Web UI
 ./web.sh                     # Launch Streamlit in browser
+```
+
+Optional wpu.nu merging (jämför wpu-skanning mot palme-text och välj bäst):
+
+```bash
+./download_wpu.sh            # ladda ner wpu-PDF:er → files_wpu/
+./merge_wpu.sh               # parallell merging (default --jobs cpu_count)
+./merge_wpu.sh --jobs 8      # explicit antal processer
+./merge_wpu.sh --dry-run     # visa beslut utan att skriva
+./merge_wpu.sh --rebuild     # ignorera .done-markeringar
 ```
 
 Each `.sh` wrapper:
@@ -265,6 +284,12 @@ Streamlit app with:
 - Reranking toggle + top-K/top-N sliders
 - Citation links: click to open original PDF locally (base64-encoded path in query param)
 - Hidden iframe prevents main page reload when opening PDFs
+- **MCP-läge = chatt**: när "Utredningsläge (MCP)" är på används `st.chat_input`/`st.chat_message`
+  och konversationshistorik sparas i `ss.chat_history`. Kontinuitet uppnås genom att fånga
+  `session_id` från `ResultMessage` efter varje tur och skicka tillbaka det som
+  `ClaudeAgentOptions(resume=...)` på nästa fråga — Claude minns då tidigare frågor och
+  tool-resultat. "Ny konversation"-knappen i sidebaren nollställer `chat_history` +
+  `mcp_session_id`. RAG-läget använder fortfarande den gamla form-baserade engångs-UI:n.
 
 ## Testing
 

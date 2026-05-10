@@ -114,9 +114,10 @@ nohup ./download.sh > log.txt 2>&1 &
 | Dålig         | Nej            | OCR-skanna wpu-filen        |
 
 ```bash
-./merge_wpu.sh             # kör om manuellt
+./merge_wpu.sh             # kör om manuellt (parallellt, default cpu_count)
 ./merge_wpu.sh --dry-run   # visa vad som skulle hända
 ./merge_wpu.sh --rebuild   # ignorera .done-markeringar
+./merge_wpu.sh --jobs 8    # antal parallella processer
 ```
 
 ### 2. OCR till text
@@ -298,6 +299,10 @@ Komplexa utredningsfrågor  → MCP-läge (--mcp, autonomt, bättre täckning)
 ```
 
 Webgränssnittet (Claude-backend) har en "Utredningsläge (MCP)"-toggle i sidebaren.
+I MCP-läget får du en chatt där Claude minns tidigare frågor i konversationen
+(implementerat via Claude Agent SDK:s `resume`-fält — `session_id` från senaste
+svaret skickas med nästa fråga). Sidebar-knappen "Ny konversation" nollställer
+historiken och startar en ny session.
 
 #### Webgränssnittet
 

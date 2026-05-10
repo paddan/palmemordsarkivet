@@ -35,6 +35,7 @@ from ask import (  # type: ignore  # noqa: E402
 from claude_agent_sdk import (  # noqa: E402
     AssistantMessage,
     ClaudeAgentOptions,
+    ResultMessage,
     TextBlock,
     ThinkingConfigAdaptive,
     query,
@@ -192,9 +193,14 @@ with st.sidebar:
     mcp_mode = st.toggle(
         "Utredningsläge (MCP)",
         value=False,
-        help="Claude söker autonomt med egna verktyg — bättre på komplexa frågor, men långsammare.",
+        help="Claude söker autonomt med egna verktyg — bättre på komplexa frågor, men långsammare. "
+             "I detta läge får du en chatt där Claude minns tidigare frågor.",
         disabled=backend["kind"] != "claude",
     )
+    if mcp_mode and st.button("Ny konversation", use_container_width=True):
+        ss.chat_history = []
+        ss.mcp_session_id = None
+        st.rerun()
     do_rerank = st.toggle("Använd cross-encoder reranker", value=True,
                           help="Långsammare första gången (laddar ~568 MB) men bättre precision.",
                           disabled=mcp_mode)
@@ -224,6 +230,9 @@ ss = st.session_state
 ss.setdefault("question", "")
 ss.setdefault("hits", None)
 ss.setdefault("answer", "")
+# MCP-chatt: history-lista med {"role", "text", "sources"} och resume-id för Claude.
+ss.setdefault("chat_history", [])
+ss.setdefault("mcp_session_id", None)
 
 # Klick på inline-citatknapp i svaret: ?pdf=<base64-encoded path> → öppna PDF.
 # PDF-sökvägen kodas direkt i URL:en så det fungerar även om session_state
@@ -247,13 +256,12 @@ if "pdf" in qp:
     st.query_params.clear()
 
 
-with st.form("ask"):
-    q = st.text_input("Din fråga", placeholder="Vem är Stig Engström?")
-    submitted = st.form_submit_button("Fråga", type="primary")
+async def stream_mcp(q: str, placeholder, parts: list[str],
+                     resume_id: str | None) -> str | None:
+    """Utredningsläge: Claude anropar search_archive/get_page autonomt.
 
-
-async def stream_mcp(q: str, placeholder, parts: list[str]) -> None:
-    """Utredningsläge: Claude anropar search_archive/get_page autonomt."""
+    Returnerar Claudes session_id så att nästa fråga kan resume:a samma
+    konversation (Claude minns tidigare frågor och tool-resultat)."""
     db_dir = ROOT / "rag" / "lancedb"
     env = {
         "DB_DIR": str(db_dir),
@@ -272,13 +280,18 @@ async def stream_mcp(q: str, placeholder, parts: list[str]) -> None:
         effort="high",
         max_turns=10,
         setting_sources=[],
+        resume=resume_id,
     )
+    new_session_id: str | None = None
     async for message in query(prompt=q, options=options):
         if isinstance(message, AssistantMessage):
             for block in message.content:
                 if isinstance(block, TextBlock):
                     parts.append(block.text)
                     placeholder.markdown("".join(parts))
+        elif isinstance(message, ResultMessage):
+            new_session_id = message.session_id
+    return new_session_id
 
 
 async def stream_claude(user_msg: str, placeholder, parts: list[str]) -> None:
@@ -337,24 +350,61 @@ async def stream_to_string(hits, q, cfg) -> str:
     return final
 
 
-async def stream_mcp_to_string(q: str) -> str:
+async def stream_mcp_to_string(q: str, resume_id: str | None) -> tuple[str, str | None]:
     placeholder = st.empty()
     parts: list[str] = []
-    await stream_mcp(q, placeholder, parts)
+    new_id = await stream_mcp(q, placeholder, parts, resume_id)
     final = linkify_citations("".join(parts))
     placeholder.markdown(final, unsafe_allow_html=True)
-    return final
+    return final, new_id
 
 
-if submitted and q.strip():
-    ss.question = q
+if mcp_mode and backend["kind"] == "claude":
+    # Chatt-läge: rendera historiken först, sedan st.chat_input nederst.
+    for turn_idx, turn in enumerate(ss.chat_history):
+        with st.chat_message(turn["role"]):
+            st.markdown(turn["text"], unsafe_allow_html=True)
+            srcs = turn.get("sources") or []
+            if srcs:
+                with st.expander(f"Källor ({len(srcs)})", expanded=False):
+                    for i, h in enumerate(srcs):
+                        pdf = find_pdf(h["source"])
+                        stem = h["source"][:-4] if h["source"].endswith(".txt") else h["source"]
+                        with st.container(border=True):
+                            cols = st.columns([5, 2])
+                            with cols[0]:
+                                st.markdown(f"**{stem}**")
+                            with cols[1]:
+                                if pdf and st.button(
+                                    "Öppna PDF",
+                                    key=f"chat_pdf_{turn_idx}_{i}",
+                                    use_container_width=True,
+                                ):
+                                    subprocess.Popen(["open", str(pdf)])
 
-    if mcp_mode and backend["kind"] == "claude":
-        st.subheader("Svar (utredningsläge)")
-        ss.hits = []
-        ss.answer = asyncio.run(stream_mcp_to_string(q))
-        ss.hits = extract_cited_sources(ss.answer)
-    else:
+    chat_q = st.chat_input("Ställ en fråga till utredningsassistenten…")
+    if chat_q and chat_q.strip():
+        ss.chat_history.append({"role": "user", "text": chat_q, "sources": []})
+        with st.chat_message("user"):
+            st.markdown(chat_q)
+        with st.chat_message("assistant"):
+            answer, new_id = asyncio.run(
+                stream_mcp_to_string(chat_q, ss.mcp_session_id)
+            )
+        ss.mcp_session_id = new_id
+        ss.chat_history.append({
+            "role": "assistant",
+            "text": answer,
+            "sources": extract_cited_sources(answer),
+        })
+        st.rerun()
+else:
+    with st.form("ask"):
+        q = st.text_input("Din fråga", placeholder="Vem är Stig Engström?")
+        submitted = st.form_submit_button("Fråga", type="primary")
+
+    if submitted and q.strip():
+        ss.question = q
         with st.status("Söker i indexet…", expanded=False) as status:
             hits = search(table, embed_model, q, top_k)
             if not hits:
@@ -372,9 +422,10 @@ if submitted and q.strip():
         st.subheader(f"Svar ({backend_name})")
         ss.answer = asyncio.run(stream_to_string(hits, q, backend))
 
-# Rendera resultat från session_state (även efter rerun från PDF-knappar)
-if ss.hits:
-    if not submitted:
+# Rendera resultat från session_state (även efter rerun från PDF-knappar).
+# Bara i RAG-läget — MCP-chatten renderar sina källor inline per tur.
+if ss.hits and not (mcp_mode and backend["kind"] == "claude"):
+    if not (submitted and q.strip()):
         # på rerun: visa cachat svar (redan linkifierat)
         st.subheader("Svar")
         st.markdown(ss.answer, unsafe_allow_html=True)
