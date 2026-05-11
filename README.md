@@ -173,30 +173,17 @@ Vid riktiga fel skrivs `[fel] <namn>` följt av indragen ocrmypdf-logg. Tesserac
 varningar för blanka sidor (`Too few characters. Skipping this page` /
 `Error during processing`) är benigna och göms numera — filen blir ändå OCR:ad.
 
-#### Alternativ: Surya för värsta filerna
+#### Surya för värsta sidorna
 
 Tesseract klarar ~85 % av materialet bra men kämpar på degraderade scans. För
-de filerna ger [Surya](https://github.com/VikParuchuri/surya) (transformer-OCR)
+de sidorna ger [Surya](https://github.com/VikParuchuri/surya) (transformer-OCR)
 markant högre kvalitet — i stickprov på 50 svåra filer: medelpoäng 60 → 73,
 49 av 50 bättre. Priset är fart (~30–100 s/sida på Apple Silicon MPS, mot
 ~1 s/sida för Tesseract).
 
-Hybrid-workflow:
-
-```bash
-./ocr_tesseract.sh                                  # full Tesseract-omgång
-./quality.sh                                        # bygg quality.csv
-./ocr_surya.sh --in files --out text_surya          # eller bara värsta filerna
-```
-
-För att bara ta värsta filerna, symlinka över de PDF:er där `quality.csv`-poäng
-< 50 till en separat katalog och kör `./ocr_surya.sh` mot den.
-
-`ocr_surya.sh` skriver bara `.txt`. RAG-pipen i `text/` hämtar texten där och
-bryr sig inte om sökbara PDF:er, så för normal användning räcker det. Vill du
-manuellt läsa Surya-OCR:ade PDF:er med korrekt textlager (kopiera/söka i
-Preview), kör `./ocr_pages.sh --engine surya` per fil — den producerar texten,
-men inte en sökbar PDF i `ocr/`. Den funktionen är borttagen.
+Surya körs per sida via `./ocr.sh --redo --mode pages` (default i full pipeline).
+Endast sidor med score < threshold OCR:as om, resultatet mergas tillbaka in i
+`text/<stem>.txt` per dokument. Se `Per-sida OCR` nedan.
 
 #### Per-sida OCR (`ocr_pages.sh`)
 
@@ -373,8 +360,8 @@ lokalt (via `open`) i en gömd iframe så huvudsidan inte laddas om.
 | `setup_tessdata.sh` | Sätt upp projekt-lokal `tessdata/` med swe_best |
 | `ocr.sh` | Full OCR-pipeline (Tesseract → kvalitet → Surya på dåliga sidor); `--redo` kör om dåliga filer/sidor |
 | `ocr_tesseract.sh` | Bara Tesseract-steget (textextraktion + ocrmypdf) |
-| `ocr_surya.sh` → `src/ocr_surya.py` | Surya-OCR till `.txt` (alternativ, högre kvalitet på svåra scans) |
 | `ocr_pages.sh` → `src/ocr_pages.py` | Per-sida OCR (Tesseract/Surya) med sidor i `\f`-separerad txt |
+| `merge_pages.sh` → `src/merge_pages.py` | Slå ihop `text_pages/<stem>/page-*.txt` in i `text/<stem>.txt` |
 | `build_user_words.sh` → `src/build_user_words.py` | Bygg `tessdata/swe.user-words.auto` från `text/*.txt` |
 | `quality.sh` → `src/quality.py` | Heuristisk kvalitetsbedömning av `text/*.txt` (`--per-page` finns) |
 | `ingest.sh` → `src/rag/ingest.py` | Bygg vektorindex (LanceDB + BM25 FTS) |
@@ -436,8 +423,8 @@ bash via `>> "$ROOT/errors.log"`. Append-only, idempotent.
 
 ## Datafiler (gitignorerade)
 
-`files/`, `files_wpu/`, `ocr/`, `text/`, `text_surya/`, `text_wpu/`, `rag/lancedb/`, `tessdata/*.traineddata`
-— åter-skapas helt av skripten (`text_surya/` av `ocr_surya.sh`,
+`files/`, `files_wpu/`, `ocr/`, `text/`, `text_pages/`, `text_wpu/`, `rag/lancedb/`, `tessdata/*.traineddata`
+— åter-skapas helt av skripten (`text_pages/` av `ocr_pages.py`,
 `tessdata/swe.traineddata` av `setup_tessdata.sh`).
 
 ## Starta om

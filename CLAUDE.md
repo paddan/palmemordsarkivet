@@ -32,7 +32,6 @@ All components are Swedish-language facing; comments and docstrings are in Swedi
 ├── src/                      # Core Python modules
 │   ├── download.py          # Google Drive PDF downloader with manifest tracking
 │   ├── quality.py           # OCR quality scoring (heuristics + optional hunspell)
-│   ├── ocr_surya.py        # Transformer-based OCR (Surya alternative to Tesseract)
 │   ├── ocr_pages.py        # Per-page OCR pipeline (Tesseract/Vision/Surya)
 │   ├── build_user_words.py  # Generate Tesseract user-words from OCR text
 │   ├── errors_log.py        # Centralized error logging (tab-separated)
@@ -57,7 +56,7 @@ All components are Swedish-language facing; comments and docstrings are in Swedi
 Data directories (gitignored, auto-generated):
 - `files/` — downloaded PDFs
 - `text/` — extracted OCR text
-- `text_surya/` — Surya-OCR output (optional)
+- `text_pages/` — per-page OCR artifacts (merged into `text/` by `merge_pages.py`)
 - `ocr/` — searchable PDFs with embedded text layers
 - `rag/lancedb/` — vector index
 - `test_files/`, `test_ocr/`, `test_txt/` — test artifacts

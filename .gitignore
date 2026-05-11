@@ -10,7 +10,6 @@ files/
 files_wpu/
 ocr/
 text/
-text_surya/
 text_wpu
 log.txt
 *.pdf
