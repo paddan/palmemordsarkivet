@@ -37,6 +37,7 @@ All components are Swedish-language facing; comments and docstrings are in Swedi
 │   ├── build_user_words.py  # Generate Tesseract user-words from OCR text
 │   ├── errors_log.py        # Centralized error logging (tab-separated)
 │   ├── webui.py            # Streamlit web interface
+│   ├── merge_pages.py       # Slå ihop text_pages/<stem>/page-*.txt → text/<stem>.txt
 │   └── rag/
 │       ├── ingest.py       # LanceDB vector index builder
 │       └── ask.py          # RAG query interface with Claude integration
@@ -134,6 +135,10 @@ All scripts are idempotent and can be re-run safely. They skip already-completed
 ./ingest.sh --limit 100      # Test with subset
 ./ingest.sh --reindex-since 2026-05-01  # tvinga om för legacy-rader modifierade efter datum
 
+# Slå ihop per-sida-text (text_pages/) in i text/ — engångsåtgärd för befintliga mappar
+./merge_pages.sh --all
+./merge_pages.sh --stem "<namn>"   # bara en fil
+
 # 4. Query the archive
 ./ask.sh "Din fråga här"     # Single query
 ./ask.sh --no-rerank         # Skip cross-encoder (faster)
@@ -212,6 +217,7 @@ PER_FILE_JOBS=2       # Threads per file (ocr_tesseract.sh)
    - **Surya** (`ocr.sh --redo`, optional): Fallback for low-scoring pages
      - Transformer-based (multilingual e5), slower but higher quality on degraded scans
      - Runs only on pages/files below threshold (default 50)
+     - **Per-dokument-merge**: efter att `ocr_pages.py` är klar med ett dokument kör `ocr.sh` automatiskt `merge_pages.merge_one` som ersätter motsvarande sidor i `text/<stem>.txt` (split på `\f`). Detta säkerställer att ingest fångar ändringarna via mtime.
    - **Re-scoring**: Quality metrics updated after Surya pass
 
 3. **Ingest** (`ingest.py`):
@@ -273,6 +279,13 @@ Scoring formula: 100 - penalties for junk, short words, long words, digit-mixing
 - `parse_reindex_since(value: str) → float`: Tolkar `--reindex-since` (ISO 8601 eller unix-sekunder)
 
 Schema: vector (1024 dims), text, source, page, chunk_idx, mtime, plus metadata fields (nr, titel, etc.).
+
+### `src/merge_pages.py`
+
+- `merge_text(original: str, page_updates: dict[int, str]) → str`: Ren funktion — ersätter enstaka sidor (1-indexerat) i en `\f`-separerad textfil. Sidnummer utanför range ignoreras tyst. Testad i `tests/test_merge_pages.py`.
+- `find_updates(stem_dir: Path) → dict[int, str]`: Hittar `page-NNN.txt` i en text_pages-mapp.
+- `merge_one(stem, txt_dir, pages_dir) → bool`: Slå ihop en fil; returnerar True om filen ändrades.
+- CLI: `--stem <namn>` eller `--all`. Wrapper: `./merge_pages.sh`.
 
 ### `src/rag/ask.py`
 

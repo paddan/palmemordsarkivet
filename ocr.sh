@@ -174,14 +174,19 @@ if [ "$MODE" = "pages" ]; then
   PYBIN="$ROOT/.venv/bin/python"
   [ -x "$PYBIN" ] || PYBIN="python3"
 
-  "$PYBIN" - "$PAGES_JSONL" "$THRESHOLD" "$IN" "$PAGES_OUT" "$ROOT" "$OCR" "$NO_UPDATE_PDF" <<'PYEOF'
+  "$PYBIN" - "$PAGES_JSONL" "$THRESHOLD" "$IN" "$PAGES_OUT" "$ROOT" "$OCR" "$NO_UPDATE_PDF" "$TXT" <<'PYEOF'
 import json, subprocess, sys
 from collections import defaultdict
 from pathlib import Path
 
-jsonl, thr, in_dir, out_dir, root, ocr_dir, no_update = sys.argv[1:8]
+jsonl, thr, in_dir, out_dir, root, ocr_dir, no_update, txt_dir = sys.argv[1:9]
 thr = float(thr)
 in_dir = Path(in_dir); out_dir = Path(out_dir); root = Path(root)
+txt_dir = Path(txt_dir)
+
+# Importera merge_pages direkt så vi slipper subprocess per fil.
+sys.path.insert(0, str(root / "src"))
+from merge_pages import merge_one  # noqa: E402
 
 bad = defaultdict(list)
 with open(jsonl, encoding="utf-8") as f:
@@ -217,7 +222,14 @@ for txt_name, pages in bad.items():
     if no_update == "1":
         cmd.append("--no-update-pdf")
     print(f"[redo-pages] {stem}: sidor {pages_arg}")
-    subprocess.run(cmd, check=False)
+    r = subprocess.run(cmd, check=False)
+    # Per-dokument-merge direkt efter ocr_pages.py är klar: ersätt motsvarande
+    # sidor i text/<stem>.txt så att ingest fångar dem via mtime.
+    if r.returncode == 0:
+        try:
+            merge_one(stem, txt_dir, out_dir)
+        except Exception as e:  # noqa: BLE001
+            print(f"  [merge_pages] FEL {stem}: {e}", file=sys.stderr)
 PYEOF
   exit 0
 fi
