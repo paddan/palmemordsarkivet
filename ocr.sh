@@ -188,7 +188,7 @@ txt_dir = Path(txt_dir)
 sys.path.insert(0, str(root / "src"))
 from merge_pages import merge_one  # noqa: E402
 
-bad = defaultdict(list)
+raw = defaultdict(list)
 with open(jsonl, encoding="utf-8") as f:
     for line in f:
         try:
@@ -197,13 +197,30 @@ with open(jsonl, encoding="utf-8") as f:
             continue
         score = float(row.get("score") or 0.0)
         if score < thr:
-            bad[row["file"]].append(int(row["page"]))
+            raw[row["file"]].append(int(row["page"]))
 
+# Filtrera bort sidor som redan har en .json-markör (= Surya har försökt
+# tidigare, även om resultatet var lika dåligt). Annars loopar vi över samma
+# sidor varje körning utan att göra något.
+bad = defaultdict(list)
+skipped_already = 0
+for txt_name, pages in raw.items():
+    stem = txt_name[:-4] if txt_name.endswith(".txt") else txt_name
+    stem_dir = out_dir / stem
+    for p in pages:
+        if (stem_dir / f"page-{p:03d}.json").exists():
+            skipped_already += 1
+        else:
+            bad[txt_name].append(p)
+
+total_bad = sum(len(v) for v in raw.values())
 if not bad:
-    print(f"Inga dåliga sidor (THRESHOLD={thr}).")
+    print(f"Inga nya dåliga sidor (THRESHOLD={thr}, "
+          f"{skipped_already}/{total_bad} redan försökta).")
     sys.exit(0)
 
-print(f"Hittade {sum(len(v) for v in bad.values())} dåliga sidor i {len(bad)} filer.")
+print(f"Hittade {sum(len(v) for v in bad.values())} nya dåliga sidor i "
+      f"{len(bad)} filer ({skipped_already} redan försökta hoppas över).")
 for txt_name, pages in bad.items():
     stem = txt_name[:-4] if txt_name.endswith(".txt") else txt_name
     pdf = in_dir / f"{stem}.pdf"
