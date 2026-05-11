@@ -30,17 +30,23 @@ def merge_text(original: str, page_updates: dict[int, str]) -> str:
 
     - ``original``: hela dokumentet, sidor separerade med ``\\f``.
     - ``page_updates``: ``{sidnummer (1-indexerat): ny text för den sidan}``.
-    - Sidnummer utanför originalets range ignoreras tyst.
+    - Sidnummer > originalets antal sidor expanderar originalet med tomma
+      sidor — Surya kör mot PDF:ens verkliga sidnumrering, så om text/-filen
+      saknar sidor (ocrmypdf/pdftotext missade dem) ska den växa, inte tappa
+      data tyst.
+    - Sidnummer <= 0 ignoreras (ogiltigt).
     - Tom ``original`` returneras oförändrad (inget att slå ihop mot).
     """
     if not original:
         return ""
     pages = original.split("\f")
-    n = len(pages)
-    for page_num, new_text in page_updates.items():
-        idx = page_num - 1
-        if 0 <= idx < n:
-            pages[idx] = new_text
+    valid_updates = {n: t for n, t in page_updates.items() if n >= 1}
+    if valid_updates:
+        max_page = max(valid_updates)
+        if max_page > len(pages):
+            pages.extend([""] * (max_page - len(pages)))
+    for page_num, new_text in valid_updates.items():
+        pages[page_num - 1] = new_text
     return "\f".join(pages)
 
 
@@ -84,9 +90,10 @@ def merge_one(stem: str, txt_dir: Path, pages_dir: Path) -> bool:
     original = txt_path.read_text(encoding="utf-8", errors="replace")
     merged = merge_text(original, updates)
 
-    n_pages = original.count("\f") + 1 if original else 0
-    out_of_range = sorted(n for n in updates if not (1 <= n <= n_pages))
-    merged_pages = sorted(n for n in updates if 1 <= n <= n_pages)
+    orig_n_pages = original.count("\f") + 1 if original else 0
+    invalid = sorted(n for n in updates if n < 1)
+    merged_pages = sorted(n for n in updates if n >= 1)
+    n_pages = max(orig_n_pages, max(merged_pages) if merged_pages else 0)
 
     text_changed = merged != original
     if text_changed:
@@ -94,7 +101,6 @@ def merge_one(stem: str, txt_dir: Path, pages_dir: Path) -> bool:
 
     # Cleanup körs även om texten redan var identisk — page-NNN.txt-filerna
     # är då redan mergade (sannolikt från en tidigare körning) och kan rensas.
-    # Out-of-range behålls för att inte tappa data om range-info är fel.
     removed = 0
     for n in merged_pages:
         for suffix in (".txt", ".png"):
@@ -111,8 +117,8 @@ def merge_one(stem: str, txt_dir: Path, pages_dir: Path) -> bool:
     if text_changed or removed:
         action = "uppdaterade" if text_changed else "rensade redan-mergade"
         msg = f"[merge_pages] {stem}: {action} {len(merged_pages)} av {n_pages} sidor"
-        if out_of_range:
-            msg += f" (ignorerade utanför range: {out_of_range})"
+        if invalid:
+            msg += f" (ignorerade ogiltiga sidnr: {invalid})"
         print(msg)
     return text_changed or removed > 0
 

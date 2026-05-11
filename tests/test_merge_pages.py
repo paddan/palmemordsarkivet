@@ -28,9 +28,16 @@ def test_replace_multiple_pages() -> None:
     assert merge_text("A.\fB.\fC.", {1: "X", 3: "Z"}) == "X\fB.\fZ"
 
 
-def test_page_out_of_range_ignored() -> None:
-    # Sidan 5 finns inte i ett 2-sidors dokument — ignoreras tyst, original behålls.
-    assert merge_text("A.\fB.", {5: "X"}) == "A.\fB."
+def test_page_beyond_range_pads_with_empty_pages() -> None:
+    # Surya OCR:ar sidor utifrån PDF:ens verkliga sidnumrering. Om text/-filen
+    # saknar sidor (ocrmypdf/pdftotext missade dem) ska merge_text expandera
+    # originalet med tomma sidor så Surya-texten hamnar rätt — annars tappar
+    # vi data tyst.
+    assert merge_text("A.\fB.", {5: "X"}) == "A.\fB.\f\f\fX"
+
+
+def test_page_beyond_range_multiple() -> None:
+    assert merge_text("A.\fB.", {3: "C", 5: "E"}) == "A.\fB.\fC\f\fE"
 
 
 def test_zero_and_negative_page_ignored() -> None:
@@ -108,17 +115,18 @@ def test_merge_one_removes_combined_txt(tmp_path: Path) -> None:
     assert not combined.exists()
 
 
-def test_merge_one_only_removes_merged_pages(tmp_path: Path) -> None:
-    # Sida 5 är utanför range (originalet har 3 sidor) — dess .txt ska INTE raderas
-    # eftersom den inte mergades in. Skydd mot att råka tappa data.
+def test_merge_one_pads_for_pages_beyond_original(tmp_path: Path) -> None:
+    # Originalet har 3 sidor men text_pages har page-005 — merge_one ska
+    # expandera text/ med tomma sidor så Surya-texten hamnar rätt.
     txt_dir, pages_dir, stem_dir = _setup(tmp_path)
     (stem_dir / "page-002.txt").write_text("NY", encoding="utf-8")
     (stem_dir / "page-005.txt").write_text("UTANFÖR", encoding="utf-8")
 
     merge_one("doc", txt_dir, pages_dir)
 
-    assert not (stem_dir / "page-002.txt").exists()  # mergad → raderad
-    assert (stem_dir / "page-005.txt").exists()  # ej mergad → behålls
+    assert (txt_dir / "doc.txt").read_text(encoding="utf-8") == "A.\fNY\fC.\f\fUTANFÖR"
+    assert not (stem_dir / "page-002.txt").exists()
+    assert not (stem_dir / "page-005.txt").exists()
 
 
 def test_merge_one_idempotent(tmp_path: Path) -> None:
