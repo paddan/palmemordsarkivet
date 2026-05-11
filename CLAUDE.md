@@ -217,7 +217,7 @@ PER_FILE_JOBS=2       # Threads per file (ocr_tesseract.sh)
    - **Surya** (`ocr.sh --redo`, optional): Fallback for low-scoring pages
      - Transformer-based (multilingual e5), slower but higher quality on degraded scans
      - Runs only on pages/files below threshold (default 50)
-     - **Per-dokument-merge**: efter att `ocr_pages.py` är klar med ett dokument kör `ocr.sh` automatiskt `merge_pages.merge_one` som ersätter motsvarande sidor i `text/<stem>.txt` (split på `\f`). Detta säkerställer att ingest fångar ändringarna via mtime.
+     - **Per-dokument-merge + cleanup**: efter att `ocr_pages.py` är klar med ett dokument kör `ocr.sh` automatiskt `merge_pages.merge_one` som (a) ersätter motsvarande sidor i `text/<stem>.txt` (split på `\f`) och (b) raderar `page-NNN.txt` + `page-NNN.png` för de mergade sidorna. `page-NNN.json` behålls som idempotens-markör för `ocr_pages.py` (om JSON finns → skippa OCR av sidan).
    - **Re-scoring**: Quality metrics updated after Surya pass
 
 3. **Ingest** (`ingest.py`):
@@ -284,7 +284,8 @@ Schema: vector (1024 dims), text, source, page, chunk_idx, mtime, plus metadata 
 
 - `merge_text(original: str, page_updates: dict[int, str]) → str`: Ren funktion — ersätter enstaka sidor (1-indexerat) i en `\f`-separerad textfil. Sidnummer utanför range ignoreras tyst. Testad i `tests/test_merge_pages.py`.
 - `find_updates(stem_dir: Path) → dict[int, str]`: Hittar `page-NNN.txt` i en text_pages-mapp.
-- `merge_one(stem, txt_dir, pages_dir) → bool`: Slå ihop en fil; returnerar True om filen ändrades.
+- `merge_one(stem, txt_dir, pages_dir) → bool`: Slå ihop en fil + städa. Returnerar True om något hände (text uppdaterad ELLER artefakter rensade). Idempotent: andra körningen hittar inga `page-NNN.txt` och gör inget.
+- Cleanup-policy: efter merge raderas `page-NNN.txt` + `page-NNN.png` för sidor inom range, plus eventuell legacy `text_pages/<stem>.txt`. `page-NNN.json` behålls. Out-of-range-sidor behålls (skydd mot dataförlust om range-info är fel).
 - CLI: `--stem <namn>` eller `--all`. Wrapper: `./merge_pages.sh`.
 
 ### `src/rag/ask.py`

@@ -236,18 +236,26 @@ av `ocr_tesseract.sh`:
 ```
 
 **Per-sida-merge av Surya-omkörningar:** `ocr.sh --redo --mode pages` skriver
-per-sida-text till `text_pages/<stem>/page-NNN.txt` och en (ofta ofullständig)
-combined-fil. Direkt efter att ett dokument är klart slår `ocr.sh` automatiskt
-ihop dessa sidor in i `text/<stem>.txt` — så ingest fångar ändringarna via
-mtime vid nästa körning.
+per-sida-text till `text_pages/<stem>/page-NNN.txt`. Direkt efter att ett
+dokument är klart slår `ocr.sh` automatiskt ihop dessa sidor in i
+`text/<stem>.txt` (en sida i taget, behåller övriga sidor) och raderar
+`page-NNN.txt` + `page-NNN.png`. Kvar i `text_pages/<stem>/` blir bara
+lättviktiga `page-NNN.json` (kvalitetsmetadata) som fungerar som idempotens-
+markör för nya körningar av `ocr.sh --redo --mode pages`.
 
-För befintliga text_pages-mappar (som inte mergades automatiskt) finns en
-engångsåtgärd:
+Resultat: ingest fångar ändringarna via mtime, och `text_pages/` ackumulerar
+inte stort innehåll.
+
+För befintliga text_pages-mappar (som inte mergades/städades automatiskt)
+finns en engångsåtgärd:
 
 ```bash
-./merge_pages.sh --all            # slå ihop alla befintliga text_pages/<stem>/
+./merge_pages.sh --all            # slå ihop + städa alla text_pages/<stem>/
 ./merge_pages.sh --stem "1 — PM …"  # bara en specifik fil
 ```
+
+Båda kommandona är idempotenta — kör om utan oro, de gör bara något om det
+finns nya `page-NNN.txt` att slå in.
 
 - Chunkar `text/*.txt` (800 tecken med 150 teckens överlapp, bryter på radslut).
 - Embeddar lokalt med `intfloat/multilingual-e5-large` (svenska duger bra).

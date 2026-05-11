@@ -233,7 +233,6 @@ def main() -> int:
             print("--pages ska vara kommaseparerade heltal", file=sys.stderr)
             return 1
 
-    page_texts: dict[int, str] = {}
     page_lines: dict[int, list[dict]] = {}
     want_pdf_patch = (
         args.engine == "surya"
@@ -246,22 +245,17 @@ def main() -> int:
     for page_num, image in render_pages(pdf, args.dpi):
         n_total += 1
         if only_pages is not None and page_num not in only_pages:
-            # Behåll möjligheten att läsa befintlig text för slutsamlad txt
-            existing = stem_dir / f"page-{page_num:03d}.txt"
-            if existing.exists():
-                page_texts[page_num] = existing.read_text(
-                    encoding="utf-8", errors="replace"
-                )
             continue
 
         txt_path = stem_dir / f"page-{page_num:03d}.txt"
         json_path = stem_dir / f"page-{page_num:03d}.json"
         png_path = stem_dir / f"page-{page_num:03d}.png"
 
-        if txt_path.exists() and txt_path.stat().st_size > 0:
-            page_texts[page_num] = txt_path.read_text(
-                encoding="utf-8", errors="replace"
-            )
+        # Idempotens-markör: .json. Skapas alltid sista efter lyckad OCR (rad
+        # nedan), så om den finns vet vi att sidan redan körts.
+        # Per-sida-text mergas direkt in i text/<stem>.txt av merge_pages och
+        # raderas där — vi bygger ingen combined-fil längre.
+        if json_path.exists():
             n_skipped += 1
             continue
 
@@ -298,17 +292,12 @@ def main() -> int:
             **scored,
         }
         json_path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
-        page_texts[page_num] = text
         n_done += 1
         print(f"  [{pdf.stem} p{page_num:03d}] {len(text):5d} tecken "
               f"score={scored.get('score', 0)}", flush=True)
 
-    # Slutsamla
-    combined = out_dir / f"{pdf.stem}.txt"
-    if page_texts:
-        ordered = [page_texts[i] for i in sorted(page_texts.keys())]
-        combined.write_text("\f".join(ordered), encoding="utf-8")
-
+    # Slutsamla — combined-fil i text_pages/ skapas inte längre. Per-sida-text
+    # mergas direkt in i text/<stem>.txt av merge_pages (anropas från ocr.sh).
     print(f"Klart {pdf.stem}: {n_done} OCR:ade, {n_skipped} hoppade, "
           f"{n_total} sidor totalt.")
 

@@ -61,12 +61,18 @@ def find_updates(stem_dir: Path) -> dict[int, str]:
 
 
 def merge_one(stem: str, txt_dir: Path, pages_dir: Path) -> bool:
-    """Slå ihop för en fil. Returnerar True om filen uppdaterades."""
+    """Slå ihop för en fil. Returnerar True om filen uppdaterades.
+
+    Efter lyckad merge raderas per-sida-artefakter som inte längre behövs:
+    ``page-NNN.txt`` (innehållet finns i text/) och ``page-NNN.png`` (kan
+    re-renderas från PDF). ``page-NNN.json`` behålls som idempotens-markör
+    för ``ocr_pages.py`` och som spårbarhet. Eventuell legacy-combined
+    ``text_pages/<stem>.txt`` raderas också.
+    """
     txt_path = txt_dir / f"{stem}.txt"
     stem_dir = pages_dir / stem
 
     if not txt_path.exists():
-        # Inget original att slå ihop mot — möjligt om Tesseract aldrig körts.
         print(f"[merge_pages] {stem}: saknar {txt_path}, hoppar över",
               file=sys.stderr)
         return False
@@ -78,19 +84,37 @@ def merge_one(stem: str, txt_dir: Path, pages_dir: Path) -> bool:
     original = txt_path.read_text(encoding="utf-8", errors="replace")
     merged = merge_text(original, updates)
 
-    if merged == original:
-        return False
-
     n_pages = original.count("\f") + 1 if original else 0
     out_of_range = sorted(n for n in updates if not (1 <= n <= n_pages))
-    applied = len(updates) - len(out_of_range)
+    merged_pages = sorted(n for n in updates if 1 <= n <= n_pages)
 
-    txt_path.write_text(merged, encoding="utf-8")
-    msg = f"[merge_pages] {stem}: uppdaterade {applied} av {n_pages} sidor"
-    if out_of_range:
-        msg += f" (ignorerade utanför range: {out_of_range})"
-    print(msg)
-    return True
+    text_changed = merged != original
+    if text_changed:
+        txt_path.write_text(merged, encoding="utf-8")
+
+    # Cleanup körs även om texten redan var identisk — page-NNN.txt-filerna
+    # är då redan mergade (sannolikt från en tidigare körning) och kan rensas.
+    # Out-of-range behålls för att inte tappa data om range-info är fel.
+    removed = 0
+    for n in merged_pages:
+        for suffix in (".txt", ".png"):
+            p = stem_dir / f"page-{n:03d}{suffix}"
+            if p.exists():
+                p.unlink()
+                if suffix == ".txt":
+                    removed += 1
+    legacy_combined = pages_dir / f"{stem}.txt"
+    if legacy_combined.exists():
+        legacy_combined.unlink()
+        removed += 1
+
+    if text_changed or removed:
+        action = "uppdaterade" if text_changed else "rensade redan-mergade"
+        msg = f"[merge_pages] {stem}: {action} {len(merged_pages)} av {n_pages} sidor"
+        if out_of_range:
+            msg += f" (ignorerade utanför range: {out_of_range})"
+        print(msg)
+    return text_changed or removed > 0
 
 
 def main() -> int:
