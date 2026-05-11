@@ -130,8 +130,9 @@ All scripts are idempotent and can be re-run safely. They skip already-completed
 ./quality.sh --per-page      # Also write quality_pages.jsonl (per-page scores)
 
 # 3. Build/update vector index
-./ingest.sh [--rebuild]      # Index text/ → LanceDB
+./ingest.sh [--rebuild]      # Index text/ → LanceDB (mtime-detektering på)
 ./ingest.sh --limit 100      # Test with subset
+./ingest.sh --reindex-since 2026-05-01  # tvinga om för legacy-rader modifierade efter datum
 
 # 4. Query the archive
 ./ask.sh "Din fråga här"     # Single query
@@ -218,7 +219,10 @@ PER_FILE_JOBS=2       # Threads per file (ocr_tesseract.sh)
    - Chunks with 800-char size, 150-char overlap (breaks on line/space boundaries)
    - Filters out low-quality chunks (<55% alphanumeric)
    - Embeds using `intfloat/multilingual-e5-large` (1024-dim vectors)
-   - Stores in LanceDB with metadata: `nr`, `titel`, `sida`, `anmärkning`
+   - Stores in LanceDB with metadata: `nr`, `titel`, `sida`, `anmärkning`, **`mtime`** (unix-tid när `.txt` skapades)
+   - Detekterar ändrade filer: vid varje körning jämförs `.txt`-filens mtime mot lagrad mtime; nyare → re-ingest (delete + add).
+   - Legacy-rader (utan känd mtime, t.ex. indexerade innan mtime-tracking) har `mtime=0.0`; de re-indexeras inte automatiskt. Använd `--reindex-since <tid>` för att tvinga om dem.
+   - Auto-migrering: tabeller utan `mtime`-kolumn får den tillagd vid första körning efter uppgradering.
    - Creates FTS (full-text search / BM25) index on `text` column
    - Writes `unusable.txt` if any file produces zero chunks
 
@@ -265,8 +269,10 @@ Scoring formula: 100 - penalties for junk, short words, long words, digit-mixing
 - `chunk_text(text: str, size: int, overlap: int) → list[tuple]`: Smart chunking (prefers line breaks)
 - `parse_filename(stem: str) → dict`: Extracts metadata from filename pattern
 - `is_useful(chunk: str) → bool`: Filters chunks with <55% alphanumeric
+- `should_reingest(stored_mtime, disk_mtime, reindex_since) → bool`: Re-index-beslut per fil (testat i `tests/test_reingest.py`)
+- `parse_reindex_since(value: str) → float`: Tolkar `--reindex-since` (ISO 8601 eller unix-sekunder)
 
-Schema: vector (1024 dims), text, source, page, chunk_idx, plus metadata fields (nr, titel, etc.).
+Schema: vector (1024 dims), text, source, page, chunk_idx, mtime, plus metadata fields (nr, titel, etc.).
 
 ### `src/rag/ask.py`
 

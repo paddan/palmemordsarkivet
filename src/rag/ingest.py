@@ -10,6 +10,7 @@ Kör:
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import math
 import os
 import re
@@ -89,6 +90,42 @@ def chunk_text(text: str, size: int, overlap: int) -> list[tuple[int, int, str]]
     return chunks
 
 
+def parse_reindex_since(value: str) -> float:
+    """Tolka ``--reindex-since`` som ISO 8601 eller unix-sekunder.
+
+    Returnerar unix-timestamp (float). Höjer ValueError vid ogiltigt format.
+    """
+    try:
+        return float(value)
+    except ValueError:
+        pass
+    # ISO 8601 — acceptera både med och utan tidszon. Naiva tider tolkas som lokal tid.
+    parsed = dt.datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        parsed = parsed.astimezone()
+    return parsed.timestamp()
+
+
+def should_reingest(
+    stored_mtime: float,
+    disk_mtime: float,
+    reindex_since: float | None,
+) -> bool:
+    """Avgör om en redan indexerad fil ska re-indexeras.
+
+    - ``stored_mtime`` är mtime som lagrats vid indexering (0.0 = legacy-rad
+      från innan mtime-tracking infördes; vi vet inte när den indexerades).
+    - ``disk_mtime`` är aktuell mtime på .txt-filen.
+    - ``reindex_since`` (om satt) tvingar re-index för filer modifierade efter
+      denna tidpunkt — används för att täcka legacy-rader vid en känd re-OCR-våg.
+    """
+    if stored_mtime == 0:
+        if reindex_since is not None and disk_mtime > reindex_since:
+            return True
+        return False
+    return disk_mtime > stored_mtime
+
+
 def is_useful(chunk: str) -> bool:
     if len(chunk) < 80:
         return False
@@ -121,7 +158,20 @@ def main() -> int:
                                            str(ROOT / "unusable.txt")),
                     help="skriv filer som producerade noll användbara chunks "
                          "till denna fil (default: unusable.txt)")
+    ap.add_argument("--reindex-since",
+                    help="tvinga re-index av filer modifierade efter denna tid "
+                         "(ISO 8601 t.ex. '2026-05-01' eller unix-sekunder). "
+                         "Påverkar bara legacy-rader utan känd mtime — tracked "
+                         "filer detekteras alltid automatiskt via mtime.")
     args = ap.parse_args()
+
+    reindex_since: float | None = None
+    if args.reindex_since:
+        try:
+            reindex_since = parse_reindex_since(args.reindex_since)
+        except ValueError as e:
+            print(f"Ogiltigt --reindex-since: {e}", file=sys.stderr)
+            return 2
 
     text_dir = Path(args.text_dir)
     db_dir = Path(args.db_dir)
@@ -138,6 +188,7 @@ def main() -> int:
         pa.field("source", pa.string()),
         pa.field("page", pa.int32()),
         pa.field("chunk_idx", pa.int32()),
+        pa.field("mtime", pa.float64()),
         *[pa.field(f, pa.string()) for f in NAME_FIELDS],
     ])
 
@@ -145,17 +196,27 @@ def main() -> int:
         db.drop_table(TABLE)
     if TABLE in db.list_tables().tables:
         table = db.open_table(TABLE)
+        # Migration: lägg till mtime-kolumn om den saknas (legacy-tabell).
+        if "mtime" not in table.schema.names:
+            print("Migrerar tabell: lägger till mtime-kolumn (default 0.0).")
+            table.add_columns({"mtime": "cast(0.0 as double)"})
         try:
-            # Effektivt: lance-scanner laddar bara source utan att läsa vektorer
-            already = set(
-                table.to_lance().to_table(columns=["source"]).column("source").to_pylist()
-            )
+            # Effektivt: lance-scanner laddar bara source+mtime utan att läsa vektorer.
+            arrow_tbl = table.to_lance().to_table(columns=["source", "mtime"])
+            sources = arrow_tbl.column("source").to_pylist()
+            mtimes = arrow_tbl.column("mtime").to_pylist()
         except ImportError:
-            # lance inte installerat (vanligt på Python 3.14): full scan via pandas
-            already = set(table.to_pandas()["source"].tolist())
+            df = table.to_pandas()
+            sources = df["source"].tolist()
+            mtimes = df["mtime"].tolist()
+        # En fil har samma mtime för alla sina chunks; max() är defensivt mot blandning.
+        already: dict[str, float] = {}
+        for s, m in zip(sources, mtimes):
+            if s not in already or m > already[s]:
+                already[s] = m
     else:
         table = db.create_table(TABLE, schema=schema)
-        already = set()
+        already = {}
 
     print(f"Laddar embedding-modell {args.model} (första gången tar några minuter)…")
     model = SentenceTransformer(args.model)
@@ -164,14 +225,30 @@ def main() -> int:
     if args.limit:
         files = files[: args.limit]
 
-    todo = [f for f in files if f.name not in already]
-    print(f"Indexerar {len(todo)} av {len(files)} filer (skippar {len(files) - len(todo)} redan indexerade).")
+    # Klassificera varje fil: ny, re-indexera, eller skip.
+    todo: list[tuple[Path, float, bool]] = []  # (path, disk_mtime, is_reingest)
+    skipped = 0
+    for f in files:
+        disk_mtime = f.stat().st_mtime
+        if f.name not in already:
+            todo.append((f, disk_mtime, False))
+        elif should_reingest(already[f.name], disk_mtime, reindex_since):
+            todo.append((f, disk_mtime, True))
+        else:
+            skipped += 1
+
+    new_count = sum(1 for _, _, r in todo if not r)
+    reindex_count = sum(1 for _, _, r in todo if r)
+    print(
+        f"Indexerar {len(todo)} av {len(files)} filer "
+        f"(nya: {new_count}, re-index: {reindex_count}, skippar: {skipped})."
+    )
 
     t0 = time.monotonic()
     total_chunks = 0
     unusable: list[str] = []
 
-    for i, f in enumerate(todo, 1):
+    for i, (f, disk_mtime, is_reingest) in enumerate(todo, 1):
         meta = parse_filename(f.stem)
         try:
             raw = f.read_text(encoding="utf-8", errors="replace")
@@ -190,6 +267,7 @@ def main() -> int:
                     "source": f.name,
                     "page": page_idx,
                     "chunk_idx": chunk_idx,
+                    "mtime": disk_mtime,
                     **meta,
                 })
                 chunk_idx += 1
@@ -215,14 +293,19 @@ def main() -> int:
         for r, v in zip(rows, embeddings):
             r["vector"] = v.tolist()
 
+        if is_reingest:
+            # Escape ev. apostrofer i filnamnet för SQL-likt predikat.
+            safe_name = f.name.replace("'", "''")
+            table.delete(f"source = '{safe_name}'")
         table.add(rows)
         total_chunks += len(rows)
 
         elapsed = time.monotonic() - t0
         rate = i / elapsed if elapsed else 0
         eta = (len(todo) - i) / rate if rate else 0
+        tag = "↻" if is_reingest else "+"
         print(
-            f"  [{i:>4}/{len(todo)}] {f.name[:60]:60s} "
+            f"  [{i:>4}/{len(todo)}] {tag} {f.name[:58]:58s} "
             f"+{len(rows):>3} chunks (totalt {total_chunks}, eta {int(eta // 60)}m{int(eta % 60):02d}s)"
         )
 

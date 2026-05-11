@@ -229,14 +229,21 @@ av `ocr_tesseract.sh`:
 ### 3. Indexera i vektor-DB
 
 ```bash
-./ingest.sh                       # nya filer
+./ingest.sh                       # nya + ändrade filer (mtime-detektering)
 ./ingest.sh --rebuild             # börja om från noll
+./ingest.sh --reindex-since 2026-05-01  # tvinga om för gamla filer modifierade efter datum
 ./ingest.sh --help                # alla flaggor
 ```
 
 - Chunkar `text/*.txt` (800 tecken med 150 teckens överlapp, bryter på radslut).
 - Embeddar lokalt med `intfloat/multilingual-e5-large` (svenska duger bra).
-- Lagrar i lokal LanceDB med metadata (Nr, Titel, Sida, Anmärkning).
+- Lagrar i lokal LanceDB med metadata (Nr, Titel, Sida, Anmärkning) **och `mtime`**
+  så att ändrade `.txt`-filer (t.ex. efter `ocr.sh --redo`) detekteras automatiskt
+  och re-indexeras vid nästa körning.
+- För filer som indexerades innan mtime-tracking infördes saknas mtime i tabellen
+  (lagras som `0.0`). Använd `--reindex-since <tid>` för att tvinga re-index av
+  legacy-rader vars `.txt` modifierats efter en känd tidpunkt — t.ex. när du
+  precis kört en re-OCR-våg.
 - Filtrerar bort OCR-skräp (chunks med <55 % alfanumeriska tecken).
 - Idempotent. Första körningen laddar ned ~1.1 GB modell.
 
@@ -415,7 +422,10 @@ bash via `>> "$ROOT/errors.log"`. Append-only, idempotent.
 
 Alla fyra steg är idempotenta — kör om utan oro. De hoppar över redan färdigt
 arbete (download: `files/<namn>.pdf` finns; ocr: `text/<namn>.txt` finns;
-ingest: `source` redan i tabellen). Avbrutna körningar fortsätter där de slutade.
+ingest: `source` redan i tabellen *och* `.txt`-filens mtime är ≤ den lagrade).
+Avbrutna körningar fortsätter där de slutade. När en `.txt` skrivs om av t.ex.
+`ocr.sh --redo` upptäcker `ingest.sh` det automatiskt och re-indexerar bara den
+filen (delete + add).
 
 ## Licens
 

@@ -25,6 +25,8 @@ Skickas vidare till src/rag/ingest.py (alla okända flaggor passerar igenom):
   --chunk-chars N         tecken per chunk (default: 800)
   --chunk-overlap N       överlapp mellan chunks (default: 150)
   --model NAME            embedding-modell (default: intfloat/multilingual-e5-large)
+  --reindex-since TS      tvinga re-index av legacy-filer modifierade efter TS
+                          (ISO 8601 t.ex. '2026-05-01' eller unix-sekunder)
 
 För full src/rag/ingest.py-hjälp: ./ingest.sh -- --help
 EOF
