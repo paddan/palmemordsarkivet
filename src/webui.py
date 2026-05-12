@@ -60,7 +60,8 @@ def load():
 def build_nr_to_pdf() -> dict[str, Path]:
     """Bygg nr → PDF-sökväg från filsystemet (ocr/ föredras framför files/)."""
     mapping: dict[str, Path] = {}
-    for d in ("files", "ocr"):  # ocr/ skriver över files/ → föredras
+    # ocr/ skriver över files/ och files_wpu/ → föredras (har OCR-textlager)
+    for d in ("files", "files_wpu", "ocr"):
         folder = ROOT / d
         if not folder.is_dir():
             continue
@@ -74,7 +75,7 @@ def build_nr_to_pdf() -> dict[str, Path]:
 def find_pdf(source_txt: str) -> Path | None:
     """Hitta original-PDF för en chunk. Föredrar ocr/ (sökbar)."""
     stem = source_txt[:-4] if source_txt.endswith(".txt") else source_txt
-    for d in ("ocr", "files"):
+    for d in ("ocr", "files", "files_wpu"):
         p = ROOT / d / f"{stem}.pdf"
         if p.is_file():
             return p
