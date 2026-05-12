@@ -304,9 +304,14 @@ def main() -> int:
     if want_pdf_patch and page_lines:
         ocr_pdf = Path(args.ocr_dir) / f"{pdf.stem}.pdf"
         if not ocr_pdf.exists():
-            print(f"  [pdf-patch] {ocr_pdf} finns inte — hoppar.",
-                  file=sys.stderr)
-        else:
+            # Wpu-PDF:er (och andra som inte gått genom ocrmypdf) saknar
+            # motsvarande fil i ocr/. Kopiera källan dit som utgångspunkt så
+            # patchen får något att skriva till — wpu-PDF:er har redan ett
+            # textlager från wpu.nu, vi skriver bara över de patchade sidorna.
+            ocr_pdf.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(pdf, ocr_pdf)
+            print(f"  [pdf-patch] kopierade {pdf.name} → {ocr_pdf.parent.name}/")
+        if ocr_pdf.exists():
             try:
                 n = update_pdf_text_layer(
                     ocr_pdf, ocr_pdf, page_lines, args.dpi
