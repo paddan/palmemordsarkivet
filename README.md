@@ -104,7 +104,7 @@ nohup ./download.sh > log.txt 2>&1 &
 ./download_wpu.sh --dry-run  # lista utan att ladda ner
 ```
 
-`ocr.sh` kör automatiskt `merge_wpu.sh` i slutet om `files_wpu/` finns. Skriptet jämför textkvaliteten (0–100-poäng) per fil och väljer det bästa alternativet:
+`ocr.sh` kör automatiskt `merge_wpu.sh` direkt efter Tesseract-steget om `files_wpu/` finns, så att wpu-text också kan få Surya-behandling om kvaliteten är låg. Skriptet jämför textkvaliteten (0–100-poäng) per fil och väljer det bästa alternativet:
 
 | wpu-text      | Match i palme? | Utfall                      |
 | ------------- | -------------- | --------------------------- |

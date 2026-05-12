@@ -24,13 +24,14 @@ Användning: $(basename "$0") [flaggor]
 
 Default-läge (full pipeline):
   1. ./ocr_tesseract.sh                       # Tesseract på alla nya filer
-  2. ./quality.sh --per-page                  # quality.csv + quality_pages.jsonl
-  3. ./ocr.sh --redo --mode pages             # Surya på sidor under tröskeln
-  4. ./quality.sh                             # uppdaterad quality.csv
-  5. ./merge_wpu.sh                           # wpu.nu-text vs palme, bäst vinner
+  2. ./merge_wpu.sh                           # wpu.nu-text vs palme, bäst vinner
                                               # (körs bara om files_wpu/ finns)
+  3. ./quality.sh --per-page                  # quality.csv + quality_pages.jsonl
+  4. ./ocr.sh --redo --mode pages             # Surya på sidor under tröskeln
+                                              # (inkl. wpu-sidor om kvaliteten är låg)
+  5. ./quality.sh                             # uppdaterad quality.csv
 
-Steg 3 hoppas över om --skip-redo eller om Surya inte är installerat.
+Steg 4 hoppas över om --skip-redo eller om Surya inte är installerat.
 
 Flaggor (default visas inom parentes):
 
@@ -122,32 +123,34 @@ step() {
 if [ "$REDO_ONLY" = "0" ]; then
   t0=$(date +%s)
 
-  step "1/4  Tesseract-OCR (./ocr_tesseract.sh --jobs $JOBS)"
+  step "1/5  Tesseract-OCR (./ocr_tesseract.sh --jobs $JOBS)"
   ./ocr_tesseract.sh --jobs "$JOBS" --per-file-jobs "$PER_FILE_JOBS"
 
-  step "2/4  Kvalitetsbedömning (./quality.sh --per-page)"
+  if [ -d "$ROOT/files_wpu" ]; then
+    step "2/5  Sammanfoga wpu.nu-text (./merge_wpu.sh)"
+    # Måste köras före kvalitetssteget så att wpu-text också kan få
+    # Surya-behandling om den är dålig.
+    ./merge_wpu.sh
+  fi
+
+  step "3/5  Kvalitetsbedömning (./quality.sh --per-page)"
   ./quality.sh --per-page
 
   if [ "$SKIP_REDO" = "1" ]; then
     echo
-    echo "===== Hoppar över steg 3 (--skip-redo) ====="
+    echo "===== Hoppar över steg 4 (--skip-redo) ====="
   elif ! "$ROOT/.venv/bin/python" -c "import surya" 2>/dev/null; then
     echo
-    echo "===== Hoppar över steg 3 (Surya inte installerat) ====="
+    echo "===== Hoppar över steg 4 (Surya inte installerat) ====="
     echo "Installera med:  .venv/bin/pip install surya-ocr 'transformers<5'"
   else
-    step "3/4  Om-OCR med Surya på sidor < $THRESHOLD (./ocr.sh --redo --mode pages)"
+    step "4/5  Om-OCR med Surya på sidor < $THRESHOLD (./ocr.sh --redo --mode pages)"
     redo_extra=()
     [ "$NO_UPDATE_PDF" = "1" ] && redo_extra+=(--no-update-pdf)
     ./ocr.sh --redo --mode pages --threshold "$THRESHOLD" --jobs "$JOBS" --per-file-jobs "$PER_FILE_JOBS" ${redo_extra[@]+"${redo_extra[@]}"}
 
-    step "4/4  Uppdaterad kvalitetsbedömning"
+    step "5/5  Uppdaterad kvalitetsbedömning"
     ./quality.sh
-  fi
-
-  if [ -d "$ROOT/files_wpu" ]; then
-    step "5/5  Sammanfoga wpu.nu-text (./merge_wpu.sh)"
-    ./merge_wpu.sh
   fi
 
   t1=$(date +%s)
