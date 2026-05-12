@@ -104,14 +104,16 @@ nohup ./download.sh > log.txt 2>&1 &
 ./download_wpu.sh --dry-run  # lista utan att ladda ner
 ```
 
-`ocr.sh` kör automatiskt `merge_wpu.sh` direkt efter Tesseract-steget om `files_wpu/` finns, så att wpu-text också kan få Surya-behandling om kvaliteten är låg. Skriptet jämför textkvaliteten (0–100-poäng) per fil och väljer det bästa alternativet:
+Wpu-PDF:er får exakt samma OCR-behandling som palme-PDF:er: `ocr.sh` kör `ocr_tesseract.sh` på `files_wpu/` också så varje wpu-fil får sin egen `text/<stem>.txt` och `ocr/<stem>.pdf`. Sen kör `merge_wpu.sh` som jämför kvalitetspoäng för matchande dokument-ID och **raderar förlorarens** text- och ocr-filer:
 
-| wpu-text      | Match i palme? | Utfall                      |
-| ------------- | -------------- | --------------------------- |
-| OK (≥ 30 p)   | Ja             | Bäst vinner (margin 5 p)    |
-| Dålig (< 30 p)| Ja             | Behåll palme-texten         |
-| OK            | Nej            | Skriv som ny fil i `text/`  |
-| Dålig         | Nej            | OCR-skanna wpu-filen        |
+| Jämförelse (margin 5 p)   | Utfall                                       |
+| ------------------------- | -------------------------------------------- |
+| wpu vinner                | palme-versionens `text/`+`ocr/` raderas      |
+| palme vinner              | wpu-versionens `text/`+`ocr/` raderas        |
+| inom margin (oavgjort)    | båda behålls                                 |
+| ingen matchning           | wpu står ensam, inget händer                 |
+
+Surya-steget körs sen mot kvarvarande `text/`-filer och hanterar palme- och wpu-filer identiskt.
 
 ```bash
 ./merge_wpu.sh             # kör om manuellt (parallellt, default cpu_count)

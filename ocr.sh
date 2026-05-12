@@ -23,12 +23,13 @@ usage() {
 Användning: $(basename "$0") [flaggor]
 
 Default-läge (full pipeline):
-  1. ./ocr_tesseract.sh                       # Tesseract på alla nya filer
-  2. ./merge_wpu.sh                           # wpu.nu-text vs palme, bäst vinner
-                                              # (körs bara om files_wpu/ finns)
+  1. ./ocr_tesseract.sh                       # Tesseract på files/
+  1b./ocr_tesseract.sh --in files_wpu         # Tesseract på files_wpu/ (om finns)
+  2. ./merge_wpu.sh                           # jämför wpu vs palme; raderar
+                                              # förloraren (om files_wpu/ finns)
   3. ./quality.sh --per-page                  # quality.csv + quality_pages.jsonl
   4. ./ocr.sh --redo --mode pages             # Surya på sidor under tröskeln
-                                              # (inkl. wpu-sidor om kvaliteten är låg)
+                                              # (palme + kvarvarande wpu)
   5. ./quality.sh                             # uppdaterad quality.csv
 
 Steg 4 hoppas över om --skip-redo eller om Surya inte är installerat.
@@ -127,9 +128,12 @@ if [ "$REDO_ONLY" = "0" ]; then
   ./ocr_tesseract.sh --jobs "$JOBS" --per-file-jobs "$PER_FILE_JOBS"
 
   if [ -d "$ROOT/files_wpu" ]; then
+    # Wpu-filer får samma behandling som palme-filer: tesseract → text/ + ocr/.
+    # Sen jämför merge_wpu och raderar förlorarens text/+ocr/-filer.
+    step "1b/5  Tesseract-OCR av wpu-PDF:er"
+    ./ocr_tesseract.sh --in "$ROOT/files_wpu" --jobs "$JOBS" --per-file-jobs "$PER_FILE_JOBS"
+
     step "2/5  Sammanfoga wpu.nu-text (./merge_wpu.sh)"
-    # Måste köras före kvalitetssteget så att wpu-text också kan få
-    # Surya-behandling om den är dålig.
     ./merge_wpu.sh
   fi
 

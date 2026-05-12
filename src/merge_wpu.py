@@ -1,39 +1,30 @@
 #!/usr/bin/env python3
-"""
-Slår samman text från wpu.nu-filer med palmemordsarkivet.
+"""Jämför wpu-text mot palme-text och behåll bästa versionen.
 
-För varje PDF i files_wpu/:
-  1. Extraherar text med pdftotext och bedömer kvalitet.
-  2. Söker matchande palme-textfil i text/ via dokument-ID.
+Båda sidor måste ha gått genom ``ocr_tesseract.sh`` så att ``text/<stem>.txt``
+och ``ocr/<stem>.pdf`` finns för varje PDF i ``files/`` respektive
+``files_wpu/``. Den här modulen jämför poäng för matchande dokument-ID och
+raderar förlorarens text/+ocr/-filer.
 
-  Utfall beroende på kvalitet och matchning:
+Tre utfall per wpu-fil:
+  - vinner mot matchande palme  → palmes text/+ocr/ raderas (``better``)
+  - förlorar mot matchande palme → wpus text/+ocr/ raderas  (``lost``)
+  - inom margin / saknar match   → båda behålls               (``kept``/``new``)
 
-  ┌────────────────────┬──────────────────────────────────────────────────┐
-  │                    │ Match i palme?                                   │
-  │                    ├───────────────────────┬──────────────────────────┤
-  │                    │ Ja                    │ Nej                      │
-  ├────────────────────┼───────────────────────┼──────────────────────────┤
-  │ wpu text OK        │ Jämför, bäst vinner   │ Skriv som ny fil         │
-  │ wpu text dålig     │ Behåll palme-text     │ OCR-skanna wpu-filen     │
-  └────────────────────┴───────────────────────┴──────────────────────────┘
-
-Extraherad wpu-text cachas i text_wpu/ med .done-marker (idempotent).
-Filerna processas parallellt över en process-pool (--jobs).
+Idempotent via ``text_wpu/<stem>.done``-marker.
 
 Kör:
-    python merge_wpu.py            # kör merging
-    python merge_wpu.py --dry-run  # visa vad som skulle hända
-    python merge_wpu.py --rebuild  # kör om alla, ignorera .done-marker
-    python merge_wpu.py --jobs 8   # antal parallella processer
+    python merge_wpu.py            # standardkörning
+    python merge_wpu.py --dry-run  # visa beslut utan att radera
+    python merge_wpu.py --rebuild  # ignorera .done-markers
+    python merge_wpu.py --jobs 8   # parallella processer
 """
 
 from __future__ import annotations
 
 import argparse
 import os
-import subprocess
 import sys
-import tempfile
 from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
@@ -41,70 +32,26 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 FILES_WPU = ROOT / "files_wpu"
 TEXT_DIR = ROOT / "text"
+OCR_DIR = ROOT / "ocr"
 TEXT_WPU = ROOT / "text_wpu"
-TESSDATA = ROOT / "tessdata"
 
 sys.path.insert(0, str(ROOT / "src"))
 from download_wpu import palme_id_keys, wpu_id_keys  # noqa: E402
 from quality import has_hunspell_swe, score_text  # noqa: E402
 
-DEFAULT_MARGIN = 5      # wpu måste vara minst N poäng bättre för att ersätta palme
-DEFAULT_OCR_THR = 30    # under detta anses wpu-texten oanvändbar → OCR behövs
+DEFAULT_MARGIN = 5  # wpu måste vara minst N poäng bättre för att vinna
 
-# Worker-globaler — sätts en gång per process via _init_worker så att den stora
-# palme-kartan inte pickleas på nytt för varje fil.
 _PALME_MAP: dict[tuple, list[Path]] | None = None
 _USE_HUNSPELL: bool = False
 
 
-def _pdftotext(pdf: Path, layout: bool = False) -> str:
-    """Extrahera text ur PDF. layout=False för kvalitetscheck (undviker whitespace-inflation)."""
-    cmd = ["pdftotext", "-q"]
-    if layout:
-        cmd.append("-layout")
-    cmd += [str(pdf), "-"]
-    try:
-        r = subprocess.run(cmd, capture_output=True, text=True, errors="replace")
-        return r.stdout
-    except Exception:
-        return ""
-
-
-def _ocr_pdf(pdf: Path, dest_txt: Path, per_file_jobs: int = 2) -> bool:
-    """Kör ocrmypdf på en wpu-fil som saknar läsbart textlager.
-    Försöker med --clean, sedan utan om det misslyckas.
-    Returnerar True om det gick bra.
-    """
-    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
-        tmp_pdf = Path(tmp.name)
-    try:
-        base_cmd = [
-            "ocrmypdf",
-            "-l", "swe",
-            "--jobs", str(per_file_jobs),
-            "--optimize", "0",
-            "--quiet",
-            "--skip-text",
-            "--rotate-pages",
-            "--deskew",
-            "--tesseract-pagesegmode", "6",
-        ]
-        cfg = TESSDATA / "tesseract.config"
-        if cfg.exists():
-            base_cmd += ["--tesseract-config", str(cfg)]
-        uw = TESSDATA / "swe.user-words"
-        if uw.exists():
-            base_cmd += ["--user-words", str(uw)]
-
-        for attempt_flags in ([["--clean"]], [[]]): # försök 1: med --clean; försök 2: utan
-            cmd = base_cmd + attempt_flags[0] + [str(pdf), str(tmp_pdf)]
-            if subprocess.run(cmd, capture_output=True).returncode == 0:
-                text = _pdftotext(tmp_pdf, layout=True)
-                dest_txt.write_text(text, encoding="utf-8")
-                return True
-        return False
-    finally:
-        tmp_pdf.unlink(missing_ok=True)
+def decide(wpu_score: float, palme_score: float, margin: float) -> str:
+    """Bestäm utfall för ett wpu/palme-par. Returnerar 'wpu', 'palme' eller 'tie'."""
+    if wpu_score > palme_score + margin:
+        return "wpu"
+    if palme_score > wpu_score + margin:
+        return "palme"
+    return "tie"
 
 
 def build_palme_key_map(text_dir: Path) -> dict[tuple, list[Path]]:
@@ -122,28 +69,31 @@ def _init_worker(palme_map: dict[tuple, list[Path]], use_hunspell: bool) -> None
     _USE_HUNSPELL = use_hunspell
 
 
+def _delete_pair(text_path: Path, ocr_dir: Path, dry_run: bool) -> None:
+    if dry_run:
+        return
+    text_path.unlink(missing_ok=True)
+    (ocr_dir / f"{text_path.stem}.pdf").unlink(missing_ok=True)
+
+
 def _process_one(
     pdf_path: str,
     text_dir_str: str,
+    ocr_dir_str: str,
     text_wpu_str: str,
     dry_run: bool,
     rebuild: bool,
     margin: float,
-    ocr_threshold: float,
-    ocr_per_file_jobs: int,
 ) -> dict:
-    """Processa en wpu-PDF. Körs i worker-process. Returnerar resultat-dict
-    med category ('better'|'kept'|'new'|'ocr'|'skip'), log-rader och ev. fel.
-    """
     pdf = Path(pdf_path)
     text_dir = Path(text_dir_str)
+    ocr_dir = Path(ocr_dir_str)
     text_wpu = Path(text_wpu_str)
     palme_map = _PALME_MAP or {}
     use_hunspell = _USE_HUNSPELL
 
     stem = pdf.stem
     marker = text_wpu / f"{stem}.done"
-    wpu_cache = text_wpu / f"{stem}.txt"
 
     result: dict = {"category": None, "lines": [], "errors": []}
 
@@ -151,75 +101,69 @@ def _process_one(
         result["category"] = "skip"
         return result
 
-    if wpu_cache.exists() and not rebuild:
-        raw = wpu_cache.read_text(encoding="utf-8", errors="replace")
-    else:
-        raw = _pdftotext(pdf, layout=False)
-        if not dry_run:
-            wpu_cache.write_text(raw, encoding="utf-8")
+    wpu_txt = text_dir / f"{stem}.txt"
+    if not wpu_txt.exists():
+        result["lines"].append(
+            f"[saknar text] {stem[:70]} — kör ocr_tesseract.sh på files_wpu/ först"
+        )
+        result["category"] = "skip"
+        return result
 
-    wpu_score = score_text(raw, use_hunspell=use_hunspell)["score"]
-    wpu_text_ok = wpu_score >= ocr_threshold
+    wpu_raw = wpu_txt.read_text(encoding="utf-8", errors="replace")
+    wpu_score = score_text(wpu_raw, use_hunspell=use_hunspell)["score"]
 
-    keys = wpu_id_keys(pdf.name)
     matched: list[Path] = []
-    for key in keys:
+    for key in wpu_id_keys(pdf.name):
         for p in palme_map.get(key, []):
-            if p not in matched:
+            if p != wpu_txt and p not in matched:
                 matched.append(p)
 
-    if matched:
-        if not wpu_text_ok:
-            palme_raw = matched[0].read_text(encoding="utf-8", errors="replace")
-            palme_score = score_text(palme_raw, use_hunspell=use_hunspell)["score"]
-            result["lines"].append(
-                f"[behåller]   {matched[0].name[:50]:50s} "
-                f"palme={palme_score:.0f} (wpu={wpu_score:.0f} oanvändbar)"
-            )
-            result["category"] = "kept"
-        else:
-            cat = "kept"
-            for palme_txt in matched:
-                palme_raw = palme_txt.read_text(encoding="utf-8", errors="replace")
-                palme_score = score_text(palme_raw, use_hunspell=use_hunspell)["score"]
+    if not matched:
+        result["lines"].append(f"[ensam]    {stem[:60]:60s} score={wpu_score:.0f}")
+        result["category"] = "new"
+        if not dry_run:
+            marker.touch()
+        return result
 
-                if wpu_score > palme_score + margin:
-                    result["lines"].append(
-                        f"[bättre wpu] {stem[:50]:50s} "
-                        f"wpu={wpu_score:.0f} > palme={palme_score:.0f} "
-                        f"→ {palme_txt.name[:35]}"
-                    )
-                    if not dry_run:
-                        layout_text = _pdftotext(pdf, layout=True)
-                        palme_txt.write_text(layout_text, encoding="utf-8")
-                    cat = "better"
-                else:
-                    result["lines"].append(
-                        f"[behåller]   {palme_txt.name[:50]:50s} "
-                        f"palme={palme_score:.0f} >= wpu={wpu_score:.0f}"
-                    )
-            result["category"] = cat
-    else:
-        dest = text_dir / f"{stem}.txt"
-        if dest.exists() and not rebuild:
-            result["category"] = "skip"
-        elif wpu_text_ok:
-            result["lines"].append(f"[ny]         {stem[:70]}")
-            if not dry_run:
-                layout_text = _pdftotext(pdf, layout=True)
-                dest.write_text(layout_text, encoding="utf-8")
-            result["category"] = "new"
+    wpu_alive = True
+    won_any = False
+    for palme_txt in matched:
+        if not palme_txt.exists():
+            continue  # raderad i tidigare iteration
+        palme_raw = palme_txt.read_text(encoding="utf-8", errors="replace")
+        palme_score = score_text(palme_raw, use_hunspell=use_hunspell)["score"]
+
+        outcome = decide(wpu_score, palme_score, margin)
+        if outcome == "wpu":
+            result["lines"].append(
+                f"[wpu wins]  {stem[:30]:30s} ({wpu_score:.0f}) > "
+                f"palme={palme_txt.stem[:30]} ({palme_score:.0f}) — raderar palme"
+            )
+            _delete_pair(palme_txt, ocr_dir, dry_run)
+            won_any = True
+        elif outcome == "palme":
+            result["lines"].append(
+                f"[palme wins] {palme_txt.stem[:28]:28s} ({palme_score:.0f}) > "
+                f"wpu={stem[:30]} ({wpu_score:.0f}) — raderar wpu"
+            )
+            _delete_pair(wpu_txt, ocr_dir, dry_run)
+            wpu_alive = False
+            break
         else:
-            result["lines"].append(f"[ocr-wpu]    {stem[:70]}  (wpu-poäng={wpu_score:.0f})")
-            if not dry_run:
-                ok = _ocr_pdf(pdf, dest, per_file_jobs=ocr_per_file_jobs)
-                if not ok:
-                    result["errors"].append(f"  [fel] ocrmypdf misslyckades för {stem}")
-            result["category"] = "ocr"
+            result["lines"].append(
+                f"[oavgjort]  {stem[:30]:30s} ({wpu_score:.0f}) ≈ "
+                f"palme={palme_txt.stem[:30]} ({palme_score:.0f}) — behåller båda"
+            )
+
+    if won_any:
+        result["category"] = "better"
+    elif wpu_alive:
+        result["category"] = "kept"
+    else:
+        result["category"] = "lost"
 
     if not dry_run and not result["errors"]:
         marker.touch()
-
     return result
 
 
@@ -228,31 +172,30 @@ def main() -> int:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     ap.add_argument("--dry-run", action="store_true",
-                    help="visa vad som skulle hända utan att göra det")
+                    help="visa beslut utan att radera")
     ap.add_argument("--rebuild", action="store_true",
-                    help="kör om alla, ignorera .done-marker")
+                    help="ignorera .done-markers")
     ap.add_argument("--margin", type=float, default=DEFAULT_MARGIN,
-                    help=f"min poängfördel för att ersätta palme-text (default: {DEFAULT_MARGIN})")
-    ap.add_argument("--ocr-threshold", type=float, default=DEFAULT_OCR_THR,
-                    help=f"wpu-text under detta poäng anses oanvändbar (default: {DEFAULT_OCR_THR})")
+                    help=f"min poängfördel för att vinna (default: {DEFAULT_MARGIN})")
     ap.add_argument("--files-wpu", default=str(FILES_WPU),
                     help=f"katalog med wpu-PDF:er (default: {FILES_WPU})")
     ap.add_argument("--text-dir", default=str(TEXT_DIR),
-                    help=f"palme text-katalog (default: {TEXT_DIR})")
+                    help=f"text-katalog (default: {TEXT_DIR})")
+    ap.add_argument("--ocr-dir", default=str(OCR_DIR),
+                    help=f"ocr-katalog (default: {OCR_DIR})")
     ap.add_argument("--jobs", type=int, default=max(1, (os.cpu_count() or 4)),
                     help="antal parallella processer (default: cpu_count)")
-    ap.add_argument("--per-file-jobs", type=int, default=2,
-                    help="OCR-trådar per fil när ocrmypdf körs (default: 2)")
     args = ap.parse_args()
 
     files_wpu = Path(args.files_wpu)
     text_dir = Path(args.text_dir)
+    ocr_dir = Path(args.ocr_dir)
 
     if not files_wpu.is_dir():
-        print(f"Saknar {files_wpu}/ — kör download_wpu.sh först.", file=sys.stderr)
+        print(f"Saknar {files_wpu}/", file=sys.stderr)
         return 1
     if not text_dir.is_dir():
-        print(f"Saknar {text_dir}/ — kör ocr_tesseract.sh (eller ocr.sh) först.", file=sys.stderr)
+        print(f"Saknar {text_dir}/ — kör ocr_tesseract.sh först.", file=sys.stderr)
         return 1
 
     if not args.dry_run:
@@ -270,7 +213,7 @@ def main() -> int:
     print(f"  {len(wpu_pdfs)} PDF-filer i {files_wpu.name}/")
     print(f"  parallellt: {args.jobs} processer\n")
 
-    counts = {"better": 0, "kept": 0, "new": 0, "ocr": 0, "skip": 0}
+    counts = {"better": 0, "kept": 0, "lost": 0, "new": 0, "skip": 0}
 
     with ProcessPoolExecutor(
         max_workers=args.jobs,
@@ -282,12 +225,11 @@ def main() -> int:
                 _process_one,
                 str(pdf),
                 str(text_dir),
+                str(ocr_dir),
                 str(TEXT_WPU),
                 args.dry_run,
                 args.rebuild,
                 args.margin,
-                args.ocr_threshold,
-                args.per_file_jobs,
             ): pdf
             for pdf in wpu_pdfs
         }
@@ -308,9 +250,10 @@ def main() -> int:
                 counts[cat] += 1
 
     print(
-        f"\nKlart: {counts['better']} ersatta (wpu bättre), "
-        f"{counts['kept']} behållna (palme/wpu bättre), "
-        f"{counts['new']} nya (direkt), {counts['ocr']} OCR-skannade, "
+        f"\nKlart: {counts['better']} wpu vann (palme raderad), "
+        f"{counts['lost']} wpu förlorade (wpu raderad), "
+        f"{counts['kept']} oavgjorda (båda kvar), "
+        f"{counts['new']} ensamma wpu, "
         f"{counts['skip']} hoppade."
     )
     return 0
