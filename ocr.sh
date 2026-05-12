@@ -183,6 +183,9 @@ jsonl, thr, in_dir, out_dir, root, ocr_dir, no_update, txt_dir = sys.argv[1:9]
 thr = float(thr)
 in_dir = Path(in_dir); out_dir = Path(out_dir); root = Path(root)
 txt_dir = Path(txt_dir)
+# wpu-PDF:er ligger i files_wpu/ men text/ kan innehålla deras text (merge_wpu
+# valde wpu-versionen). Vid fallback för --redo måste vi leta där också.
+wpu_dir = root / "files_wpu"
 
 # Importera merge_pages direkt så vi slipper subprocess per fil.
 sys.path.insert(0, str(root / "src"))
@@ -225,8 +228,12 @@ for txt_name, pages in bad.items():
     stem = txt_name[:-4] if txt_name.endswith(".txt") else txt_name
     pdf = in_dir / f"{stem}.pdf"
     if not pdf.exists():
-        print(f"  SAKNAS: {pdf}")
-        continue
+        wpu_pdf = wpu_dir / f"{stem}.pdf"
+        if wpu_pdf.exists():
+            pdf = wpu_pdf
+        else:
+            print(f"  SAKNAS: {pdf} (även {wpu_pdf})")
+            continue
     pages_arg = ",".join(str(p) for p in sorted(set(pages)))
     cmd = [
         sys.executable, str(root / "src" / "ocr_pages.py"),
