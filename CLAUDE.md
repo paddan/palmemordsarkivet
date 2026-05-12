@@ -275,6 +275,7 @@ Scoring formula: 100 - penalties for junk, short words, long words, digit-mixing
 - `parse_filename(stem: str) → dict`: Extracts metadata from filename pattern
 - `is_useful(chunk: str) → bool`: Filters chunks with <55% alphanumeric
 - `should_reingest(stored_mtime, disk_mtime, reindex_since) → bool`: Re-index-beslut per fil (testat i `tests/test_reingest.py`)
+- `find_orphans(stored_sources, disk_filenames) → list[str]`: Returnerar sources som finns i tabellen men saknas på disk; ingest raderar dem (skippas vid `--limit`).
 - `parse_reindex_since(value: str) → float`: Tolkar `--reindex-since` (ISO 8601 eller unix-sekunder)
 
 Schema: vector (1024 dims), text, source, page, chunk_idx, mtime, plus metadata fields (nr, titel, etc.).

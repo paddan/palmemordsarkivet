@@ -126,6 +126,11 @@ def should_reingest(
     return disk_mtime > stored_mtime
 
 
+def find_orphans(stored_sources: set[str], disk_filenames: set[str]) -> list[str]:
+    """Källor som finns i tabellen men inte på disk längre (sorterat)."""
+    return sorted(stored_sources - disk_filenames)
+
+
 def is_useful(chunk: str) -> bool:
     if len(chunk) < 80:
         return False
@@ -222,6 +227,20 @@ def main() -> int:
     model = SentenceTransformer(args.model)
 
     files = sorted(text_dir.glob("*.txt"))
+
+    # Rensa orphan-poster: source-filer som finns i tabellen men inte längre i
+    # text/. Hoppas över med --limit eftersom vi då bara ser en delmängd.
+    if not args.limit and already:
+        disk_names = {f.name for f in files}
+        orphans = find_orphans(set(already), disk_names)
+        if orphans:
+            print(f"Rensar {len(orphans)} föräldralösa poster (text/-fil borta):")
+            for s in orphans:
+                safe = s.replace("'", "''")
+                table.delete(f"source = '{safe}'")
+                del already[s]
+                print(f"  - {s}")
+
     if args.limit:
         files = files[: args.limit]
 

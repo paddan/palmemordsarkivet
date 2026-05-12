@@ -1,8 +1,8 @@
-"""Tester för should_reingest från rag/ingest.py."""
+"""Tester för should_reingest och find_orphans från rag/ingest.py."""
 
 from __future__ import annotations
 
-from ingest import should_reingest
+from ingest import find_orphans, should_reingest
 
 
 def test_unchanged_file_skipped() -> None:
@@ -39,3 +39,18 @@ def test_reindex_since_with_tracked_file_modified_after_cutoff() -> None:
 def test_reindex_since_doesnt_force_unchanged_tracked_file() -> None:
     # stored == disk, ingen ändring sedan indexering — skip även om cutoff är satt.
     assert should_reingest(stored_mtime=100.0, disk_mtime=100.0, reindex_since=50.0) is False
+
+
+def test_find_orphans_returns_files_only_in_table() -> None:
+    stored = {"a.txt", "b.txt", "c.txt"}
+    disk = {"a.txt", "c.txt"}
+    assert find_orphans(stored, disk) == ["b.txt"]
+
+
+def test_find_orphans_empty_when_all_match() -> None:
+    assert find_orphans({"a.txt"}, {"a.txt"}) == []
+
+
+def test_find_orphans_sorted() -> None:
+    stored = {"z.txt", "a.txt", "m.txt"}
+    assert find_orphans(stored, set()) == ["a.txt", "m.txt", "z.txt"]
