@@ -65,7 +65,7 @@ export TOTAL PROGRESS_DIR START_TS TXT DPI PYBIN IN WPU_DIR ROOT
 echo "Kontrollerar maskeringar i $TOTAL textfiler (DPI=$DPI, jobs=$JOBS)..."
 
 find "$TXT" -name '*.txt' -print0 \
-  | xargs -0 -n 1 -P "$JOBS" -I {} bash -c '
+  | xargs -0 -n 1 -P "$JOBS" bash -c '
     stem=$(basename "$1" .txt)
     marker="${1%.txt}.redact"
 
@@ -98,7 +98,7 @@ find "$TXT" -name '*.txt' -print0 \
     else
       printf "[%s %d/%d] %s\n" "$result" "$count" "$TOTAL" "$stem"
     fi
-  ' _ {}
+  ' _
 
 rm -rf "$PROGRESS_DIR"
 echo "Klart."

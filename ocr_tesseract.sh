@@ -4,7 +4,8 @@
 # - Kvalitetscheck på existerande textlager — vid skräp triggas --redo-ocr
 # - OCR med svenska + deskew/clean/rotate för scannade sidor
 # - Parallelliserar över filer med xargs -P
-# - Idempotent: hoppar över filer där .txt redan finns
+# - Idempotent: hoppar över filer där .ocr-done-markör finns i generated/ocr/
+#   (.txt ensam räcker inte — merge_wpu kan radera den)
 #
 # Krav: brew install ocrmypdf tesseract-lang poppler unpaper
 
@@ -222,12 +223,19 @@ run_ocr() {
 }
 
 process_one() {
-  local f="$1" base out_pdf out_txt existing has_text _STATUS _OCR_RETRIES=""
+  local f="$1" base out_pdf out_txt existing has_text _STATUS _OCR_RETRIES="" marker
   base=$(basename "$f" .pdf)
   out_pdf="$OCR/$base.pdf"
   out_txt="$TXT/$base.txt"
+  marker="$OCR/$base.ocr-done"
 
-  if [ -s "$out_txt" ]; then
+  # Idempotens via markörfil — txt kan ha raderats av merge_wpu (som bara
+  # raderar .txt och .pdf, inte markören). Lazy migration: skapa markör om
+  # txt finns sedan innan markören introducerades.
+  if [ -s "$out_txt" ] && [ ! -f "$marker" ]; then
+    touch "$marker"
+  fi
+  if [ -f "$marker" ]; then
     printf 'hoppar' > "$PROGRESS_DIR/${base}.status"
     return 0
   fi
@@ -278,6 +286,7 @@ process_one() {
   fi
 
   printf '%s' "$_STATUS" > "$PROGRESS_DIR/${base}.status"
+  touch "$marker"
 }
 export -f process_one run_ocr _run_ocrmypdf log_err
 export IN OCR TXT PER_FILE_JOBS MIN_TEXT_CHARS LANGS PSM \
@@ -290,7 +299,7 @@ export TOTAL PROGRESS_DIR START_TS
 echo "Hittade $TOTAL PDF:er att bearbeta..."
 
 find "$IN" -name '*.pdf' -print0 \
-  | xargs -0 -n 1 -P "$JOBS" -I {} bash -c '
+  | xargs -0 -n 1 -P "$JOBS" bash -c '
     process_one "$@"
     ret=$?
     base=$(basename "$1" .pdf)
@@ -307,7 +316,7 @@ find "$IN" -name '*.pdf' -print0 \
       printf "[%s %d/%d] %s\n" "$status" "$count" "$TOTAL" "$base"
     fi
     exit $ret
-  ' _ {}
+  ' _
 
 rm -rf "$PROGRESS_DIR"
 
