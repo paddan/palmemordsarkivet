@@ -247,8 +247,8 @@ with st.sidebar:
         st.session_state.openai_chat_messages = []
         st.rerun()
     do_rerank = st.toggle("Använd cross-encoder reranker", value=True,
-                          help="Långsammare första gången (laddar ~568 MB) men bättre precision.",
-                          disabled=mcp_mode)
+                          help="Långsammare första gången (laddar ~568 MB) men bättre precision. "
+                               "Används i RAG-läget — inaktivt i utredningsläget.")
     top_k = st.slider(
         "Hämta top-K kandidater", 5, 50, 20,
         help="Antal chunks som vektorsökningen plockar fram ur indexet i första "
