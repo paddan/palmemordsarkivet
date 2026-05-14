@@ -237,7 +237,13 @@ def main() -> None:
     if args.dry_run:
         print('[dry-run — inga filer skrivs]')
 
-    asyncio.run(_correct_all(bad, txt_dir, pages_dir, args.model, args.dry_run))
+    provider_cfg = {
+        "provider": "claude",
+        "model": args.model or HAIKU_MODEL,
+        "base_url": "",
+        "api_key": "",
+    }
+    asyncio.run(_correct_all(bad, txt_dir, pages_dir, provider_cfg, args.dry_run))
 
     if not args.dry_run:
         print('\nKlart. Kör ./quality.sh för att se förbättringen.')
