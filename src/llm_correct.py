@@ -22,6 +22,11 @@ from pathlib import Path
 
 from claude_agent_sdk import AssistantMessage, ClaudeAgentOptions, TextBlock, query
 
+try:
+    from openai import AsyncOpenAI
+except ImportError:
+    AsyncOpenAI = None  # type: ignore[assignment,misc]
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from normalize_text import normalize  # noqa: E402
@@ -75,6 +80,22 @@ async def _claude(text: str, model: str) -> str:
                 if isinstance(block, TextBlock):
                     parts.append(block.text)
     return ''.join(parts) or text  # fallback till original om tomt svar
+
+
+async def _openai(text: str, model: str, base_url: str, api_key: str) -> str:
+    client = AsyncOpenAI(
+        api_key=api_key or "local",
+        base_url=base_url or None,
+    )
+    response = await client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": _SYSTEM},
+            {"role": "user", "content": text},
+        ],
+        max_tokens=4096,
+    )
+    return response.choices[0].message.content or text
 
 
 async def _correct_all(

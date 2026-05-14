@@ -1,15 +1,17 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from llm_correct import _resolve_api_key
+from llm_correct import _openai, _resolve_api_key
 
 
 def test_claude_reads_anthropic_key(monkeypatch):
@@ -53,3 +55,64 @@ def test_explicit_key_overrides_env(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "env-key")
     result = _resolve_api_key("openai", base_url="", explicit_key="my-key")
     assert result == "my-key"
+
+
+def test_openai_returns_corrected_text():
+    mock_response = MagicMock()
+    mock_response.choices = [MagicMock()]
+    mock_response.choices[0].message.content = "rättad text"
+
+    mock_client = AsyncMock()
+    mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
+
+    with patch("llm_correct.AsyncOpenAI", return_value=mock_client):
+        result = asyncio.run(_openai(
+            text="OCR-skräp text",
+            model="gpt-4o-mini",
+            base_url="",
+            api_key="sk-test",
+        ))
+    assert result == "rättad text"
+
+
+def test_openai_fallback_on_empty_response():
+    mock_response = MagicMock()
+    mock_response.choices = [MagicMock()]
+    mock_response.choices[0].message.content = ""
+
+    mock_client = AsyncMock()
+    mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
+
+    with patch("llm_correct.AsyncOpenAI", return_value=mock_client):
+        result = asyncio.run(_openai(
+            text="original text",
+            model="gpt-4o-mini",
+            base_url="",
+            api_key="sk-test",
+        ))
+    assert result == "original text"
+
+
+def test_openai_uses_local_as_fallback_api_key():
+    mock_response = MagicMock()
+    mock_response.choices = [MagicMock()]
+    mock_response.choices[0].message.content = "svar"
+
+    mock_client = AsyncMock()
+    mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
+
+    captured_kwargs = {}
+
+    def capture_client(**kwargs):
+        captured_kwargs.update(kwargs)
+        return mock_client
+
+    with patch("llm_correct.AsyncOpenAI", side_effect=capture_client):
+        asyncio.run(_openai(
+            text="text",
+            model="llama3.1:8b",
+            base_url="http://localhost:11434/v1",
+            api_key="",
+        ))
+    assert captured_kwargs["api_key"] == "local"
+    assert captured_kwargs["base_url"] == "http://localhost:11434/v1"
