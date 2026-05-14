@@ -100,20 +100,20 @@ nohup ./download.sh > log.txt 2>&1 &
 [wpu.nu](https://wpu.nu/wiki/Dokument) publicerar en del av samma material men ibland med bättre skanningar. Ladda ner hela wpu-samlingen till en separat katalog:
 
 ```bash
-./download_wpu.sh          # ladda ner alla PDF:er → files_wpu/
+./download_wpu.sh          # ladda ner alla PDF:er → downloaded/wpu_files/
 ./download_wpu.sh --dry-run  # lista utan att ladda ner
 ```
 
-Wpu-PDF:er får exakt samma OCR-behandling som palme-PDF:er: `ocr.sh` kör `ocr_tesseract.sh` på `files_wpu/` också så varje wpu-fil får sin egen `text/<stem>.txt` och `ocr/<stem>.pdf`. Sen kör `merge_wpu.sh` som jämför kvalitetspoäng för matchande dokument-ID och **raderar förlorarens** text- och ocr-filer:
+Wpu-PDF:er får exakt samma OCR-behandling som palme-PDF:er: `ocr.sh` kör `ocr_tesseract.sh` på `downloaded/wpu_files/` också så varje wpu-fil får sin egen `generated/text/<stem>.txt` och `generated/ocr/<stem>.pdf`. Sen kör `merge_wpu.sh` som jämför kvalitetspoäng för matchande dokument-ID och **raderar förlorarens** text- och ocr-filer:
 
-| Jämförelse (margin 5 p)   | Utfall                                       |
-| ------------------------- | -------------------------------------------- |
-| wpu vinner                | palme-versionens `text/`+`ocr/` raderas      |
-| palme vinner              | wpu-versionens `text/`+`ocr/` raderas        |
-| inom margin (oavgjort)    | båda behålls                                 |
-| ingen matchning           | wpu står ensam, inget händer                 |
+| Jämförelse (margin 5 p) | Utfall |
+|---|---|
+| wpu vinner | palme-versionens `generated/text/`+`generated/ocr/` raderas |
+| palme vinner | wpu-versionens `generated/text/`+`generated/ocr/` raderas |
+| inom margin (oavgjort) | båda behålls |
+| ingen matchning | wpu står ensam, inget händer |
 
-Surya-steget körs sen mot kvarvarande `text/`-filer och hanterar palme- och wpu-filer identiskt.
+Surya-steget körs sen mot kvarvarande `generated/text/`-filer och hanterar palme- och wpu-filer identiskt.
 
 ```bash
 ./merge_wpu.sh             # kör om manuellt (parallellt, default cpu_count)
@@ -146,7 +146,7 @@ du delarna direkt:
 
 ```bash
 ./ocr_tesseract.sh               # Tesseract på alla nya filer
-./quality.sh --per-page          # bygg quality.csv + quality_pages.jsonl
+./quality.sh --per-page          # bygg generated/quality.csv + generated/quality_pages.jsonl
 ./ocr.sh --redo --mode pages     # Surya på sidor under tröskeln
 ./quality.sh                     # uppdaterad bedömning
 ```
@@ -185,7 +185,7 @@ markant högre kvalitet — i stickprov på 50 svåra filer: medelpoäng 60 → 
 
 Surya körs per sida via `./ocr.sh --redo --mode pages` (default i full pipeline).
 Endast sidor med score < threshold OCR:as om, resultatet mergas tillbaka in i
-`text/<stem>.txt` per dokument. Se `Per-sida OCR` nedan.
+`generated/text/<stem>.txt` per dokument. Se `Per-sida OCR` nedan.
 
 #### Per-sida OCR (`ocr_pages.sh`)
 
@@ -195,9 +195,9 @@ Renderar PDF:en sida för sida, OCR:ar varje sida individuellt och skriver
 till ``<stem>.txt`` med ``\f`` som sidbrytare.
 
 ```bash
-./ocr_pages.sh --in files/foo.pdf --out-dir text_pages --engine tesseract
-./ocr_pages.sh --in files/foo.pdf --out-dir text_pages --engine surya
-./ocr_pages.sh --in files/foo.pdf --out-dir text_pages --pages 3,7,12
+./ocr_pages.sh --in downloaded/files/foo.pdf --out-dir generated/text_pages --engine tesseract
+./ocr_pages.sh --in downloaded/files/foo.pdf --out-dir generated/text_pages --engine surya
+./ocr_pages.sh --in downloaded/files/foo.pdf --out-dir generated/text_pages --pages 3,7,12
 ```
 
 Kombo med `./quality.sh --per-page` + `./ocr.sh --redo --mode pages` kör om
@@ -245,8 +245,8 @@ OCR-fel (fellästa tecken, trasiga ord, skräptecken) med svenska
 språkets kontext. Kör automatiskt `normalize.sh`:s logik på varje
 sida före och efter rättningen.
 
-Förutsätter att `quality_pages.jsonl` finns (byggs av `./quality.sh --per-page`).
-Idempotent: sidor med `.llm`-markörfil i `text_pages/<stem>/` hoppas över.
+Förutsätter att `generated/quality_pages.jsonl` finns (byggs av `./quality.sh --per-page`).
+Idempotent: sidor med `.llm`-markörfil i `generated/text_pages/<stem>/` hoppas över.
 
 ```bash
 ./llm_correct.sh                     # rätta sidor med score < 50
@@ -272,21 +272,21 @@ fångar dem automatiskt).
 ```
 
 **Per-sida-merge av Surya-omkörningar:** `ocr.sh --redo --mode pages` skriver
-per-sida-text till `text_pages/<stem>/page-NNN.txt`. Direkt efter att ett
+per-sida-text till `generated/text_pages/<stem>/page-NNN.txt`. Direkt efter att ett
 dokument är klart slår `ocr.sh` automatiskt ihop dessa sidor in i
-`text/<stem>.txt` (en sida i taget, behåller övriga sidor) och raderar
-`page-NNN.txt` + `page-NNN.png`. Kvar i `text_pages/<stem>/` blir bara
+`generated/text/<stem>.txt` (en sida i taget, behåller övriga sidor) och raderar
+`page-NNN.txt` + `page-NNN.png`. Kvar i `generated/text_pages/<stem>/` blir bara
 lättviktiga `page-NNN.json` (kvalitetsmetadata) som fungerar som idempotens-
 markör för nya körningar av `ocr.sh --redo --mode pages`.
 
-Resultat: ingest fångar ändringarna via mtime, och `text_pages/` ackumulerar
+Resultat: ingest fångar ändringarna via mtime, och `generated/text_pages/` ackumulerar
 inte stort innehåll.
 
-För befintliga text_pages-mappar (som inte mergades/städades automatiskt)
+För befintliga `generated/text_pages`-mappar (som inte mergades/städades automatiskt)
 finns en engångsåtgärd:
 
 ```bash
-./merge_pages.sh --all            # slå ihop + städa alla text_pages/<stem>/
+./merge_pages.sh --all            # slå ihop + städa alla generated/text_pages/<stem>/
 ./merge_pages.sh --stem "1 — PM …"  # bara en specifik fil
 ```
 
@@ -404,15 +404,15 @@ lokalt (via `open`) i en gömd iframe så huvudsidan inte laddas om.
 | Fil | Vad |
 |---|---|
 | `download.sh` → `src/download.py` | Hämta PDF:er från Drive |
-| `download_wpu.sh` → `src/download_wpu.py` | Ladda ner alla PDF:er från wpu.nu → `files_wpu/` |
+| `download_wpu.sh` → `src/download_wpu.py` | Ladda ner alla PDF:er från wpu.nu → `downloaded/wpu_files/` |
 | `merge_wpu.sh` → `src/merge_wpu.py` | Jämför wpu- och palme-text per fil, behåll bäst kvalitet |
 | `setup_tessdata.sh` | Sätt upp projekt-lokal `tessdata/` med swe_best |
 | `ocr.sh` | Full OCR-pipeline (Tesseract → kvalitet → Surya på dåliga sidor); `--redo` kör om dåliga filer/sidor |
 | `ocr_tesseract.sh` | Bara Tesseract-steget (textextraktion + ocrmypdf) |
 | `ocr_pages.sh` → `src/ocr_pages.py` | Per-sida OCR (Tesseract/Surya) med sidor i `\f`-separerad txt |
-| `merge_pages.sh` → `src/merge_pages.py` | Slå ihop `text_pages/<stem>/page-*.txt` in i `text/<stem>.txt` |
-| `build_user_words.sh` → `src/build_user_words.py` | Bygg `tessdata/swe.user-words.auto` från `text/*.txt` |
-| `quality.sh` → `src/quality.py` | Heuristisk kvalitetsbedömning av `text/*.txt` (`--per-page` finns) |
+| `merge_pages.sh` → `src/merge_pages.py` | Slå ihop `generated/text_pages/<stem>/page-*.txt` in i `generated/text/<stem>.txt` |
+| `build_user_words.sh` → `src/build_user_words.py` | Bygg `tessdata/swe.user-words.auto` från `generated/text/*.txt` |
+| `quality.sh` → `src/quality.py` | Heuristisk kvalitetsbedömning av `generated/text/*.txt` (`--per-page` finns) |
 | `ingest.sh` → `src/rag/ingest.py` | Bygg vektorindex (LanceDB + BM25 FTS) |
 | `ask.sh` → `src/rag/ask.py` | Frågefronten — RAG-läge och `--mcp`-läge |
 | `src/rag/mcp_server.py` | MCP-server med `search_archive` och `get_page` (startas av ask.py/webui.py) |
@@ -427,7 +427,7 @@ lokalt (via `open`) i en gömd iframe så huvudsidan inte laddas om.
 ./quality.sh --top 30
 ```
 
-Skriver `quality.csv` (sorterat värst först) med poäng 0–100 per fil baserat på
+Skriver `generated/quality.csv` (sorterat värst först) med poäng 0–100 per fil baserat på
 junk-tecken-andel, andel 1–2-tecken-ord, ihopklistrade ord, siffror inuti ord
 och vokal/konsonant-balans. Markerar källa `text-layer` (originalet hade text)
 vs `ocr` (Tesseract).
@@ -466,20 +466,24 @@ gracefully om pymupdf inte är installerat.
 
 ## Felloggning
 
-Skript skriver tab-separerade rader till `errors.log` i projekt-roten:
+Skript skriver tab-separerade rader till `generated/errors.log`:
 ``ISO8601\tcomponent\titem\tmessage``. Python-skript via `errors_log.log_error`,
-bash via `>> "$ROOT/errors.log"`. Append-only, idempotent.
+bash via `>> "$ROOT/generated/errors.log"`. Append-only, idempotent.
 
 ## Datafiler (gitignorerade)
 
-`files/`, `files_wpu/`, `ocr/`, `text/`, `text_pages/`, `text_wpu/`, `rag/lancedb/`, `tessdata/*.traineddata`
-— åter-skapas helt av skripten (`text_pages/` av `ocr_pages.py`,
-`tessdata/swe.traineddata` av `setup_tessdata.sh`).
+```
+downloaded/   — nedladdade PDF:er (files/, wpu_files/)
+generated/    — allt pipeline-genererat (text/, ocr/, lancedb/, quality.csv, errors.log, …)
+tessdata/*.traineddata  — laddas av setup_tessdata.sh
+```
+
+Åter-skapas helt av skripten — ta bort katalogerna och kör om.
 
 ## Starta om
 
 Alla fyra steg är idempotenta — kör om utan oro. De hoppar över redan färdigt
-arbete (download: `files/<namn>.pdf` finns; ocr: `text/<namn>.txt` finns;
+arbete (download: `downloaded/files/<namn>.pdf` finns; ocr: `generated/text/<namn>.txt` finns;
 ingest: `source` redan i tabellen *och* `.txt`-filens mtime är ≤ den lagrade).
 Avbrutna körningar fortsätter där de slutade. När en `.txt` skrivs om av t.ex.
 `ocr.sh --redo` upptäcker `ingest.sh` det automatiskt och re-indexerar bara den

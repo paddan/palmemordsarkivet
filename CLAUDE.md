@@ -38,7 +38,7 @@ All components are Swedish-language facing; comments and docstrings are in Swedi
 │   ├── normalize_text.py    # Rule-based OCR text normalization (ligatures, whitespace)
 │   ├── llm_correct.py       # LLM post-correction of bad OCR pages via Claude Haiku
 │   ├── webui.py            # Streamlit web interface
-│   ├── merge_pages.py       # Slå ihop text_pages/<stem>/page-*.txt → text/<stem>.txt
+│   ├── merge_pages.py       # Slå ihop generated/text_pages/<stem>/page-*.txt → generated/text/<stem>.txt
 │   └── rag/
 │       ├── ingest.py       # LanceDB vector index builder
 │       └── ask.py          # RAG query interface with Claude integration
@@ -56,11 +56,15 @@ All components are Swedish-language facing; comments and docstrings are in Swedi
 ```
 
 Data directories (gitignored, auto-generated):
-- `files/` — downloaded PDFs
-- `text/` — extracted OCR text
-- `text_pages/` — per-page OCR artifacts (merged into `text/` by `merge_pages.py`)
-- `ocr/` — searchable PDFs with embedded text layers
-- `rag/lancedb/` — vector index
+- `downloaded/files/` — downloaded PDFs from palmemordsarkivet
+- `downloaded/wpu_files/` — downloaded PDFs from wpu.nu
+- `generated/text/` — extracted OCR text
+- `generated/text_pages/` — per-page OCR artifacts (merged into `generated/text/` by `merge_pages.py`)
+- `generated/text_wpu/` — wpu.nu merge marker files (`.done`)
+- `generated/ocr/` — searchable PDFs with embedded text layers
+- `generated/lancedb/` — vector index
+- `generated/quality.csv`, `generated/quality_pages.jsonl` — quality reports
+- `generated/errors.log` — error log
 - `test_files/`, `test_ocr/`, `test_txt/` — test artifacts
 
 ## Build, Run, and Test Commands
@@ -118,7 +122,7 @@ All scripts are idempotent and can be re-run safely. They skip already-completed
 
 ```bash
 # 1. Download PDFs from Google Sheet
-./download.sh [--out files] [--sheet-id ID]
+./download.sh [--out downloaded/files] [--sheet-id ID]
 
 # 2. OCR pipeline (recommended: full pipeline)
 ./ocr.sh                    # Tesseract → quality → Surya on bad pages
@@ -128,8 +132,8 @@ All scripts are idempotent and can be re-run safely. They skip already-completed
 
 # Manual OCR steps (if needed)
 ./ocr_tesseract.sh [--jobs 8] [--per-file-jobs 2] [--psm 4]
-./quality.sh [--top 30]      # Build quality.csv, optionally show worst N
-./quality.sh --per-page      # Also write quality_pages.jsonl (per-page scores)
+./quality.sh [--top 30]      # Build generated/quality.csv, optionally show worst N
+./quality.sh --per-page      # Also write generated/quality_pages.jsonl (per-page scores)
 
 # 2b. Text post-processing (optional, improves search quality)
 ./normalize.sh               # Rule-based: fix ligatures, soft hyphens, whitespace
@@ -138,11 +142,12 @@ All scripts are idempotent and can be re-run safely. They skip already-completed
 ./llm_correct.sh --threshold 60 --dry-run  # Preview stricter threshold
 
 # 3. Build/update vector index
-./ingest.sh [--rebuild]      # Index text/ → LanceDB (mtime-detektering på)
+./ingest.sh [--rebuild]      # Index generated/text/ → generated/lancedb/ (mtime-detektering på)
 ./ingest.sh --limit 100      # Test with subset
 ./ingest.sh --reindex-since 2026-05-01  # tvinga om för legacy-rader modifierade efter datum
 
-# Slå ihop per-sida-text (text_pages/) in i text/ — engångsåtgärd för befintliga mappar
+# Slå ihop per-sida-text (generated/text_pages/) in i generated/text/ — engångsåtgärd
+
 ./merge_pages.sh --all
 ./merge_pages.sh --stem "<namn>"   # bara en fil
 
@@ -159,7 +164,7 @@ All scripts are idempotent and can be re-run safely. They skip already-completed
 Optional wpu.nu merging (jämför wpu-skanning mot palme-text och välj bäst):
 
 ```bash
-./download_wpu.sh            # ladda ner wpu-PDF:er → files_wpu/
+./download_wpu.sh            # ladda ner wpu-PDF:er → downloaded/wpu_files/
 ./merge_wpu.sh               # parallell merging (default --jobs cpu_count)
 ./merge_wpu.sh --jobs 8      # explicit antal processer
 ./merge_wpu.sh --dry-run     # visa beslut utan att skriva
@@ -190,9 +195,9 @@ export DEEPSEEK_API_KEY=...
 Common flags (most scripts):
 ```bash
 ROOT=...              # Project root (auto-detected, rarely needed)
-TEXT_DIR=...          # OCR text directory (default: text/)
-FILES_DIR=...         # PDF directory (default: files/)
-DB_DIR=...            # LanceDB directory (default: rag/lancedb/)
+TEXT_DIR=...          # OCR text directory (default: generated/text/)
+FILES_DIR=...         # PDF directory (default: downloaded/files/)
+DB_DIR=...            # LanceDB directory (default: generated/lancedb/)
 THRESHOLD=50          # Quality score threshold for re-OCR
 JOBS=4                # Parallel file jobs (ocr_tesseract.sh)
 PER_FILE_JOBS=2       # Threads per file (ocr_tesseract.sh)
@@ -220,15 +225,15 @@ PER_FILE_JOBS=2       # Threads per file (ocr_tesseract.sh)
      - Junk character ratio, short word ratio, vowel balance, OCR-specific artifacts
      - Optional hunspell dictionary check for Swedish words
      - Marks source as `text-layer` (original PDF had text) or `ocr` (Tesseract)
-     - Output: `quality.csv` (sortable by score)
+     - Output: `generated/quality.csv` (sortable by score)
    - **Surya** (`ocr.sh --redo`, optional): Fallback for low-scoring pages
      - Transformer-based (multilingual e5), slower but higher quality on degraded scans
      - Runs only on pages/files below threshold (default 50)
-     - **Per-dokument-merge + cleanup**: efter att `ocr_pages.py` är klar med ett dokument kör `ocr.sh` automatiskt `merge_pages.merge_one` som (a) ersätter motsvarande sidor i `text/<stem>.txt` (split på `\f`) och (b) raderar `page-NNN.txt` + `page-NNN.png` för de mergade sidorna. `page-NNN.json` behålls som idempotens-markör för `ocr_pages.py` (om JSON finns → skippa OCR av sidan).
+     - **Per-dokument-merge + cleanup**: efter att `ocr_pages.py` är klar med ett dokument kör `ocr.sh` automatiskt `merge_pages.merge_one` som (a) ersätter motsvarande sidor i `generated/text/<stem>.txt` (split på `\f`) och (b) raderar `page-NNN.txt` + `page-NNN.png` för de mergade sidorna. `page-NNN.json` behålls som idempotens-markör för `ocr_pages.py` (om JSON finns → skippa OCR av sidan).
    - **Re-scoring**: Quality metrics updated after Surya pass
 
 3. **Ingest** (`ingest.py`):
-   - Reads `text/*.txt` files
+   - Reads `generated/text/*.txt` files
    - Chunks with 800-char size, 150-char overlap (breaks on line/space boundaries)
    - Filters out low-quality chunks (<55% alphanumeric)
    - Embeds using `intfloat/multilingual-e5-large` (1024-dim vectors)
@@ -257,7 +262,7 @@ PER_FILE_JOBS=2       # Threads per file (ocr_tesseract.sh)
 
 **Chunking Strategy**: Documents split at 800-char boundaries but prefer line breaks (preserves semantic continuity). Overlap (150 chars) prevents information loss at boundaries. Per-page `\f` separators enable page-level metadata tracking.
 
-**Error Logging**: All scripts append to `errors.log` (ISO8601, tab-sep: timestamp, component, item, message) for audit trails and debugging.
+**Error Logging**: All scripts append to `generated/errors.log` (ISO8601, tab-sep: timestamp, component, item, message) for audit trails and debugging.
 
 ## Core Modules Reference
 
@@ -306,15 +311,15 @@ Schema: vector (1024 dims), text, source, page, chunk_idx, mtime, plus metadata 
 
 - `_haiku(text: str, model: str) → str` (async): Send page text to Claude Haiku for OCR error correction; returns corrected text (fallbacks to original on empty response).
 - `_correct_all(bad, txt_dir, pages_dir, model, dry_run)` (async): Process all bad pages — normalize input, call Haiku, write `page-NNN.txt` + `page-NNN.llm` marker, call `merge_pages.merge_one`.
-- Idempotency: pages with `text_pages/<stem>/page-NNN.llm` marker are skipped. Marker survives `merge_one` cleanup (only `.txt`/`.png` are deleted).
+- Idempotency: pages with `generated/text_pages/<stem>/page-NNN.llm` marker are skipped. Marker survives `merge_one` cleanup (only `.txt`/`.png` are deleted).
 - CLI: `--threshold N`, `--model MODEL`, `--pages-jsonl FILE`, `--txt DIR`, `--pages-out DIR`, `--dry-run`. Wrapper: `./llm_correct.sh`.
 
 ### `src/merge_pages.py`
 
 - `merge_text(original: str, page_updates: dict[int, str]) → str`: Ren funktion — ersätter enstaka sidor (1-indexerat) i en `\f`-separerad textfil. Sidnummer utanför range ignoreras tyst. Testad i `tests/test_merge_pages.py`.
-- `find_updates(stem_dir: Path) → dict[int, str]`: Hittar `page-NNN.txt` i en text_pages-mapp.
+- `find_updates(stem_dir: Path) → dict[int, str]`: Hittar `page-NNN.txt` i en `generated/text_pages/<stem>/`-mapp.
 - `merge_one(stem, txt_dir, pages_dir) → bool`: Slå ihop en fil + städa. Returnerar True om något hände (text uppdaterad ELLER artefakter rensade). Idempotent: andra körningen hittar inga `page-NNN.txt` och gör inget.
-- Cleanup-policy: efter merge raderas `page-NNN.txt` + `page-NNN.png` för sidor inom range, plus eventuell legacy `text_pages/<stem>.txt`. `page-NNN.json` behålls. Out-of-range-sidor behålls (skydd mot dataförlust om range-info är fel).
+- Cleanup-policy: efter merge raderas `page-NNN.txt` + `page-NNN.png` för sidor inom range, plus eventuell legacy `generated/text_pages/<stem>.txt`. `page-NNN.json` behålls. Out-of-range-sidor behålls (skydd mot dataförlust om range-info är fel).
 - CLI: `--stem <namn>` eller `--all`. Wrapper: `./merge_pages.sh`.
 
 ### `src/rag/ask.py`
