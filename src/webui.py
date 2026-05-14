@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import json
 import os
 import re
 import subprocess
@@ -232,7 +231,6 @@ ss = st.session_state
 ss.setdefault("question", "")
 ss.setdefault("hits", None)
 ss.setdefault("answer", "")
-ss.setdefault("graph_html", "")
 # MCP-chatt: history-lista med {"role", "text", "sources"} och resume-id för Claude.
 ss.setdefault("chat_history", [])
 ss.setdefault("mcp_session_id", None)
@@ -257,109 +255,6 @@ if "pdf" in qp:
     except (ValueError, OSError):
         pass
     st.query_params.clear()
-
-
-async def extract_entities(context: str) -> dict[str, list[str]]:
-    """Extrahera personer, platser och händelser ur kontext med Claude Haiku."""
-    prompt = (
-        "Analysera dessa textutdrag ur Palmemordsarkivet och extrahera unika namngivna entiteter.\n"
-        "Svara ENBART med giltig JSON (inga förklaringar, inga kodblock):\n"
-        '{"persons":["Fullständigt Namn"],"places":["Platsnamn"],"events":["Händelsebeskrivning"]}\n\n'
-        f"Textutdrag:\n{context[:4000]}"
-    )
-    options = ClaudeAgentOptions(
-        system_prompt="Du är ett JSON-API. Extrahera namngivna entiteter och svara med JSON.",
-        model="claude-haiku-4-5-20251001",
-        allowed_tools=[],
-        max_turns=1,
-        setting_sources=[],
-    )
-    parts: list[str] = []
-    async for message in query(prompt=prompt, options=options):
-        if isinstance(message, AssistantMessage):
-            for block in message.content:
-                if isinstance(block, TextBlock):
-                    parts.append(block.text)
-    raw = "".join(parts)
-    try:
-        m = re.search(r"\{[^{}]*\}", raw, re.DOTALL)
-        if m:
-            data = json.loads(m.group())
-            return {
-                "persons": [str(x) for x in data.get("persons", [])],
-                "places": [str(x) for x in data.get("places", [])],
-                "events": [str(x) for x in data.get("events", [])],
-            }
-    except Exception:
-        pass
-    return {"persons": [], "places": [], "events": []}
-
-
-def build_graph_html(hits: list[dict], entities: dict[str, list[str]]) -> str:
-    """Bygg pyvis-graf av entitetssamförekomst i chunk-träffarna."""
-    try:
-        import networkx as nx  # noqa: PLC0415
-        from pyvis.network import Network  # noqa: PLC0415
-    except ImportError:
-        return ""
-    from collections import Counter  # noqa: PLC0415
-
-    type_colors = {"persons": "#4a90d9", "places": "#27ae60", "events": "#e67e22"}
-    type_labels = {"persons": "Person", "places": "Plats", "events": "Händelse"}
-    all_entities = {e: typ for typ, lst in entities.items() for e in lst}
-    if not all_entities:
-        return ""
-
-    node_count: Counter = Counter()
-    edge_count: Counter = Counter()
-    for h in hits:
-        text_lower = h["text"].lower()
-        found = sorted(e for e in all_entities if e.lower() in text_lower)
-        for e in found:
-            node_count[e] += 1
-        for i, a in enumerate(found):
-            for b in found[i + 1:]:
-                edge_count[(a, b)] += 1
-
-    if not node_count:
-        return ""
-
-    net = Network(
-        height="450px", width="100%",
-        bgcolor="#0e1117", font_color="#fafafa",
-        notebook=False, directed=False,
-    )
-    net.set_options(json.dumps({
-        "physics": {
-            "solver": "forceAtlas2Based",
-            "forceAtlas2Based": {"gravitationalConstant": -80, "centralGravity": 0.01},
-        },
-        "edges": {
-            "color": {"color": "rgba(200,200,200,0.3)"},
-            "smooth": {"enabled": True, "type": "dynamic"},
-        },
-        "interaction": {"hover": True},
-    }))
-
-    for entity, typ in all_entities.items():
-        if entity not in node_count:
-            continue
-        size = min(10 + node_count[entity] * 6, 45)
-        net.add_node(
-            entity, label=entity,
-            color=type_colors.get(typ, "#888"),
-            size=size,
-            title=(
-                f"{type_labels.get(typ, typ)}: {entity}"
-                f"\nFörekomster i träffarna: {node_count[entity]}"
-            ),
-        )
-
-    for (a, b), w in edge_count.items():
-        if a in node_count and b in node_count:
-            net.add_edge(a, b, width=max(1, w * 2), title=f"Samförekomster: {w}")
-
-    return net.generate_html()
 
 
 async def stream_mcp(q: str, placeholder, parts: list[str],
@@ -528,19 +423,6 @@ else:
         st.subheader(f"Svar ({backend_name})")
         ss.answer = asyncio.run(stream_to_string(hits, q, backend))
 
-        _has_claude = bool(
-            os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") or os.environ.get("ANTHROPIC_API_KEY")
-        )
-        if _has_claude:
-            with st.spinner("Extraherar entiteter för graf…"):
-                try:
-                    _ents = asyncio.run(extract_entities(format_context(hits)))
-                    ss.graph_html = build_graph_html(hits, _ents)
-                except Exception:
-                    ss.graph_html = ""
-        else:
-            ss.graph_html = ""
-
 # Rendera resultat från session_state (även efter rerun från PDF-knappar).
 # Bara i RAG-läget — MCP-chatten renderar sina källor inline per tur.
 if ss.hits and not (mcp_mode and backend["kind"] == "claude"):
@@ -568,13 +450,3 @@ if ss.hits and not (mcp_mode and backend["kind"] == "claude"):
                     if txt and st.button("Öppna text", key=f"open_txt_{i}",
                                          use_container_width=True):
                         subprocess.Popen(["open", str(txt)])
-
-    if ss.graph_html:
-        with st.expander("Entitetsgraf", expanded=False):
-            st.markdown(
-                '<span style="color:#4a90d9">●</span> Person&ensp;'
-                '<span style="color:#27ae60">●</span> Plats&ensp;'
-                '<span style="color:#e67e22">●</span> Händelse',
-                unsafe_allow_html=True,
-            )
-            st.components.v1.html(ss.graph_html, height=470, scrolling=False)
