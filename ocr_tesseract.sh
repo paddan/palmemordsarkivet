@@ -175,6 +175,7 @@ run_ocr() {
   # Försök 1: fullt förbehandlingsläge (rotate+clean+deskew).
   # Försök 2: utan --clean om försök 1 misslyckas (unpaper kraschar på konstiga sidor).
   # Försök 3: utan --clean och --deskew.
+  # Appendar retry-labels till _OCR_RETRIES (deklareras av anroparen).
   local mode="$1" pdf="$2" out_pdf="$3" log base
   base=$(basename "$pdf" .pdf)
   log=$(mktemp)
@@ -198,7 +199,7 @@ run_ocr() {
   fi
 
   # Försök 2: utan --clean (unpaper-fel är vanligaste orsaken)
-  echo "[retry utan --clean] $base" >&2
+  _OCR_RETRIES="${_OCR_RETRIES} no-clean"
   truncate -s 0 "$log"
   if _run_ocrmypdf "$log" "${base_flags[@]}" "${mode_flags[@]}" "$pdf" "$out_pdf"; then
     rm -f "$log"; return 0
@@ -206,7 +207,7 @@ run_ocr() {
 
   # Försök 3: utan --clean och utan --deskew
   if [ "$mode" != "redo" ]; then
-    echo "[retry utan --clean/--deskew] $base" >&2
+    _OCR_RETRIES="${_OCR_RETRIES} no-deskew"
     truncate -s 0 "$log"
     if _run_ocrmypdf "$log" "${base_flags[@]}" --skip-text "$pdf" "$out_pdf"; then
       rm -f "$log"; return 0
@@ -221,14 +222,15 @@ run_ocr() {
 }
 
 process_one() {
-  local f="$1" base out_pdf out_txt existing has_text
+  local f="$1" base out_pdf out_txt existing has_text _STATUS _OCR_RETRIES=""
   base=$(basename "$f" .pdf)
   out_pdf="$OCR/$base.pdf"
   out_txt="$TXT/$base.txt"
 
-  [ -s "$out_txt" ] && { echo "[hoppar] $base"; return 0; }
-
-  echo "[skannar] $base"
+  if [ -s "$out_txt" ]; then
+    printf 'hoppar' > "$PROGRESS_DIR/${base}.status"
+    return 0
+  fi
 
   local raw_text
   # Utan -layout: roterade PDF:er (Page rot: 90/270) ger annars enormt whitespace
@@ -244,32 +246,38 @@ process_one() {
   else
     LANGS="swe+eng"  # skannat dokument — okänt språk, kör båda
   fi
-  [ "$LANGS" != "swe" ] && echo "[lang: $LANGS] $base"
+
+  _STATUS=""
+  [ "$LANGS" != "swe" ] && _STATUS="lang:$LANGS "
 
   if [ "$has_text" = "1" ]; then
     if printf '%s' "$raw_text" | text_quality_ok; then
-      echo "[text-finns] $base"
+      _STATUS="${_STATUS}text-finns"
       cp "$f" "$out_pdf"
       pdftotext -layout "$f" "$out_txt"
-      return 0
     else
-      echo "[text-skräp -> redo] $base"
+      _STATUS="${_STATUS}text-skräp→redo"
       rm -f "$out_pdf" "$out_txt"
       if run_ocr redo "$f" "$out_pdf"; then
+        _STATUS="${_STATUS}${_OCR_RETRIES}"
         pdftotext -layout "$out_pdf" "$out_txt"
       else
+        printf 'fel' > "$PROGRESS_DIR/${base}.status"
         return 1
       fi
-      return 0
+    fi
+  else
+    _STATUS="${_STATUS}ocr"
+    if run_ocr skip "$f" "$out_pdf"; then
+      _STATUS="${_STATUS}${_OCR_RETRIES}"
+      pdftotext -layout "$out_pdf" "$out_txt"
+    else
+      printf 'fel' > "$PROGRESS_DIR/${base}.status"
+      return 1
     fi
   fi
 
-  echo "[ocr] $base"
-  if run_ocr skip "$f" "$out_pdf"; then
-    pdftotext -layout "$out_pdf" "$out_txt"
-  else
-    return 1
-  fi
+  printf '%s' "$_STATUS" > "$PROGRESS_DIR/${base}.status"
 }
 export -f process_one run_ocr _run_ocrmypdf log_err
 export IN OCR TXT PER_FILE_JOBS MIN_TEXT_CHARS LANGS PSM \
@@ -286,16 +294,17 @@ find "$IN" -name '*.pdf' -print0 \
     process_one "$@"
     ret=$?
     base=$(basename "$1" .pdf)
+    status=$(cat "$PROGRESS_DIR/${base}.status" 2>/dev/null || printf "?")
     touch "$PROGRESS_DIR/${base}.done"
-    count=$(ls "$PROGRESS_DIR" | wc -l | tr -d " ")
+    count=$(find "$PROGRESS_DIR" -name "*.done" | wc -l | tr -d " ")
     now=$(date +%s)
     elapsed=$((now - START_TS))
     if [ "$elapsed" -gt 0 ] && [ "$count" -gt 0 ]; then
       remaining=$((TOTAL - count))
       eta_s=$(( remaining * elapsed / count ))
-      printf "[%d/%d eta %dm%02ds]\n" "$count" "$TOTAL" "$((eta_s/60))" "$((eta_s%60))"
+      printf "[%d/%d eta %dm%02ds] %s: %s\n" "$count" "$TOTAL" "$((eta_s/60))" "$((eta_s%60))" "$status" "$base"
     else
-      printf "[%d/%d]\n" "$count" "$TOTAL"
+      printf "[%d/%d] %s: %s\n" "$count" "$TOTAL" "$status" "$base"
     fi
     exit $ret
   ' _ {}
