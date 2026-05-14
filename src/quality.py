@@ -194,7 +194,8 @@ def main() -> int:
     if args.limit:
         files = files[: args.limit]
 
-    print(f"Bedömer {len(files)} filer…", file=sys.stderr)
+    prefix = f"Bedömer {len(files)} filer…"
+    print(prefix, end=" ", file=sys.stderr, flush=True)
     rows = []
     pages_fp = None
     if args.per_page:
@@ -203,7 +204,7 @@ def main() -> int:
     try:
         for i, f in enumerate(files, 1):
             if i % 100 == 0 or i == len(files):
-                print(f"\r  {i}/{len(files)}", end="", file=sys.stderr)
+                print(f"\r{prefix} {i}/{len(files)}", end="", file=sys.stderr)
                 if i == len(files):
                     print(file=sys.stderr)
             try:
