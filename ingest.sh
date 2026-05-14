@@ -20,8 +20,8 @@ Wrapper-flaggor:
 Skickas vidare till src/rag/ingest.py (alla okända flaggor passerar igenom):
   --rebuild               börja om från noll (släpper tabellen)
   --limit N               max antal filer att indexera
-  --text-dir DIR          katalog med .txt-filer (default: text/)
-  --db-dir DIR            LanceDB-katalog (default: rag/lancedb/)
+  --text-dir DIR          katalog med .txt-filer (default: generated/text/)
+  --db-dir DIR            LanceDB-katalog (default: generated/lancedb/)
   --chunk-chars N         tecken per chunk (default: 800)
   --chunk-overlap N       överlapp mellan chunks (default: 150)
   --model NAME            embedding-modell (default: intfloat/multilingual-e5-large)

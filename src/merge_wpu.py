@@ -30,10 +30,10 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-FILES_WPU = ROOT / "files_wpu"
-TEXT_DIR = ROOT / "text"
-OCR_DIR = ROOT / "ocr"
-TEXT_WPU = ROOT / "text_wpu"
+FILES_WPU = ROOT / "downloaded" / "wpu_files"
+TEXT_DIR = ROOT / "generated" / "text"
+OCR_DIR = ROOT / "generated" / "ocr"
+TEXT_WPU = ROOT / "generated" / "text_wpu"
 
 sys.path.insert(0, str(ROOT / "src"))
 from download_wpu import palme_id_keys, wpu_id_keys  # noqa: E402

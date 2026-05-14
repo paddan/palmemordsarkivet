@@ -23,8 +23,8 @@ usage() {
 Användning: $(basename "$0") [flaggor]
 
 Default-läge (full pipeline):
-  1. ./ocr_tesseract.sh                       # Tesseract på files/
-  1b./ocr_tesseract.sh --in files_wpu         # Tesseract på files_wpu/ (om finns)
+  1. ./ocr_tesseract.sh                       # Tesseract på downloaded/files/
+  1b./ocr_tesseract.sh --in downloaded/wpu_files # Tesseract på downloaded/wpu_files/ (om finns)
   2. ./merge_wpu.sh                           # jämför wpu vs palme; raderar
                                               # förloraren (om files_wpu/ finns)
   3. ./quality.sh --per-page                  # quality.csv + quality_pages.jsonl
@@ -48,12 +48,12 @@ Flaggor (default visas inom parentes):
   --source S              text-layer | ocr | any — bara med --redo --mode files (any)
   --jobs N                antal filer parallellt (4)
   --per-file-jobs N       OCR-trådar per fil (2)
-  --in DIR                ingångskatalog med PDF:er (\$ROOT/files)
-  --ocr DIR               output-katalog för OCR-PDF:er (\$ROOT/ocr)
-  --txt DIR               output-katalog för .txt (\$ROOT/text)
-  --csv FILE              quality.csv (\$ROOT/quality.csv)
-  --pages-jsonl FILE      quality_pages.jsonl (\$ROOT/quality_pages.jsonl)
-  --pages-out DIR         output-katalog för per-sida (\$ROOT/text_pages)
+  --in DIR                ingångskatalog med PDF:er (\$ROOT/downloaded/files)
+  --ocr DIR               output-katalog för OCR-PDF:er (\$ROOT/generated/ocr)
+  --txt DIR               output-katalog för .txt (\$ROOT/generated/text)
+  --csv FILE              quality.csv (\$ROOT/generated/quality.csv)
+  --pages-jsonl FILE      quality_pages.jsonl (\$ROOT/generated/quality_pages.jsonl)
+  --pages-out DIR         output-katalog för per-sida (\$ROOT/generated/text_pages)
   --from-list FILE        --redo --mode files: läs filnamn från textfil (en per
                           rad) istället för att filtrera quality.csv. Användbart
                           för att om-OCR:a filer som ingest.py flaggade som
@@ -104,12 +104,12 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-IN=${IN:-$ROOT/files}
-OCR=${OCR:-$ROOT/ocr}
-TXT=${TXT:-$ROOT/text}
-CSV=${CSV:-$ROOT/quality.csv}
-PAGES_JSONL=${PAGES_JSONL:-$ROOT/quality_pages.jsonl}
-PAGES_OUT=${PAGES_OUT:-$ROOT/text_pages}
+IN=${IN:-$ROOT/downloaded/files}
+OCR=${OCR:-$ROOT/generated/ocr}
+TXT=${TXT:-$ROOT/generated/text}
+CSV=${CSV:-$ROOT/generated/quality.csv}
+PAGES_JSONL=${PAGES_JSONL:-$ROOT/generated/quality_pages.jsonl}
+PAGES_OUT=${PAGES_OUT:-$ROOT/generated/text_pages}
 
 if ! printf '%s' "$THRESHOLD" | grep -qE '^[0-9]+(\.[0-9]+)?$'; then
   echo "Ogiltigt --threshold: '$THRESHOLD' (förväntar ett numeriskt värde)" >&2
@@ -132,11 +132,11 @@ if [ "$REDO_ONLY" = "0" ]; then
   step "1/5  Tesseract-OCR (./ocr_tesseract.sh --jobs $JOBS)"
   ./ocr_tesseract.sh --jobs "$JOBS" --per-file-jobs "$PER_FILE_JOBS"
 
-  if [ -d "$ROOT/files_wpu" ]; then
-    # Wpu-filer får samma behandling som palme-filer: tesseract → text/ + ocr/.
+  if [ -d "$ROOT/downloaded/wpu_files" ]; then
+    # Wpu-filer får samma behandling som palme-filer: tesseract → generated/text/ + generated/ocr/.
     # Sen jämför merge_wpu och raderar förlorarens text/+ocr/-filer.
     step "1b/5  Tesseract-OCR av wpu-PDF:er"
-    ./ocr_tesseract.sh --in "$ROOT/files_wpu" --jobs "$JOBS" --per-file-jobs "$PER_FILE_JOBS"
+    ./ocr_tesseract.sh --in "$ROOT/downloaded/wpu_files" --jobs "$JOBS" --per-file-jobs "$PER_FILE_JOBS"
 
     step "2/5  Sammanfoga wpu.nu-text (./merge_wpu.sh)"
     ./merge_wpu.sh
@@ -197,7 +197,7 @@ in_dir = Path(in_dir); out_dir = Path(out_dir); root = Path(root)
 txt_dir = Path(txt_dir)
 # wpu-PDF:er ligger i files_wpu/ men text/ kan innehålla deras text (merge_wpu
 # valde wpu-versionen). Vid fallback för --redo måste vi leta där också.
-wpu_dir = root / "files_wpu"
+wpu_dir = root / "downloaded" / "wpu_files"
 
 # Importera merge_pages direkt så vi slipper subprocess per fil.
 sys.path.insert(0, str(root / "src"))

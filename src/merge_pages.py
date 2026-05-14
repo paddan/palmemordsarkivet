@@ -20,8 +20,8 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-TEXT_DIR = ROOT / "text"
-PAGES_DIR = ROOT / "text_pages"
+TEXT_DIR = ROOT / "generated" / "text"
+PAGES_DIR = ROOT / "generated" / "text_pages"
 
 PAGE_FILE_RE = re.compile(r"^page-(\d+)\.txt$")
 

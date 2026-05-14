@@ -18,7 +18,7 @@ Wrapper-flaggor:
   -h, --help              visa denna hjälp
 
 Skickas vidare till src/download.py (alla okända flaggor passerar igenom):
-  --out DIR               målmapp (default: files/)
+  --out DIR               målmapp (default: downloaded/files/)
   --sheet-id ID           Google Sheets-ID (default: arkivets standardark)
 
 För full src/download.py-hjälp: ./download.sh -- --help

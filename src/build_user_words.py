@@ -32,7 +32,7 @@ except Exception:  # pragma: no cover
     def log_error(component: str, item: str, message: str) -> None:
         pass
 
-TEXT_DIR = ROOT / "text"
+TEXT_DIR = ROOT / "generated" / "text"
 TESSDATA = ROOT / "tessdata"
 USER_WORDS = TESSDATA / "swe.user-words"
 OUT = TESSDATA / "swe.user-words.auto"

@@ -1,8 +1,8 @@
 #!/bin/bash
 # Slå samman wpu.nu-text med palmemordsarkivet-text (välj bäst kvalitet).
 #
-# Kräver att files_wpu/ är nedladdat (./download_wpu.sh) och att
-# text/ finns (./ocr_tesseract.sh eller ./ocr.sh).
+# Kräver att downloaded/wpu_files/ är nedladdat (./download_wpu.sh) och att
+# generated/text/ finns (./ocr_tesseract.sh eller ./ocr.sh).
 #
 # Användning:
 #   ./merge_wpu.sh                   # kör merging

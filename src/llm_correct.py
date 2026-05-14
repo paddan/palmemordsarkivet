@@ -137,9 +137,9 @@ def main() -> None:
     args = ap.parse_args()
 
     root = Path(args.root) if args.root else ROOT
-    jsonl = Path(args.pages_jsonl) if args.pages_jsonl else root / 'quality_pages.jsonl'
-    txt_dir = Path(args.txt) if args.txt else root / 'text'
-    pages_dir = Path(args.pages_out) if args.pages_out else root / 'text_pages'
+    jsonl = Path(args.pages_jsonl) if args.pages_jsonl else root / 'generated' / 'quality_pages.jsonl'
+    txt_dir = Path(args.txt) if args.txt else root / 'generated' / 'text'
+    pages_dir = Path(args.pages_out) if args.pages_out else root / 'generated' / 'text_pages'
 
     if not jsonl.exists():
         print(f'Saknar {jsonl} — kör ./quality.sh --per-page först.', file=sys.stderr)

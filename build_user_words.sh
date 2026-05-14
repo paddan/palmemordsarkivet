@@ -19,7 +19,7 @@ Wrapper-flaggor:
   -h, --help              visa denna hjälp
 
 Skickas vidare till build_user_words.py (alla okända flaggor passerar igenom):
-  --text-dir DIR          katalog med .txt-filer (default: text/)
+  --text-dir DIR          katalog med .txt-filer (default: generated/text/)
   --user-words FILE       befintlig swe.user-words att slå ihop med
   --out FILE              output-fil (default: tessdata/swe.user-words.auto)
   --min-freq N            minsta frekvens; 0 = auto (10 med hunspell, annars 30)

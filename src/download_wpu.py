@@ -28,7 +28,7 @@ from tenacity import (
 )
 
 ROOT = Path(__file__).resolve().parents[1]
-OUT_DIR = ROOT / "files_wpu"
+OUT_DIR = ROOT / "downloaded" / "wpu_files"
 WPU_API = "https://wpu.nu/api.php"
 USER_AGENT = "palmemordsarkivet-wpu-downloader/1.0"
 
