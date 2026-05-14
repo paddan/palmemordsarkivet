@@ -26,28 +26,77 @@ _LIGATURES = str.maketrans({
     'ﬅ': 'st',   # ﬅ
     'ﬆ': 'st',   # ﬆ
     'ĳ': 'ij',   # ĳ
-    '­': '',     # mjukt bindestreck (soft hyphen) — osynligt men stör ordmatchning
-    '﻿': '',     # BOM
+    '\xad': '',  # mjukt bindestreck (soft hyphen) — osynligt men stör ordmatchning
+    '﻿': '', # BOM
 })
 
 # Styrtecken förutom \n \r \t \f (dessa behålls — \f är sidseparator)
 _CTRL_RE = re.compile(r'[\x00-\x08\x0b\x0e-\x1f\x7f]')
 
+# HTML-taggar som pdftotext ibland lämnar kvar (<b>, <del>, etc.)
+_HTML_RE = re.compile(r'<[^>]{1,100}>')
+
 # Fler än två blankrader → två (bevara styckeindelning men inte onödig luft)
 _BLANK_RE = re.compile(r'\n{3,}')
 
-# Fler mellanslag/tabbar på en rad → ett (men inte nyrad)
-_SPACE_RE = re.compile(r'[ \t]{2,}')
+# Dekorativa separatorrader: 3+ repetitioner av ~, =, -, _, •, ·, . (ensamma på raden)
+_DECOR_RE = re.compile(r'^[-~=_·•.]{3,}$')
+
+# Punktorader (· · · eller . . .) som i innehållsförteckningar
+_DOT_LEADER_RE = re.compile(r'^[\s·•.]+$')
+
+# Rader med enbart pipe-tecken och blanksteg (tabellkanter från pdftotext)
+_PIPE_ONLY_RE = re.compile(r'^[\s|]+$')
+
+
+def _clean_line(line: str) -> str | None:
+    """Rensa en rad. Returnerar None om raden skall tas bort helt."""
+    # Strip ledande och avslutande blanksteg (pdftotext positionerar med mellanslag)
+    line = line.strip()
+
+    # Ta bort HTML-taggar
+    line = _HTML_RE.sub('', line).strip()
+
+    if not line:
+        return ''  # blank rad — behålls (collapse sker senare)
+
+    # Rader utan ett enda alfanumeriskt tecken
+    if not any(c.isalnum() for c in line):
+        if len(line) <= 2:
+            return None          # enstaka symbol (|, =, ,, .) → bort
+        if _PIPE_ONLY_RE.match(line):
+            return None          # tabellkanter (|   |   |) → bort
+        if _DECOR_RE.match(line):
+            return None          # ~~~~ eller ==== → bort
+        if _DOT_LEADER_RE.match(line):
+            return None          # · · · · (innehållsförteckning) → bort
+
+    return line
 
 
 def normalize(text: str) -> str:
     """Normalisera OCR-text. Ändrar inte meningsinnehåll."""
+    # Globala teckentransformationer
     text = text.translate(_LIGATURES)
     text = unicodedata.normalize('NFC', text)
+    text = text.replace('\r\n', '\n').replace('\r', '\n')
     text = _CTRL_RE.sub('', text)
-    text = _SPACE_RE.sub(' ', text)
-    text = _BLANK_RE.sub('\n\n', text)
-    return text
+
+    # Per-sida bearbetning (bevara \f sidseparatorer)
+    pages = text.split('\f')
+    result_pages = []
+    for page in pages:
+        cleaned_lines = []
+        for line in page.split('\n'):
+            out = _clean_line(line)
+            if out is not None:
+                cleaned_lines.append(out)
+        page_text = '\n'.join(cleaned_lines)
+        # Collapse fler än 2 blankrader till 2
+        page_text = _BLANK_RE.sub('\n\n', page_text)
+        result_pages.append(page_text)
+
+    return '\f'.join(result_pages)
 
 
 def process_file(path: Path, dry_run: bool = False) -> bool:
