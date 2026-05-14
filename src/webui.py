@@ -402,6 +402,100 @@ async def stream_mcp_to_string(q: str, resume_id: str | None) -> tuple[str, str 
     return final, new_id
 
 
+def _run_tool(name: str, arguments: dict) -> str:
+    import mcp_server  # type: ignore  # noqa: PLC0415
+    mcp_server._table = table
+    mcp_server._model = embed_model
+    if name == "search_archive":
+        return mcp_server.search_archive(**arguments)
+    if name == "get_page":
+        return mcp_server.get_page(**arguments)
+    return f"Okänt verktyg: {name}"
+
+
+async def stream_openai_mcp(
+    status_box,
+    text_placeholder,
+    parts: list[str],
+    cfg: dict,
+    messages: list[dict],
+) -> None:
+    """Utredningsläge för OpenAI-kompatibla backends.
+
+    messages innehåller redan user-meddelandet. Assistentens svar och
+    tool-resultat appendas direkt till messages (konversationshistorik).
+    """
+    import json  # noqa: PLC0415
+
+    from openai import AsyncOpenAI  # noqa: PLC0415
+
+    api_key = cfg.get("api_key_override") or (
+        os.environ.get(cfg["env"]) if cfg.get("env") else "ollama"
+    )
+    client = AsyncOpenAI(api_key=api_key or "ollama", base_url=cfg["base_url"])
+
+    tool_count = 0
+    try:
+        for _turn in range(10):
+            response = await client.chat.completions.create(
+                model=cfg["model"],
+                messages=messages,
+                tools=OPENAI_TOOLS,
+            )
+            choice = response.choices[0]
+            msg = choice.message
+
+            if choice.finish_reason == "tool_calls" and msg.tool_calls:
+                messages.append({
+                    "role": "assistant",
+                    "content": msg.content,
+                    "tool_calls": [tc.model_dump() for tc in msg.tool_calls],
+                })
+                for tc in msg.tool_calls:
+                    args = json.loads(tc.function.arguments)
+                    tool_count += 1
+                    if tc.function.name == "search_archive":
+                        label = f'search_archive: "{args.get("query", "")}"'
+                    else:
+                        label = f'get_page: {args.get("source", "")}, sida {args.get("page", "")}'
+                    status_box.write(label)
+                    result = _run_tool(tc.function.name, args)
+                    messages.append({
+                        "role": "tool",
+                        "content": result,
+                        "tool_call_id": tc.id,
+                    })
+            else:
+                final = msg.content or ""
+                parts.append(final)
+                text_placeholder.markdown(final)
+                messages.append({"role": "assistant", "content": final})
+                break
+    except Exception as exc:
+        error_msg = f"*Fel vid anrop till {cfg['model']}: {exc}*"
+        parts.append(error_msg)
+        text_placeholder.markdown(error_msg)
+
+    n = tool_count
+    suffix = "ar" if n != 1 else ""
+    done = "a" if n != 1 else ""
+    status_box.update(
+        label=f"{n} sökning{suffix} gjord{done}",
+        state="complete",
+        expanded=False,
+    )
+
+
+async def stream_openai_mcp_to_string(cfg: dict, messages: list[dict]) -> str:
+    status_box = st.status("Söker i arkivet…", expanded=True)
+    text_placeholder = st.empty()
+    parts: list[str] = []
+    await stream_openai_mcp(status_box, text_placeholder, parts, cfg, messages)
+    final = linkify_citations("".join(parts))
+    text_placeholder.markdown(final, unsafe_allow_html=True)
+    return final
+
+
 if mcp_mode and backend["kind"] == "claude":
     # Chatt-läge: rendera historiken först, sedan st.chat_input nederst.
     for turn_idx, turn in enumerate(ss.chat_history):
