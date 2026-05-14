@@ -27,6 +27,13 @@ på komplexa flerstegs-frågor, men långsammare (~1–3 min).
 
 ![Web-gränssnitt — MCP-läge](web-ui.png)
 
+**Entitetsgraf (RAG-läge)** — efter varje RAG-svar visas ett kollabserbart
+"Entitetsgraf"-element under källorna. Claude Haiku extraherar automatiskt
+personer (blå), platser (grön) och händelser (orange) ur de returnerade
+textutdragen och renderar dem som en interaktiv co-occurrence-graf. Noder med
+fler förekomster visas större; kanter indikerar att två entiteter nämns i samma
+chunk. Kräver Claude-credentials.
+
 ## Kom igång
 
 ```bash

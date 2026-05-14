@@ -310,6 +310,12 @@ Streamlit app with:
   `ClaudeAgentOptions(resume=...)` på nästa fråga — Claude minns då tidigare frågor och
   tool-resultat. "Ny konversation"-knappen i sidebaren nollställer `chat_history` +
   `mcp_session_id`. RAG-läget använder fortfarande den gamla form-baserade engångs-UI:n.
+- **Entitetsgraf (RAG-läge)**: efter varje RAG-svar extraheras personer, platser och händelser
+  ur chunk-kontexten med ett extra Claude Haiku-anrop (`extract_entities()`), byggs till en
+  co-occurrence-graf med `networkx` och renderas interaktivt med `pyvis` via
+  `st.components.v1.html`. Visas i ett kollabserbart expander-element under källorna.
+  Kräver Claude-credentials (samma token som resten). Noder storleksätts efter
+  förekomstfrekvens; kanter visar samförekomster per chunk.
 
 ## Testing
 
