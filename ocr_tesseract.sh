@@ -275,8 +275,32 @@ export -f process_one run_ocr _run_ocrmypdf log_err
 export IN OCR TXT PER_FILE_JOBS MIN_TEXT_CHARS LANGS PSM \
        USER_WORDS USER_WORDS_AUTO TESS_CONFIG TESSDATA_PREFIX IMAGE_DPI ERRORS_LOG
 
+TOTAL=$(find "$IN" -name '*.pdf' | wc -l | tr -d ' ')
+PROGRESS_DIR=$(mktemp -d)
+START_TS=$(date +%s)
+export TOTAL PROGRESS_DIR START_TS
+echo "Hittade $TOTAL PDF:er att bearbeta..."
+
 find "$IN" -name '*.pdf' -print0 \
-  | xargs -0 -n 1 -P "$JOBS" -I {} bash -c 'process_one "$@"' _ {}
+  | xargs -0 -n 1 -P "$JOBS" -I {} bash -c '
+    process_one "$@"
+    ret=$?
+    base=$(basename "$1" .pdf)
+    touch "$PROGRESS_DIR/${base}.done"
+    count=$(ls "$PROGRESS_DIR" | wc -l | tr -d " ")
+    now=$(date +%s)
+    elapsed=$((now - START_TS))
+    if [ "$elapsed" -gt 0 ] && [ "$count" -gt 0 ]; then
+      remaining=$((TOTAL - count))
+      eta_s=$(( remaining * elapsed / count ))
+      printf "[%d/%d eta %dm%02ds]\n" "$count" "$TOTAL" "$((eta_s/60))" "$((eta_s%60))"
+    else
+      printf "[%d/%d]\n" "$count" "$TOTAL"
+    fi
+    exit $ret
+  ' _ {}
+
+rm -rf "$PROGRESS_DIR"
 
 # Slutkontroll: alla PDF:er i files/ ska finnas i ocr/
 echo
