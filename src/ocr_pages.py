@@ -184,6 +184,90 @@ def update_pdf_text_layer(
     return patched
 
 
+def detect_redactions_image(
+    image,
+    darkness: int = 40,
+    min_width_frac: float = 0.10,
+    min_height: int = 8,
+) -> list[tuple[int, int]]:
+    """Hitta svarta maskeringsblock i PIL-bild via pixelanalys.
+
+    Söker rader med ett sammanhängande mörkt span >= min_width_frac × sidbredd.
+    Returnerar lista av (y0, y1) i bildpixlar, en tuple per funnet block.
+    """
+    gray = image.convert("L")
+    w, h = gray.size
+    data = gray.tobytes()
+    min_span = int(w * min_width_frac)
+
+    dark_rows: list[int] = []
+    for y in range(h):
+        row = data[y * w:(y + 1) * w]
+        max_span = span = 0
+        for px in row:
+            if px < darkness:
+                span += 1
+                if span > max_span:
+                    max_span = span
+            else:
+                span = 0
+        if max_span >= min_span:
+            dark_rows.append(y)
+
+    if not dark_rows:
+        return []
+
+    blocks: list[tuple[int, int]] = []
+    y0 = dark_rows[0]
+    yp = dark_rows[0]
+    for y in dark_rows[1:]:
+        if y > yp + 3:
+            if yp - y0 + 1 >= min_height:
+                blocks.append((y0, yp))
+            y0 = y
+        yp = y
+    if yp - y0 + 1 >= min_height:
+        blocks.append((y0, yp))
+    return blocks
+
+
+def _merge_redaction_markers(
+    text: str,
+    blocks: list[tuple[int, int]],
+    image_height: int,
+    line_bboxes: list[dict] | None = None,
+) -> str:
+    """Infoga [MASKAD]-markeringar i text vid detekterade maskeringsblock.
+
+    Med line_bboxes (surya-format {text, bbox: [x0, y0, x1, y1]}) används
+    exakta y-koordinater. Utan dem approximeras positionen via andel av sidans
+    höjd multiplicerat med antal rader.
+    """
+    if not blocks:
+        return text
+
+    if line_bboxes is not None:
+        items: list[tuple[float, str]] = [
+            ((ln["bbox"][1] + ln["bbox"][3]) / 2, ln["text"])
+            for ln in line_bboxes
+        ]
+        for b0, b1 in blocks:
+            items.append(((b0 + b1) / 2, "[MASKAD]"))
+        items.sort(key=lambda x: x[0])
+        return "\n".join(t for _, t in items)
+
+    lines = text.split("\n")
+    n = len(lines)
+    insertions: list[tuple[int, str]] = []
+    for b0, b1 in blocks:
+        mid_y = (b0 + b1) / 2
+        idx = max(0, min(n, round(mid_y / image_height * n)))
+        insertions.append((idx, "[MASKAD]"))
+    for idx, marker in sorted(insertions, key=lambda x: x[0], reverse=True):
+        lines.insert(idx, marker)
+    return "\n".join(lines)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -215,6 +299,8 @@ def main() -> int:
                          "OCR:ade sidorna (default: av)")
     ap.add_argument("--no-update-pdf", action="store_true",
                     help="stäng av PDF-textlager-patchen även om --ocr-dir är satt")
+    ap.add_argument("--no-detect-redactions", action="store_true",
+                    help="stäng av automatisk detektering av maskeringsblock")
     args = ap.parse_args()
 
     pdf = Path(args.inp)
@@ -260,13 +346,25 @@ def main() -> int:
             n_skipped += 1
             continue
 
+        redaction_blocks: list[tuple[int, int]] = []
+        if not args.no_detect_redactions:
+            redaction_blocks = detect_redactions_image(image)
+
         try:
             if args.engine == "surya":
                 if want_pdf_patch:
                     text, lines = ocr_surya_lines(image)
                     page_lines[page_num] = lines
+                    if redaction_blocks:
+                        text = _merge_redaction_markers(
+                            text, redaction_blocks, image.height, line_bboxes=lines
+                        )
                 else:
                     text = ocr_surya(image)
+                    if redaction_blocks:
+                        text = _merge_redaction_markers(
+                            text, redaction_blocks, image.height
+                        )
             else:
                 # spara PNG (idempotent)
                 if not png_path.exists():
@@ -275,6 +373,10 @@ def main() -> int:
                     text = ocr_vision(png_path)
                 else:
                     text = ocr_tesseract(png_path, args.langs)
+                if redaction_blocks:
+                    text = _merge_redaction_markers(
+                        text, redaction_blocks, image.height
+                    )
         except Exception as e:  # noqa: BLE001
             print(f"  [{pdf.stem} p{page_num}] FEL: {e}", file=sys.stderr)
             log_error("ocr_pages", f"{pdf.name}#p{page_num}", str(e))
@@ -286,16 +388,18 @@ def main() -> int:
             scored = {"chars": len(text), "score": 0.0}
 
         txt_path.write_text(text, encoding="utf-8")
+        redact_suffix = f" [{len(redaction_blocks)} mask]" if redaction_blocks else ""
         meta = {
             "file": pdf.name,
             "page": page_num,
             "engine": args.engine,
+            "redactions": len(redaction_blocks),
             **scored,
         }
         json_path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
         n_done += 1
         print(f"  [{pdf.stem} p{page_num:03d}] {len(text):5d} tecken "
-              f"score={scored.get('score', 0)}", flush=True)
+              f"score={scored.get('score', 0)}{redact_suffix}", flush=True)
 
     # Slutsamla — combined-fil i text_pages/ skapas inte längre. Per-sida-text
     # mergas direkt in i text/<stem>.txt av merge_pages (anropas från ocr.sh).

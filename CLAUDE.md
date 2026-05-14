@@ -32,7 +32,7 @@ All components are Swedish-language facing; comments and docstrings are in Swedi
 ├── src/                      # Core Python modules
 │   ├── download.py          # Google Drive PDF downloader with manifest tracking
 │   ├── quality.py           # OCR quality scoring (heuristics + optional hunspell)
-│   ├── ocr_pages.py        # Per-page OCR pipeline (Tesseract/Vision/Surya)
+│   ├── ocr_pages.py        # Per-page OCR pipeline (Tesseract/Vision/Surya) + redaktionsdetektering
 │   ├── build_user_words.py  # Generate Tesseract user-words from OCR text
 │   ├── errors_log.py        # Centralized error logging (tab-separated)
 │   ├── normalize_text.py    # Rule-based OCR text normalization (ligatures, whitespace)
@@ -287,6 +287,14 @@ Scoring formula: 100 - penalties for junk, short words, long words, digit-mixing
 - `parse_reindex_since(value: str) → float`: Tolkar `--reindex-since` (ISO 8601 eller unix-sekunder)
 
 Schema: vector (1024 dims), text, source, page, chunk_idx, mtime, plus metadata fields (nr, titel, etc.).
+
+### `src/ocr_pages.py`
+
+- `detect_redactions_image(image, darkness, min_width_frac, min_height) → list[tuple[int,int]]`: Hitta svarta maskeringsblock i PIL-bild. Söker rader med ett sammanhängande mörkt span ≥ min_width_frac × sidbredd. Returnerar (y0, y1) per block.
+- `_merge_redaction_markers(text, blocks, image_height, line_bboxes) → str`: Infoga `[MASKAD]` vid detekterade block. Med `line_bboxes` (surya-format) används exakta y-koordinater; annars approximeras positionen.
+- Redaktionsdetektering är på som standard; stäng av med `--no-detect-redactions`.
+- Detekterade block lagras även i `page-NNN.json` som `"redactions": N`.
+- Testad i `tests/test_detect_redactions.py`.
 
 ### `src/normalize_text.py`
 
