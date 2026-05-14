@@ -215,6 +215,16 @@ OPENAI_TOOLS = [
     },
 ]
 
+st.session_state.setdefault("mcp_mode", False)
+st.session_state.setdefault("do_rerank", True)
+
+
+def _on_rerank_change() -> None:
+    if st.session_state.get("mcp_mode"):
+        st.session_state.mcp_mode = False
+        st.session_state.do_rerank = True
+
+
 with st.sidebar:
     st.header("Inställningar")
     backend_name = st.selectbox("AI-modell", list(BACKENDS.keys()), index=0)
@@ -236,7 +246,7 @@ with st.sidebar:
         }
     mcp_mode = st.toggle(
         "Utredningsläge (MCP)",
-        value=False,
+        key="mcp_mode",
         help="Modellen söker autonomt med egna verktyg — bättre på komplexa frågor, men långsammare. "
              "I detta läge får du en chatt där modellen minns tidigare frågor.",
         disabled=backend["kind"] not in ("claude", "openai"),
@@ -246,9 +256,11 @@ with st.sidebar:
         st.session_state.mcp_session_id = None
         st.session_state.openai_chat_messages = []
         st.rerun()
-    do_rerank = st.toggle("Använd cross-encoder reranker", value=True,
+    do_rerank = st.toggle("Använd cross-encoder reranker",
+                          key="do_rerank",
                           help="Långsammare första gången (laddar ~568 MB) men bättre precision. "
-                               "Används i RAG-läget — inaktivt i utredningsläget.")
+                               "Klicka för att byta till RAG-läget när utredningsläget är aktivt.",
+                          on_change=_on_rerank_change)
     top_k = st.slider(
         "Hämta top-K kandidater", 5, 50, 20,
         help="Antal chunks som vektorsökningen plockar fram ur indexet i första "
