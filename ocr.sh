@@ -28,12 +28,13 @@ Default-läge (full pipeline):
   2. ./merge_wpu.sh                           # jämför wpu vs palme; raderar
                                               # förloraren (om files_wpu/ finns)
   3. ./normalize.sh                           # regelbaserad textnormalisering
-  4. ./quality.sh --per-page                  # quality.csv + quality_pages.jsonl
-  5. ./ocr.sh --redo --mode pages             # Surya på sidor under tröskeln
+  4. ./detect_redactions.sh                   # infoga [MASKAD] i text
+  5. ./quality.sh --per-page                  # quality.csv + quality_pages.jsonl
+  6. ./ocr.sh --redo --mode pages             # Surya på sidor under tröskeln
                                               # (palme + kvarvarande wpu)
-  6. ./quality.sh                             # uppdaterad quality.csv
+  7. ./quality.sh                             # uppdaterad quality.csv
 
-Steg 5 hoppas över om --skip-redo eller om Surya inte är installerat.
+Steg 6 hoppas över om --skip-redo eller om Surya inte är installerat.
 
 Flaggor (default visas inom parentes):
 
@@ -130,39 +131,42 @@ step() {
 if [ "$REDO_ONLY" = "0" ]; then
   t0=$(date +%s)
 
-  step "1/6  Tesseract-OCR (./ocr_tesseract.sh --jobs $JOBS)"
+  step "1/7  Tesseract-OCR (./ocr_tesseract.sh --jobs $JOBS)"
   ./ocr_tesseract.sh --jobs "$JOBS" --per-file-jobs "$PER_FILE_JOBS"
 
   if [ -d "$ROOT/downloaded/wpu_files" ]; then
     # Wpu-filer får samma behandling som palme-filer: tesseract → generated/text/ + generated/ocr/.
     # Sen jämför merge_wpu och raderar förlorarens text/+ocr/-filer.
-    step "1b/6  Tesseract-OCR av wpu-PDF:er"
+    step "1b/7  Tesseract-OCR av wpu-PDF:er"
     ./ocr_tesseract.sh --in "$ROOT/downloaded/wpu_files" --jobs "$JOBS" --per-file-jobs "$PER_FILE_JOBS"
 
-    step "2/6  Sammanfoga wpu.nu-text (./merge_wpu.sh)"
+    step "2/7  Sammanfoga wpu.nu-text (./merge_wpu.sh)"
     ./merge_wpu.sh
   fi
 
-  step "3/6  Normalisering (./normalize.sh)"
+  step "3/7  Normalisering (./normalize.sh)"
   ./normalize.sh
 
-  step "4/6  Kvalitetsbedömning (./quality.sh --per-page)"
+  step "4/7  Redaktionsdetektering (./detect_redactions.sh)"
+  ./detect_redactions.sh
+
+  step "5/7  Kvalitetsbedömning (./quality.sh --per-page)"
   ./quality.sh --per-page
 
   if [ "$SKIP_REDO" = "1" ]; then
     echo
-    echo "===== Hoppar över steg 5 (--skip-redo) ====="
+    echo "===== Hoppar över steg 6 (--skip-redo) ====="
   elif ! "$ROOT/.venv/bin/python" -c "import surya" 2>/dev/null; then
     echo
-    echo "===== Hoppar över steg 5 (Surya inte installerat) ====="
+    echo "===== Hoppar över steg 6 (Surya inte installerat) ====="
     echo "Installera med:  .venv/bin/pip install surya-ocr 'transformers<5'"
   else
-    step "5/6  Om-OCR med Surya på sidor < $THRESHOLD (./ocr.sh --redo --mode pages)"
+    step "6/7  Om-OCR med Surya på sidor < $THRESHOLD (./ocr.sh --redo --mode pages)"
     redo_extra=()
     [ "$NO_UPDATE_PDF" = "1" ] && redo_extra+=(--no-update-pdf)
     ./ocr.sh --redo --mode pages --threshold "$THRESHOLD" --jobs "$JOBS" --per-file-jobs "$PER_FILE_JOBS" ${redo_extra[@]+"${redo_extra[@]}"}
 
-    step "6/6  Uppdaterad kvalitetsbedömning"
+    step "7/7  Uppdaterad kvalitetsbedömning"
     ./quality.sh
   fi
 

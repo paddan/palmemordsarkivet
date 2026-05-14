@@ -268,6 +268,51 @@ def _merge_redaction_markers(
     return "\n".join(lines)
 
 
+def detect_redactions_file(
+    pdf: Path,
+    txt_file: Path,
+    marker: Path,
+    dpi: int = 72,
+) -> int:
+    """Infoga [MASKAD] i befintlig txt-fil baserat på bildanalys av pdf.
+
+    Renderar sidor vid låg DPI (behövs bara för att hitta stora svarta block).
+    Idempotent via marker-fil. Returnerar antal infogade block.
+    """
+    if marker.exists():
+        return 0
+    if not txt_file.exists():
+        marker.write_text("", encoding="utf-8")
+        return 0
+
+    full_text = txt_file.read_text(encoding="utf-8", errors="replace")
+    pages_text = full_text.split("\f")
+
+    n_blocks = 0
+    updated = False
+    for page_num, image in render_pages(pdf, dpi):
+        page_idx = page_num - 1
+        if page_idx >= len(pages_text):
+            continue
+        page_text = pages_text[page_idx]
+        if "[MASKAD]" in page_text:
+            continue
+        blocks = detect_redactions_image(image)
+        if not blocks:
+            continue
+        pages_text[page_idx] = _merge_redaction_markers(
+            page_text, blocks, image.height
+        )
+        n_blocks += len(blocks)
+        updated = True
+
+    if updated:
+        txt_file.write_text("\f".join(pages_text), encoding="utf-8")
+
+    marker.write_text("", encoding="utf-8")
+    return n_blocks
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -277,12 +322,11 @@ def main() -> int:
                     help="PDF-fil (env: IN)")
     ap.add_argument("--out-dir",
                     default=os.environ.get("OUT_DIR"),
-                    required=not os.environ.get("OUT_DIR"),
-                    help="output-katalog (env: OUT_DIR)")
+                    help="output-katalog (env: OUT_DIR); krävs ej för --engine detect-only")
     ap.add_argument("--engine",
                     default=os.environ.get("ENGINE", "tesseract"),
-                    choices=["tesseract", "vision", "surya"],
-                    help="OCR-motor (default: tesseract)")
+                    choices=["tesseract", "vision", "surya", "detect-only"],
+                    help="OCR-motor (default: tesseract). detect-only: bara redaktionsdetektering, ingen om-OCR")
     ap.add_argument("--langs",
                     default=os.environ.get("LANGS", "swe"),
                     help="tesseract-språk (default: swe)")
@@ -301,11 +345,26 @@ def main() -> int:
                     help="stäng av PDF-textlager-patchen även om --ocr-dir är satt")
     ap.add_argument("--no-detect-redactions", action="store_true",
                     help="stäng av automatisk detektering av maskeringsblock")
+    ap.add_argument("--txt-dir",
+                    default=os.environ.get("TXT_DIR"),
+                    help="text-katalog för detect-only (default: <root>/generated/text)")
     args = ap.parse_args()
 
     pdf = Path(args.inp)
     if not pdf.exists():
         print(f"Saknar {pdf}", file=sys.stderr)
+        return 1
+
+    if args.engine == "detect-only":
+        txt_dir = Path(args.txt_dir) if args.txt_dir else ROOT / "generated" / "text"
+        txt_file = txt_dir / f"{pdf.stem}.txt"
+        marker = txt_dir / f"{pdf.stem}.redact"
+        n = detect_redactions_file(pdf, txt_file, marker, args.dpi)
+        print(f"inga" if n == 0 else f"{n} block")
+        return 0
+
+    if not args.out_dir:
+        print("--out-dir krävs för alla motorer utom detect-only", file=sys.stderr)
         return 1
 
     out_dir = Path(args.out_dir)
