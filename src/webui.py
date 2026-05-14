@@ -504,45 +504,86 @@ async def stream_openai_mcp_to_string(cfg: dict, messages: list[dict]) -> str:
     return final
 
 
-if mcp_mode and backend["kind"] == "claude":
-    # Chatt-läge: rendera historiken först, sedan st.chat_input nederst.
-    for turn_idx, turn in enumerate(ss.chat_history):
-        with st.chat_message(turn["role"]):
-            st.markdown(turn["text"], unsafe_allow_html=True)
-            srcs = turn.get("sources") or []
-            if srcs:
-                with st.expander(f"Källor ({len(srcs)})", expanded=False):
-                    for i, h in enumerate(srcs):
-                        pdf = find_pdf(h["source"])
-                        stem = h["source"][:-4] if h["source"].endswith(".txt") else h["source"]
-                        with st.container(border=True):
-                            cols = st.columns([5, 2])
-                            with cols[0]:
-                                st.markdown(f"**{stem}**")
-                            with cols[1]:
-                                if pdf and st.button(
-                                    "Öppna PDF",
-                                    key=f"chat_pdf_{turn_idx}_{i}",
-                                    use_container_width=True,
-                                ):
-                                    subprocess.Popen(["open", str(pdf)])
+if mcp_mode:
+    if backend["kind"] == "claude":
+        # Chatt-läge: rendera historiken först, sedan st.chat_input nederst.
+        for turn_idx, turn in enumerate(ss.chat_history):
+            with st.chat_message(turn["role"]):
+                st.markdown(turn["text"], unsafe_allow_html=True)
+                srcs = turn.get("sources") or []
+                if srcs:
+                    with st.expander(f"Källor ({len(srcs)})", expanded=False):
+                        for i, h in enumerate(srcs):
+                            pdf = find_pdf(h["source"])
+                            stem = h["source"][:-4] if h["source"].endswith(".txt") else h["source"]
+                            with st.container(border=True):
+                                cols = st.columns([5, 2])
+                                with cols[0]:
+                                    st.markdown(f"**{stem}**")
+                                with cols[1]:
+                                    if pdf and st.button(
+                                        "Öppna PDF",
+                                        key=f"chat_pdf_{turn_idx}_{i}",
+                                        use_container_width=True,
+                                    ):
+                                        subprocess.Popen(["open", str(pdf)])
 
-    chat_q = st.chat_input("Ställ en fråga till utredningsassistenten…")
-    if chat_q and chat_q.strip():
-        ss.chat_history.append({"role": "user", "text": chat_q, "sources": []})
-        with st.chat_message("user"):
-            st.markdown(chat_q)
-        with st.chat_message("assistant"):
-            answer, new_id = asyncio.run(
-                stream_mcp_to_string(chat_q, ss.mcp_session_id)
-            )
-        ss.mcp_session_id = new_id
-        ss.chat_history.append({
-            "role": "assistant",
-            "text": answer,
-            "sources": extract_cited_sources(answer),
-        })
-        st.rerun()
+        chat_q = st.chat_input("Ställ en fråga till utredningsassistenten…")
+        if chat_q and chat_q.strip():
+            ss.chat_history.append({"role": "user", "text": chat_q, "sources": []})
+            with st.chat_message("user"):
+                st.markdown(chat_q)
+            with st.chat_message("assistant"):
+                answer, new_id = asyncio.run(
+                    stream_mcp_to_string(chat_q, ss.mcp_session_id)
+                )
+            ss.mcp_session_id = new_id
+            ss.chat_history.append({
+                "role": "assistant",
+                "text": answer,
+                "sources": extract_cited_sources(answer),
+            })
+            st.rerun()
+    else:
+        for turn_idx, turn in enumerate(ss.chat_history):
+            with st.chat_message(turn["role"]):
+                st.markdown(turn["text"], unsafe_allow_html=True)
+                srcs = turn.get("sources") or []
+                if srcs:
+                    with st.expander(f"Källor ({len(srcs)})", expanded=False):
+                        for i, h in enumerate(srcs):
+                            pdf = find_pdf(h["source"])
+                            stem = h["source"][:-4] if h["source"].endswith(".txt") else h["source"]
+                            with st.container(border=True):
+                                cols = st.columns([5, 2])
+                                with cols[0]:
+                                    st.markdown(f"**{stem}**")
+                                with cols[1]:
+                                    if pdf and st.button(
+                                        "Öppna PDF",
+                                        key=f"chat_pdf_{turn_idx}_{i}",
+                                        use_container_width=True,
+                                    ):
+                                        subprocess.Popen(["open", str(pdf)])
+
+        chat_q = st.chat_input("Ställ en fråga till utredningsassistenten…")
+        if chat_q and chat_q.strip():
+            if not ss.openai_chat_messages:
+                ss.openai_chat_messages.append({"role": "system", "content": MCP_SYSTEM_PROMPT})
+            ss.openai_chat_messages.append({"role": "user", "content": chat_q})
+            ss.chat_history.append({"role": "user", "text": chat_q, "sources": []})
+            with st.chat_message("user"):
+                st.markdown(chat_q)
+            with st.chat_message("assistant"):
+                answer = asyncio.run(
+                    stream_openai_mcp_to_string(backend, ss.openai_chat_messages)
+                )
+            ss.chat_history.append({
+                "role": "assistant",
+                "text": answer,
+                "sources": extract_cited_sources(answer),
+            })
+            st.rerun()
 else:
     with st.form("ask"):
         q = st.text_input("Din fråga", placeholder="Vem är Stig Engström?")
@@ -569,7 +610,7 @@ else:
 
 # Rendera resultat från session_state (även efter rerun från PDF-knappar).
 # Bara i RAG-läget — MCP-chatten renderar sina källor inline per tur.
-if ss.hits and not (mcp_mode and backend["kind"] == "claude"):
+if ss.hits and not mcp_mode:
     if not (submitted and q.strip()):
         # på rerun: visa cachat svar (redan linkifierat)
         st.subheader("Svar")
