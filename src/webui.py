@@ -173,6 +173,48 @@ BACKENDS = {
                                    "env": None, "configurable": True},
 }
 
+OPENAI_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "search_archive",
+            "description": (
+                "Sök i Palmemordsarkivet och returnera relevanta textutdrag med källhänvisningar. "
+                "Anropa flera gånger med olika söktermer för att täcka ett ämne från flera vinklar."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Sökfrågan på svenska"},
+                    "top_k": {"type": "integer", "description": "Antal kandidater att hämta (5–50)", "default": 20},
+                    "top_n": {"type": "integer", "description": "Antal att behålla efter reranking (1–15)", "default": 6},
+                    "hybrid": {"type": "boolean", "description": "Kombinera vektor- och BM25-sökning", "default": True},
+                    "rerank": {"type": "boolean", "description": "Omranka med cross-encoder för bättre precision", "default": True},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_page",
+            "description": (
+                "Hämta råtexten från en specifik sida i ett arkivdokument. "
+                "Använd för att läsa mer kontext kring en träff från search_archive."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "source": {"type": "string", "description": "Filnamn från söktträff, t.ex. '281 — Titel….txt'"},
+                    "page": {"type": "integer", "description": "Sidnummer (1-baserat)"},
+                },
+                "required": ["source", "page"],
+            },
+        },
+    },
+]
+
 with st.sidebar:
     st.header("Inställningar")
     backend_name = st.selectbox("AI-modell", list(BACKENDS.keys()), index=0)
