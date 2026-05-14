@@ -243,10 +243,8 @@ with st.sidebar:
     )
     if mcp_mode and st.button("Ny konversation", use_container_width=True):
         ss.chat_history = []
-        if backend["kind"] == "claude":
-            ss.mcp_session_id = None
-        else:
-            ss.openai_chat_messages = []
+        ss.mcp_session_id = None
+        ss.openai_chat_messages = []
         st.rerun()
     do_rerank = st.toggle("Använd cross-encoder reranker", value=True,
                           help="Långsammare första gången (laddar ~568 MB) men bättre precision.",
@@ -479,6 +477,7 @@ async def stream_openai_mcp(
             msg = "*[Svar avklippt — modellen nådde gränsen för antal verktygsanrop.]*"
             parts.append(msg)
             text_placeholder.markdown(msg)
+            messages.append({"role": "assistant", "content": msg})
     except Exception as exc:
         error_msg = f"*Fel vid anrop till {cfg['model']}: {exc}*"
         parts.append(error_msg)
