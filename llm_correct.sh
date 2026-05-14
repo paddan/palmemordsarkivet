@@ -23,11 +23,21 @@ Wrapper-flaggor:
 
 Skickas vidare till src/llm_correct.py (alla okända flaggor passerar igenom):
   --threshold N           score-tröskel (default: 50)
-  --model MODEL           Claude-modell (default: claude-haiku-4-5-20251001)
+  --provider PROVIDER     claude (default) eller openai
+  --model MODEL           modellnamn (default: claude-haiku-4-5-20251001 / gpt-4o-mini)
+  --base-url URL          override API-URL, t.ex. https://api.deepseek.com/v1
+                          eller http://localhost:11434/v1 för Ollama
+  --api-key KEY           override API-nyckel (annars läses från env)
   --pages-jsonl FILE      quality_pages.jsonl (default: <root>/generated/quality_pages.jsonl)
   --txt DIR               text-katalog (default: <root>/generated/text)
   --pages-out DIR         text_pages-katalog (default: <root>/generated/text_pages)
   --dry-run               visa vad som skulle rättas utan att göra det
+
+Exempel:
+  ./llm_correct.sh --threshold 60
+  ./llm_correct.sh --provider openai --model gpt-4o-mini
+  ./llm_correct.sh --provider openai --base-url https://api.deepseek.com/v1 --model deepseek-chat
+  ./llm_correct.sh --provider openai --base-url http://localhost:11434/v1 --model llama3.1:8b
 EOF
 }
 
