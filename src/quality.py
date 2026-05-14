@@ -202,8 +202,10 @@ def main() -> int:
         pages_fp = Path(args.pages_out).open("w", encoding="utf-8")
     try:
         for i, f in enumerate(files, 1):
-            if i % 100 == 0:
-                print(f"  {i}/{len(files)}", file=sys.stderr)
+            if i % 100 == 0 or i == len(files):
+                print(f"\r  {i}/{len(files)}", end="", file=sys.stderr)
+                if i == len(files):
+                    print(file=sys.stderr)
             try:
                 text = f.read_text(encoding="utf-8", errors="replace")
             except OSError as e:
