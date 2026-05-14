@@ -302,9 +302,9 @@ find "$IN" -name '*.pdf' -print0 \
     if [ "$elapsed" -gt 0 ] && [ "$count" -gt 0 ]; then
       remaining=$((TOTAL - count))
       eta_s=$(( remaining * elapsed / count ))
-      printf "[%d/%d eta %dm%02ds] %s: %s\n" "$count" "$TOTAL" "$((eta_s/60))" "$((eta_s%60))" "$status" "$base"
+      printf "[%s %d/%d eta %dm%02ds] %s\n" "$status" "$count" "$TOTAL" "$((eta_s/60))" "$((eta_s%60))" "$base"
     else
-      printf "[%d/%d] %s: %s\n" "$count" "$TOTAL" "$status" "$base"
+      printf "[%s %d/%d] %s\n" "$status" "$count" "$TOTAL" "$base"
     fi
     exit $ret
   ' _ {}
