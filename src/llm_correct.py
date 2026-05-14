@@ -28,6 +28,29 @@ from normalize_text import normalize  # noqa: E402
 
 HAIKU_MODEL = "claude-haiku-4-5-20251001"
 
+OPENAI_DEFAULT_MODEL = "gpt-4o-mini"
+
+
+def _resolve_api_key(provider: str, base_url: str, explicit_key: str) -> str:
+    if explicit_key:
+        return explicit_key
+    if provider == "claude":
+        key = (os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") or
+               os.environ.get("ANTHROPIC_API_KEY") or "")
+        if not key:
+            print("Sätt CLAUDE_CODE_OAUTH_TOKEN eller ANTHROPIC_API_KEY.", file=sys.stderr)
+            sys.exit(1)
+        return key
+    # openai
+    if not base_url:
+        key = os.environ.get("OPENAI_API_KEY") or ""
+        if not key:
+            print("Sätt OPENAI_API_KEY.", file=sys.stderr)
+            sys.exit(1)
+        return key
+    return ""  # custom base_url → ingen validering
+
+
 _SYSTEM = """\
 Du rättar OCR-fel i skannade svenska dokument.
 Returnera ENBART den rättade texten – inga kommentarer eller förklaringar.
@@ -37,7 +60,7 @@ Rätta bara uppenbara OCR-fel (fellästa tecken, trasiga ord, skräptecken).
 Bevara egennamn, förkortningar, ärendenummer och liknande exakt som de är."""
 
 
-async def _haiku(text: str, model: str) -> str:
+async def _claude(text: str, model: str) -> str:
     options = ClaudeAgentOptions(
         system_prompt=_SYSTEM,
         model=model,
@@ -102,7 +125,7 @@ async def _correct_all(
             if dry_run:
                 continue
 
-            corrected = await _haiku(page_text, model)
+            corrected = await _claude(page_text, model)
             (stem_dir / f'page-{p:03d}.txt').write_text(
                 normalize(corrected), encoding='utf-8'
             )
