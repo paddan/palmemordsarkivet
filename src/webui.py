@@ -169,7 +169,7 @@ BACKENDS = {
                           "base_url": "https://api.deepseek.com/v1",
                           "env": "DEEPSEEK_API_KEY"},
     "OpenAI-kompatibel (custom)": {"kind": "openai", "model": "llama3.1:8b",
-                                   "base_url": "http://localhost:11434/v1",
+                                   "base_url": "http://localhost:1234/v1",
                                    "env": None, "configurable": True},
 }
 
