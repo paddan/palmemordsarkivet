@@ -1,14 +1,13 @@
-"""LLM-baserad post-korrektion av dåliga OCR-sidor med Claude Haiku.
+"""LLM-baserad post-korrektion av dåliga OCR-sidor.
 
 Läser quality_pages.jsonl, identifierar sidor under score-tröskeln,
-skickar sidtexten till Claude Haiku för rättning och slår ihop resultatet
-via merge_pages.merge_one. Kräver CLAUDE_CODE_OAUTH_TOKEN eller
-ANTHROPIC_API_KEY i miljön.
+skickar sidtexten till vald LLM (Claude eller OpenAI-kompatibel) för
+rättning och slår ihop resultatet via merge_pages.merge_one.
 
 Idempotent: sidor med en .llm-markörfil i text_pages/<stem>/ hoppas över.
 
 Kör:
-    python llm_correct.py [--threshold 50] [--pages-jsonl quality_pages.jsonl]
+    python llm_correct.py [--threshold 50] [--provider claude|openai]
 """
 from __future__ import annotations
 
@@ -173,12 +172,18 @@ async def _correct_all(
 def main() -> None:
     import argparse
     ap = argparse.ArgumentParser(
-        description='LLM-korrektion av dåliga OCR-sidor med Claude Haiku.'
+        description='LLM-korrektion av dåliga OCR-sidor.'
     )
     ap.add_argument('--threshold', type=float, default=50.0,
                     help='score-tröskel (default: 50)')
-    ap.add_argument('--model', default=HAIKU_MODEL,
-                    help=f'Claude-modell (default: {HAIKU_MODEL})')
+    ap.add_argument('--provider', default='claude', choices=['claude', 'openai'],
+                    help='LLM-provider (default: claude)')
+    ap.add_argument('--model', default='',
+                    help='modellnamn (default: haiku för claude, gpt-4o-mini för openai)')
+    ap.add_argument('--base-url', default='',
+                    help='override API-URL för OpenAI-kompatibla providers (Ollama, DeepSeek, ...)')
+    ap.add_argument('--api-key', default='',
+                    help='override API-nyckel (annars läses från env)')
     ap.add_argument('--pages-jsonl', default='',
                     help='quality_pages.jsonl (default: <root>/quality_pages.jsonl)')
     ap.add_argument('--txt', default='',
@@ -198,10 +203,17 @@ def main() -> None:
     if not jsonl.exists():
         print(f'Saknar {jsonl} — kör ./quality.sh --per-page först.', file=sys.stderr)
         sys.exit(1)
-    if not (os.environ.get('CLAUDE_CODE_OAUTH_TOKEN') or
-            os.environ.get('ANTHROPIC_API_KEY')):
-        print('Sätt CLAUDE_CODE_OAUTH_TOKEN eller ANTHROPIC_API_KEY.', file=sys.stderr)
-        sys.exit(1)
+
+    default_model = HAIKU_MODEL if args.provider == 'claude' else OPENAI_DEFAULT_MODEL
+    model = args.model or default_model
+    api_key = _resolve_api_key(args.provider, args.base_url, args.api_key)
+
+    provider_cfg = {
+        "provider": args.provider,
+        "model": model,
+        "base_url": args.base_url,
+        "api_key": api_key,
+    }
 
     # Samla dåliga sidor ur JSONL
     raw: dict[str, list[int]] = defaultdict(list)
@@ -233,16 +245,11 @@ def main() -> None:
         return
 
     print(f'Rättar {total} sidor i {len(bad)} filer'
-          + (f' ({skipped} redan rättade hoppas över)' if skipped else '') + '.')
+          + (f' ({skipped} redan rättade hoppas över)' if skipped else '')
+          + f' med {args.provider}/{model}.')
     if args.dry_run:
         print('[dry-run — inga filer skrivs]')
 
-    provider_cfg = {
-        "provider": "claude",
-        "model": args.model or HAIKU_MODEL,
-        "base_url": "",
-        "api_key": "",
-    }
     asyncio.run(_correct_all(bad, txt_dir, pages_dir, provider_cfg, args.dry_run))
 
     if not args.dry_run:
