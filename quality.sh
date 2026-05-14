@@ -25,8 +25,8 @@ Skickas vidare till quality.py (alla okända flaggor passerar igenom):
   --limit N               bara N första filerna (för testkörning)
   --per-page              skriv även quality_pages.jsonl
   --pages-out FILE        sökväg för per-sida-output
-  --text-dir DIR          katalog med .txt-filer att bedöma (default: text/)
-  --files-dir DIR         katalog med original-PDF:er (default: files/)
+  --text-dir DIR          katalog med .txt-filer att bedöma (default: generated/text/)
+  --files-dir DIR         katalog med original-PDF:er (default: downloaded/files/)
 
 För full quality.py-hjälp: ./quality.sh -- --help
 EOF

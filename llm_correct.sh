@@ -24,9 +24,9 @@ Wrapper-flaggor:
 Skickas vidare till src/llm_correct.py (alla okända flaggor passerar igenom):
   --threshold N           score-tröskel (default: 50)
   --model MODEL           Claude-modell (default: claude-haiku-4-5-20251001)
-  --pages-jsonl FILE      quality_pages.jsonl (default: <root>/quality_pages.jsonl)
-  --txt DIR               text-katalog (default: <root>/text)
-  --pages-out DIR         text_pages-katalog (default: <root>/text_pages)
+  --pages-jsonl FILE      quality_pages.jsonl (default: <root>/generated/quality_pages.jsonl)
+  --txt DIR               text-katalog (default: <root>/generated/text)
+  --pages-out DIR         text_pages-katalog (default: <root>/generated/text_pages)
   --dry-run               visa vad som skulle rättas utan att göra det
 EOF
 }

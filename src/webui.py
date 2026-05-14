@@ -50,7 +50,7 @@ st.caption("Fråga arkivet — sökning + Claude Opus 4.7 med källhänvisningar
 
 @st.cache_resource(show_spinner="Laddar embedding-modell…")
 def load():
-    db = lancedb.connect(str(ROOT / "rag" / "lancedb"))
+    db = lancedb.connect(str(ROOT / "generated" / "lancedb"))
     table = db.open_table(TABLE)
     embed = SentenceTransformer(EMBED_MODEL)
     return table, embed
@@ -60,8 +60,8 @@ def load():
 def build_nr_to_pdf() -> dict[str, Path]:
     """Bygg nr → PDF-sökväg från filsystemet (ocr/ föredras framför files/)."""
     mapping: dict[str, Path] = {}
-    # ocr/ skriver över files/ och files_wpu/ → föredras (har OCR-textlager)
-    for d in ("files", "files_wpu", "ocr"):
+    # generated/ocr/ skriver över downloaded/files/ och downloaded/wpu_files/ → föredras (har OCR-textlager)
+    for d in ("downloaded/files", "downloaded/wpu_files", "generated/ocr"):
         folder = ROOT / d
         if not folder.is_dir():
             continue
@@ -75,7 +75,7 @@ def build_nr_to_pdf() -> dict[str, Path]:
 def find_pdf(source_txt: str) -> Path | None:
     """Hitta original-PDF för en chunk. Föredrar ocr/ (sökbar)."""
     stem = source_txt[:-4] if source_txt.endswith(".txt") else source_txt
-    for d in ("ocr", "files", "files_wpu"):
+    for d in ("generated/ocr", "downloaded/files", "downloaded/wpu_files"):
         p = ROOT / d / f"{stem}.pdf"
         if p.is_file():
             return p
@@ -85,7 +85,7 @@ def find_pdf(source_txt: str) -> Path | None:
 def find_txt(source_txt: str) -> Path | None:
     """Hitta extraherad textfil för en chunk."""
     stem = source_txt[:-4] if source_txt.endswith(".txt") else source_txt
-    p = ROOT / "text" / f"{stem}.txt"
+    p = ROOT / "generated" / "text" / f"{stem}.txt"
     return p if p.is_file() else None
 
 
@@ -263,7 +263,7 @@ async def stream_mcp(q: str, placeholder, parts: list[str],
 
     Returnerar Claudes session_id så att nästa fråga kan resume:a samma
     konversation (Claude minns tidigare frågor och tool-resultat)."""
-    db_dir = ROOT / "rag" / "lancedb"
+    db_dir = ROOT / "generated" / "lancedb"
     env = {
         "DB_DIR": str(db_dir),
         **{k: v for k, v in os.environ.items()

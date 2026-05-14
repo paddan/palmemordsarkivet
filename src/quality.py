@@ -31,8 +31,8 @@ except Exception:  # pragma: no cover
         pass
 
 ROOT = Path(os.environ.get("ROOT") or Path(__file__).resolve().parents[1])
-TEXT_DIR = Path(os.environ.get("TEXT_DIR") or (ROOT / "text"))
-FILES_DIR = Path(os.environ.get("FILES_DIR") or (ROOT / "files"))
+TEXT_DIR = Path(os.environ.get("TEXT_DIR") or (ROOT / "generated" / "text"))
+FILES_DIR = Path(os.environ.get("FILES_DIR") or (ROOT / "downloaded" / "files"))
 MIN_TEXT_CHARS = int(os.environ.get("MIN_TEXT_CHARS", "200"))  # samma tröskel som ocr.sh
 MIN_PAGE_ALNUM = 30  # sidor med färre alfanumeriska tecken = bildsida, hoppa re-OCR
 
@@ -160,13 +160,13 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--top", type=int, help="visa även värsta N i terminalen")
-    ap.add_argument("--out", default=os.environ.get("OUT", "quality.csv"),
-                    help="output-CSV (default: quality.csv)")
+    ap.add_argument("--out", default=os.environ.get("OUT", "generated/quality.csv"),
+                    help="output-CSV (default: generated/quality.csv)")
     ap.add_argument("--limit", type=int, help="bara N första filerna (för testkörning)")
     ap.add_argument("--per-page", action="store_true",
                     help="skriv quality_pages.jsonl med en rad per sida")
     ap.add_argument("--pages-out",
-                    default=os.environ.get("PAGES_OUT", "quality_pages.jsonl"),
+                    default=os.environ.get("PAGES_OUT", "generated/quality_pages.jsonl"),
                     help="output-fil för --per-page")
     ap.add_argument("--text-dir", default=str(TEXT_DIR),
                     help=f"katalog med .txt-filer (default: {TEXT_DIR})")

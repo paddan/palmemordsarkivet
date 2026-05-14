@@ -6,31 +6,20 @@ __pycache__/
 *.egg-info/
 
 # Nedladdade och bearbetade arkivdata (stora, åter-skapas av skripten)
-files/
-files_wpu/
-ocr/
-text/
-text_wpu
+downloaded/
+generated/
 log.txt
 *.pdf
 unusable.txt
-
-# Vektorindex
-rag/lancedb/
+text_vision/
 
 # OS
 .DS_Store
-quality.csv
 
 # Tessdata: bara user-words och config committas, allt annat läggs av setup_tessdata.sh
 tessdata/*
 !tessdata/swe.user-words
 !tessdata/tesseract.config
-quality.csv.before
-quality_pages.jsonl
-errors.log
-text_pages/
-text_vision/
 
 
 # Lokala testdata

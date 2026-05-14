@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-LOG_PATH = ROOT / "errors.log"
+LOG_PATH = ROOT / "generated" / "errors.log"
 
 _MAX_BYTES = 10_000_000  # 10 MB per fil
 _BACKUP_COUNT = 5

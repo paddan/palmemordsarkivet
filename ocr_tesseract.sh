@@ -18,9 +18,9 @@ Default-värden visas inom parentes. Alla flaggor kan också sättas via
 motsvarande env-var (versaler, understreck) — flagga vinner över env-var.
 
   --root DIR              projektrot ($PWD om ej satt via ROOT)
-  --in DIR                ingångskatalog med PDF:er (\$ROOT/files)
-  --ocr DIR               output-katalog för OCR:ade PDF:er (\$ROOT/ocr)
-  --txt DIR               output-katalog för .txt (\$ROOT/text)
+  --in DIR                ingångskatalog med PDF:er (\$ROOT/downloaded/files)
+  --ocr DIR               output-katalog för OCR:ade PDF:er (\$ROOT/generated/ocr)
+  --txt DIR               output-katalog för .txt (\$ROOT/generated/text)
   --tessdata DIR          tessdata-katalog (\$ROOT/tessdata)
   --user-words FILE       sökväg till swe.user-words (\$TESSDATA/swe.user-words)
   --user-words-auto FILE  sökväg till swe.user-words.auto
@@ -31,7 +31,7 @@ motsvarande env-var (versaler, understreck) — flagga vinner över env-var.
   --per-file-jobs N       OCR-trådar per fil (2)
   --min-text-chars N      tröskel för "har redan text" (200)
   --image-dpi N           bild-DPI för OCR (300)
-  --errors-log FILE       logg-fil för fel (\$ROOT/errors.log)
+  --errors-log FILE       logg-fil för fel (\$ROOT/generated/errors.log)
   -h, --help              visa denna hjälp och avsluta
 EOF
 }
@@ -74,14 +74,14 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-IN=${IN:-$ROOT/files}
-OCR=${OCR:-$ROOT/ocr}
-TXT=${TXT:-$ROOT/text}
+IN=${IN:-$ROOT/downloaded/files}
+OCR=${OCR:-$ROOT/generated/ocr}
+TXT=${TXT:-$ROOT/generated/text}
 TESSDATA=${TESSDATA:-$ROOT/tessdata}
 USER_WORDS=${USER_WORDS:-$TESSDATA/swe.user-words}
 USER_WORDS_AUTO=${USER_WORDS_AUTO:-$TESSDATA/swe.user-words.auto}
 TESS_CONFIG=${TESS_CONFIG:-$TESSDATA/tesseract.config}
-ERRORS_LOG=${ERRORS_LOG:-$ROOT/errors.log}
+ERRORS_LOG=${ERRORS_LOG:-$ROOT/generated/errors.log}
 
 mkdir -p "$OCR" "$TXT"
 

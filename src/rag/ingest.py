@@ -23,8 +23,8 @@ import pyarrow as pa
 from sentence_transformers import SentenceTransformer
 
 ROOT = Path(__file__).resolve().parents[2]
-TEXT_DIR = ROOT / "text"
-DB_DIR = ROOT / "rag" / "lancedb"
+TEXT_DIR = ROOT / "generated" / "text"
+DB_DIR = ROOT / "generated" / "lancedb"
 TABLE = "chunks"
 MODEL_NAME = "intfloat/multilingual-e5-large"
 EMBED_DIM = 1024

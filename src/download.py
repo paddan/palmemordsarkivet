@@ -230,8 +230,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("out", nargs="?",
-                    default=os.environ.get("OUT", "files"),
-                    help="målmapp (positionellt eller via env OUT, default: files)")
+                    default=os.environ.get("OUT", "downloaded/files"),
+                    help="målmapp (positionellt eller via env OUT, default: downloaded/files)")
     ap.add_argument("--out", dest="out_flag",
                     help="alternativ till positionellt argument")
     ap.add_argument("--sheet-id",

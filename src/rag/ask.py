@@ -40,7 +40,7 @@ from sentence_transformers import SentenceTransformer
 
 MCP_SERVER = Path(__file__).resolve().parent / "mcp_server.py"
 
-DB_DIR = Path(__file__).resolve().parents[2] / "rag" / "lancedb"
+DB_DIR = Path(__file__).resolve().parents[2] / "generated" / "lancedb"
 TABLE = "chunks"
 EMBED_MODEL = "intfloat/multilingual-e5-large"
 RERANK_MODEL = "BAAI/bge-reranker-v2-m3"

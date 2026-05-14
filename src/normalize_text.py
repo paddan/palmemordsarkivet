@@ -122,7 +122,7 @@ def main() -> None:
     args = ap.parse_args()
 
     root = Path(args.root) if args.root else ROOT
-    txt_dir = Path(args.txt) if args.txt else root / 'text'
+    txt_dir = Path(args.txt) if args.txt else root / 'generated' / 'text'
 
     files = sorted(txt_dir.glob('*.txt'))
     if not files:

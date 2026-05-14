@@ -33,7 +33,7 @@ mcp = FastMCP(
 # ── Lazy-initierade globaler ──────────────────────────────────────────────────
 _table = None
 _model = None
-_text_dir: Path = ROOT / "text"
+_text_dir: Path = ROOT / "generated" / "text"
 
 
 def _init():
@@ -43,7 +43,7 @@ def _init():
     import lancedb
     from sentence_transformers import SentenceTransformer
 
-    db_dir = Path(os.environ.get("DB_DIR", str(ROOT / "rag" / "lancedb")))
+    db_dir = Path(os.environ.get("DB_DIR", str(ROOT / "generated" / "lancedb")))
     model_name = os.environ.get("EMBED_MODEL", "intfloat/multilingual-e5-large")
     db = lancedb.connect(str(db_dir))
     _table = db.open_table("chunks")
