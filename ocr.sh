@@ -111,6 +111,11 @@ CSV=${CSV:-$ROOT/quality.csv}
 PAGES_JSONL=${PAGES_JSONL:-$ROOT/quality_pages.jsonl}
 PAGES_OUT=${PAGES_OUT:-$ROOT/text_pages}
 
+if ! printf '%s' "$THRESHOLD" | grep -qE '^[0-9]+(\.[0-9]+)?$'; then
+  echo "Ogiltigt --threshold: '$THRESHOLD' (förväntar ett numeriskt värde)" >&2
+  exit 2
+fi
+
 cd "$ROOT"
 
 step() {

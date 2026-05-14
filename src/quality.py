@@ -89,6 +89,8 @@ def hunspell_pct(words: list[str]) -> float | None:
     """Andel ord hunspell godkänner som svenska."""
     if not words:
         return None
+    if len(words) > 50_000:
+        return None
     try:
         out = subprocess.run(
             ["hunspell", "-d", "sv_SE", "-l"],
@@ -196,6 +198,7 @@ def main() -> int:
     rows = []
     pages_fp = None
     if args.per_page:
+        Path(args.pages_out).parent.mkdir(parents=True, exist_ok=True)
         pages_fp = Path(args.pages_out).open("w", encoding="utf-8")
     try:
         for i, f in enumerate(files, 1):

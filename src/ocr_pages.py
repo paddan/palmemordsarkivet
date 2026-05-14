@@ -171,6 +171,7 @@ def update_pdf_text_layer(
         # Skriv via tempfil om src == dst
         if dst_pdf.resolve() == src_pdf.resolve():
             tmp = dst_pdf.with_suffix(dst_pdf.suffix + ".tmp")
+            tmp.unlink(missing_ok=True)  # rensa ev. kvarleva från krasch
             doc.save(str(tmp), garbage=4, deflate=True)
             doc.close()
             tmp.replace(dst_pdf)

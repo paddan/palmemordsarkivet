@@ -131,6 +131,21 @@ def find_orphans(stored_sources: set[str], disk_filenames: set[str]) -> list[str
     return sorted(stored_sources - disk_filenames)
 
 
+_SAFE_SOURCE_RE = re.compile(r"^[^\x00-\x1f\x7f]+$")
+
+
+def _source_predicate(source: str) -> str:
+    """Returnerar ett LanceDB-delete-predikat för en specifik source.
+
+    Kastar ValueError om filnamnet innehåller kontrolltecken eller null-bytes
+    som kan orsaka oväntad SQL-tolkning.
+    """
+    if not _SAFE_SOURCE_RE.match(source):
+        raise ValueError(f"Ogiltigt source-filnamn (kontrolltecken): {source!r}")
+    safe = source.replace("'", "''")
+    return f"source = '{safe}'"
+
+
 def is_useful(chunk: str) -> bool:
     if len(chunk) < 80:
         return False
@@ -236,8 +251,7 @@ def main() -> int:
         if orphans:
             print(f"Rensar {len(orphans)} föräldralösa poster (text/-fil borta):")
             for s in orphans:
-                safe = s.replace("'", "''")
-                table.delete(f"source = '{safe}'")
+                table.delete(_source_predicate(s))
                 del already[s]
                 print(f"  - {s}")
 
@@ -313,9 +327,7 @@ def main() -> int:
             r["vector"] = v.tolist()
 
         if is_reingest:
-            # Escape ev. apostrofer i filnamnet för SQL-likt predikat.
-            safe_name = f.name.replace("'", "''")
-            table.delete(f"source = '{safe_name}'")
+            table.delete(_source_predicate(f.name))
         table.add(rows)
         total_chunks += len(rows)
 

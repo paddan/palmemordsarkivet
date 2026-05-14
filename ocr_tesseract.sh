@@ -178,6 +178,7 @@ run_ocr() {
   local mode="$1" pdf="$2" out_pdf="$3" log base
   base=$(basename "$pdf" .pdf)
   log=$(mktemp)
+  trap 'rm -f "${log:-}"' EXIT INT TERM
 
   local base_flags=(--rotate-pages --tesseract-pagesegmode "$PSM" --image-dpi "$IMAGE_DPI")
   [ -n "${USER_WORDS:-}" ]      && base_flags+=(--user-words "$USER_WORDS")
