@@ -60,6 +60,8 @@ py-modules = [
     "ocr_pages",
     "build_user_words",
     "errors_log",
+    "normalize_text",
+    "llm_correct",
     "webui",
 ]
 

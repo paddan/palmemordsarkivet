@@ -215,6 +215,53 @@ av `ocr_tesseract.sh`:
 ./build_user_words.sh
 ```
 
+### 2b. Textrening (valfritt men rekommenderat)
+
+Två kompletterande steg kan förbättra OCR-texternas kvalitet ytterligare
+och ge bättre sökresultat.
+
+#### Regelbaserad normalisering (`normalize.sh`)
+
+Rättar artefakter som Tesseract/pdftotext lämnar kvar, utan att ändra
+meningsinnehåll:
+
+- Unicode-ligaturer: `ﬁ→fi`, `ﬂ→fl`, `ﬃ→ffi`, `ﬄ→ffl`, `ﬀ→ff`, `ﬅ→st`
+- Mjuka bindestreck (`\xad`) — osynliga men stör ordmatchning i index
+- Styrtecken utom nyrad/tab/formfeed
+- Överflödiga mellanslag/tabbar på samma rad
+- Fler än två blankrader i rad
+
+Snabb och säker — idempotent, kan köras om utan risk:
+
+```bash
+./normalize.sh                # normalisera alla text/*.txt
+./normalize.sh --dry-run      # visa vad som skulle ändras
+```
+
+#### LLM-korrektion av dåliga sidor (`llm_correct.sh`)
+
+Skickar sidor med låg kvalitetspoäng till Claude Haiku som rättar
+OCR-fel (fellästa tecken, trasiga ord, skräptecken) med svenska
+språkets kontext. Kör automatiskt `normalize.sh`:s logik på varje
+sida före och efter rättningen.
+
+Förutsätter att `quality_pages.jsonl` finns (byggs av `./quality.sh --per-page`).
+Idempotent: sidor med `.llm`-markörfil i `text_pages/<stem>/` hoppas över.
+
+```bash
+./llm_correct.sh                     # rätta sidor med score < 50
+./llm_correct.sh --threshold 60      # striktare tröskel
+./llm_correct.sh --dry-run           # visa vad som skulle rättas
+./llm_correct.sh --help              # alla flaggor
+```
+
+Kostnad: Claude Haiku är billig (~$0,25/M tokens). En typisk OCR-sida
+är ~600–1 000 tokens — om 5 % av ~33 000 sidor är dåliga är totalkostnaden
+~$25–40 för hela arkivet.
+
+Kör sedan `./ingest.sh` för att re-indexera ändrade filer (mtime-detektering
+fångar dem automatiskt).
+
 ### 3. Indexera i vektor-DB
 
 ```bash

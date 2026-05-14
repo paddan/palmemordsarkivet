@@ -35,6 +35,8 @@ All components are Swedish-language facing; comments and docstrings are in Swedi
 │   ├── ocr_pages.py        # Per-page OCR pipeline (Tesseract/Vision/Surya)
 │   ├── build_user_words.py  # Generate Tesseract user-words from OCR text
 │   ├── errors_log.py        # Centralized error logging (tab-separated)
+│   ├── normalize_text.py    # Rule-based OCR text normalization (ligatures, whitespace)
+│   ├── llm_correct.py       # LLM post-correction of bad OCR pages via Claude Haiku
 │   ├── webui.py            # Streamlit web interface
 │   ├── merge_pages.py       # Slå ihop text_pages/<stem>/page-*.txt → text/<stem>.txt
 │   └── rag/
@@ -128,6 +130,12 @@ All scripts are idempotent and can be re-run safely. They skip already-completed
 ./ocr_tesseract.sh [--jobs 8] [--per-file-jobs 2] [--psm 4]
 ./quality.sh [--top 30]      # Build quality.csv, optionally show worst N
 ./quality.sh --per-page      # Also write quality_pages.jsonl (per-page scores)
+
+# 2b. Text post-processing (optional, improves search quality)
+./normalize.sh               # Rule-based: fix ligatures, soft hyphens, whitespace
+./normalize.sh --dry-run     # Preview changes
+./llm_correct.sh             # LLM: correct bad pages with Claude Haiku (score < 50)
+./llm_correct.sh --threshold 60 --dry-run  # Preview stricter threshold
 
 # 3. Build/update vector index
 ./ingest.sh [--rebuild]      # Index text/ → LanceDB (mtime-detektering på)
@@ -279,6 +287,19 @@ Scoring formula: 100 - penalties for junk, short words, long words, digit-mixing
 - `parse_reindex_since(value: str) → float`: Tolkar `--reindex-since` (ISO 8601 eller unix-sekunder)
 
 Schema: vector (1024 dims), text, source, page, chunk_idx, mtime, plus metadata fields (nr, titel, etc.).
+
+### `src/normalize_text.py`
+
+- `normalize(text: str) → str`: Rule-based normalization — ligature replacement, BOM/soft-hyphen removal, control-char stripping, whitespace normalization. Idempotent.
+- `process_file(path: Path, dry_run: bool) → bool`: Normalize a file in place; returns True if file changed.
+- CLI: `--txt DIR`, `--dry-run`, `--stats`. Wrapper: `./normalize.sh`.
+
+### `src/llm_correct.py`
+
+- `_haiku(text: str, model: str) → str` (async): Send page text to Claude Haiku for OCR error correction; returns corrected text (fallbacks to original on empty response).
+- `_correct_all(bad, txt_dir, pages_dir, model, dry_run)` (async): Process all bad pages — normalize input, call Haiku, write `page-NNN.txt` + `page-NNN.llm` marker, call `merge_pages.merge_one`.
+- Idempotency: pages with `text_pages/<stem>/page-NNN.llm` marker are skipped. Marker survives `merge_one` cleanup (only `.txt`/`.png` are deleted).
+- CLI: `--threshold N`, `--model MODEL`, `--pages-jsonl FILE`, `--txt DIR`, `--pages-out DIR`, `--dry-run`. Wrapper: `./llm_correct.sh`.
 
 ### `src/merge_pages.py`
 

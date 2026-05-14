@@ -90,7 +90,7 @@ def find_txt(source_txt: str) -> Path | None:
 
 
 # Nr kan vara digitalt med valfritt antal led av "." eller "," (t.ex. 281,10 eller 1322.7).
-CITE_RE = re.compile(r"Nr (\d+(?:[.,]\d+)*),\s*sida (\d+)")
+CITE_RE = re.compile(r"Nr ([\w\-]+(?:[.,][\w\-]+)*),\s*sida (\d+)")
 
 
 def extract_cited_sources(answer: str) -> list[dict]:
