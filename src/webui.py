@@ -26,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "rag"))
 from ask import (  # type: ignore  # noqa: E402
     CLAUDE_MODEL,
     EMBED_MODEL,
+    MCP_SYSTEM_PROMPT,
     SYSTEM_PROMPT,
     TABLE,
     format_context,
@@ -270,7 +271,6 @@ async def stream_mcp(q: str, placeholder, parts: list[str],
            if k in ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY",
                     "PATH", "HOME", "VIRTUAL_ENV", "EMBED_MODEL")},
     }
-    from ask import MCP_SYSTEM_PROMPT  # type: ignore
     options = ClaudeAgentOptions(
         system_prompt=MCP_SYSTEM_PROMPT,
         model=CLAUDE_MODEL,
