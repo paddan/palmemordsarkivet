@@ -175,9 +175,9 @@ def main() -> int:
                     help=f"embedding-modell (default: {MODEL_NAME})")
     ap.add_argument("--unusable-list",
                     default=os.environ.get("UNUSABLE_LIST",
-                                           str(ROOT / "unusable.txt")),
+                                           str(ROOT / "generated" / "unusable.txt")),
                     help="skriv filer som producerade noll användbara chunks "
-                         "till denna fil (default: unusable.txt)")
+                         "till denna fil (default: generated/unusable.txt)")
     ap.add_argument("--reindex-since",
                     help="tvinga re-index av filer modifierade efter denna tid "
                          "(ISO 8601 t.ex. '2026-05-01' eller unix-sekunder). "

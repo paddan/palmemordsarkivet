@@ -57,7 +57,7 @@ Flaggor (default visas inom parentes):
   --from-list FILE        --redo --mode files: läs filnamn från textfil (en per
                           rad) istället för att filtrera quality.csv. Användbart
                           för att om-OCR:a filer som ingest.py flaggade som
-                          'inga användbara chunks' (skrivs till unusable.txt).
+                          'inga användbara chunks' (skrivs till generated/unusable.txt).
   --no-update-pdf         hoppa PDF-textlager-patchen efter Surya per sida
                           (default: textlagret i \$OCR/<stem>.pdf uppdateras)
   -h, --help              visa denna hjälp
