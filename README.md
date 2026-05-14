@@ -45,8 +45,9 @@ Kör sedan pipeline:
 
 ```bash
 ./download.sh          # 1. Ladda ner alla PDF:er (~3 700 st, tar några timmar)
+./download_wpu.sh      # 2. Ladda ner WPU PDF:er (~7100 st, tar några timmar)
 ./ocr.sh               # 2. OCR → text (Tesseract + Surya på svåra sidor, tar flera timmar)
-./ingest.sh            # 3. Bygg vektorindex i LanceDB
+./ingest.sh            # 3. Bygg vektorindex i LanceDB (kan ta flera timmar)
 ./web.sh               # 4. Starta webgränssnittet och ställ frågor
 ```
 
@@ -215,28 +216,10 @@ av `ocr_tesseract.sh`:
 ./build_user_words.sh
 ```
 
-### 2b. Textrening (valfritt men rekommenderat)
+### 2b. LLM-korrektion av dåliga sidor (valfritt)
 
-Två kompletterande steg kan förbättra OCR-texternas kvalitet ytterligare
-och ge bättre sökresultat.
-
-#### Regelbaserad normalisering (`normalize.sh`)
-
-Rättar artefakter som Tesseract/pdftotext lämnar kvar, utan att ändra
-meningsinnehåll:
-
-- Unicode-ligaturer: `ﬁ→fi`, `ﬂ→fl`, `ﬃ→ffi`, `ﬄ→ffl`, `ﬀ→ff`, `ﬅ→st`
-- Mjuka bindestreck (`\xad`) — osynliga men stör ordmatchning i index
-- Styrtecken utom nyrad/tab/formfeed
-- Överflödiga mellanslag/tabbar på samma rad
-- Fler än två blankrader i rad
-
-Snabb och säker — idempotent, kan köras om utan risk:
-
-```bash
-./normalize.sh                # normalisera alla text/*.txt
-./normalize.sh --dry-run      # visa vad som skulle ändras
-```
+> **Obs:** Regelbaserad normalisering (`normalize.sh`) körs numera automatiskt
+> av `ocr.sh` — det behöver inte köras separat.
 
 #### LLM-korrektion av dåliga sidor (`llm_correct.sh`)
 

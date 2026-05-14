@@ -125,18 +125,19 @@ All scripts are idempotent and can be re-run safely. They skip already-completed
 ./download.sh [--out downloaded/files] [--sheet-id ID]
 
 # 2. OCR pipeline (recommended: full pipeline)
-./ocr.sh                    # Tesseract → quality → Surya on bad pages
-./ocr.sh --skip-redo        # Just Tesseract + quality scoring
+./ocr.sh                    # Tesseract → normalize → quality → Surya on bad pages
+./ocr.sh --skip-redo        # Just Tesseract + normalize + quality scoring
 ./ocr.sh --redo --mode files  # Re-OCR entire files (--threshold 50)
 ./ocr.sh --redo --mode pages  # Surya on specific pages (--threshold 50)
 
 # Manual OCR steps (if needed)
 ./ocr_tesseract.sh [--jobs 8] [--per-file-jobs 2] [--psm 4]
+./normalize.sh               # Rule-based: fix ligatures, soft hyphens, whitespace (run by ocr.sh)
 ./quality.sh [--top 30]      # Build generated/quality.csv, optionally show worst N
 ./quality.sh --per-page      # Also write generated/quality_pages.jsonl (per-page scores)
 
-# 2b. Text post-processing (optional, improves search quality)
-./normalize.sh               # Rule-based: fix ligatures, soft hyphens, whitespace
+# 2b. Text post-processing (optional, LLM-based)
+# normalize.sh is now part of ocr.sh — no need to run separately
 ./normalize.sh --dry-run     # Preview changes
 ./llm_correct.sh             # LLM: correct bad pages with Claude Haiku (score < 50)
 ./llm_correct.sh --threshold 60 --dry-run  # Preview stricter threshold
@@ -221,6 +222,7 @@ PER_FILE_JOBS=2       # Threads per file (ocr_tesseract.sh)
      - Otherwise: `ocrmypdf --skip-text --deskew --clean --rotate-pages` with PSM 6
      - Uses `tessdata/swe_best.traineddata` + user-words
      - Parallel: 4 files × 2 threads/file (configurable)
+   - **Normalisering** (`normalize_text.py`): Regelbaserad textrensning — körs automatiskt av `ocr.sh` efter Tesseract (och efter varje Surya-sida). Rättar ligaturer, mjuka bindestreck, styrtecken och whitespace-artefakter. Idempotent.
    - **Quality scoring** (`quality.py`): Heuristic-based assessment (0–100 score)
      - Junk character ratio, short word ratio, vowel balance, OCR-specific artifacts
      - Optional hunspell dictionary check for Swedish words
@@ -229,7 +231,7 @@ PER_FILE_JOBS=2       # Threads per file (ocr_tesseract.sh)
    - **Surya** (`ocr.sh --redo`, optional): Fallback for low-scoring pages
      - Transformer-based (multilingual e5), slower but higher quality on degraded scans
      - Runs only on pages/files below threshold (default 50)
-     - **Per-dokument-merge + cleanup**: efter att `ocr_pages.py` är klar med ett dokument kör `ocr.sh` automatiskt `merge_pages.merge_one` som (a) ersätter motsvarande sidor i `generated/text/<stem>.txt` (split på `\f`) och (b) raderar `page-NNN.txt` + `page-NNN.png` för de mergade sidorna. `page-NNN.json` behålls som idempotens-markör för `ocr_pages.py` (om JSON finns → skippa OCR av sidan).
+     - **Per-dokument-merge + normalize + cleanup**: efter att `ocr_pages.py` är klar med ett dokument kör `ocr.sh` automatiskt `merge_pages.merge_one` + `normalize_text.process_file` som (a) ersätter/normaliserar motsvarande sidor i `generated/text/<stem>.txt` och (b) raderar `page-NNN.txt` + `page-NNN.png` för de mergade sidorna. `page-NNN.json` behålls som idempotens-markör.
    - **Re-scoring**: Quality metrics updated after Surya pass
 
 3. **Ingest** (`ingest.py`):

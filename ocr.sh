@@ -27,12 +27,13 @@ Default-läge (full pipeline):
   1b./ocr_tesseract.sh --in downloaded/wpu_files # Tesseract på downloaded/wpu_files/ (om finns)
   2. ./merge_wpu.sh                           # jämför wpu vs palme; raderar
                                               # förloraren (om files_wpu/ finns)
-  3. ./quality.sh --per-page                  # quality.csv + quality_pages.jsonl
-  4. ./ocr.sh --redo --mode pages             # Surya på sidor under tröskeln
+  3. ./normalize.sh                           # regelbaserad textnormalisering
+  4. ./quality.sh --per-page                  # quality.csv + quality_pages.jsonl
+  5. ./ocr.sh --redo --mode pages             # Surya på sidor under tröskeln
                                               # (palme + kvarvarande wpu)
-  5. ./quality.sh                             # uppdaterad quality.csv
+  6. ./quality.sh                             # uppdaterad quality.csv
 
-Steg 4 hoppas över om --skip-redo eller om Surya inte är installerat.
+Steg 5 hoppas över om --skip-redo eller om Surya inte är installerat.
 
 Flaggor (default visas inom parentes):
 
@@ -129,36 +130,39 @@ step() {
 if [ "$REDO_ONLY" = "0" ]; then
   t0=$(date +%s)
 
-  step "1/5  Tesseract-OCR (./ocr_tesseract.sh --jobs $JOBS)"
+  step "1/6  Tesseract-OCR (./ocr_tesseract.sh --jobs $JOBS)"
   ./ocr_tesseract.sh --jobs "$JOBS" --per-file-jobs "$PER_FILE_JOBS"
 
   if [ -d "$ROOT/downloaded/wpu_files" ]; then
     # Wpu-filer får samma behandling som palme-filer: tesseract → generated/text/ + generated/ocr/.
     # Sen jämför merge_wpu och raderar förlorarens text/+ocr/-filer.
-    step "1b/5  Tesseract-OCR av wpu-PDF:er"
+    step "1b/6  Tesseract-OCR av wpu-PDF:er"
     ./ocr_tesseract.sh --in "$ROOT/downloaded/wpu_files" --jobs "$JOBS" --per-file-jobs "$PER_FILE_JOBS"
 
-    step "2/5  Sammanfoga wpu.nu-text (./merge_wpu.sh)"
+    step "2/6  Sammanfoga wpu.nu-text (./merge_wpu.sh)"
     ./merge_wpu.sh
   fi
 
-  step "3/5  Kvalitetsbedömning (./quality.sh --per-page)"
+  step "3/6  Normalisering (./normalize.sh)"
+  ./normalize.sh
+
+  step "4/6  Kvalitetsbedömning (./quality.sh --per-page)"
   ./quality.sh --per-page
 
   if [ "$SKIP_REDO" = "1" ]; then
     echo
-    echo "===== Hoppar över steg 4 (--skip-redo) ====="
+    echo "===== Hoppar över steg 5 (--skip-redo) ====="
   elif ! "$ROOT/.venv/bin/python" -c "import surya" 2>/dev/null; then
     echo
-    echo "===== Hoppar över steg 4 (Surya inte installerat) ====="
+    echo "===== Hoppar över steg 5 (Surya inte installerat) ====="
     echo "Installera med:  .venv/bin/pip install surya-ocr 'transformers<5'"
   else
-    step "4/5  Om-OCR med Surya på sidor < $THRESHOLD (./ocr.sh --redo --mode pages)"
+    step "5/6  Om-OCR med Surya på sidor < $THRESHOLD (./ocr.sh --redo --mode pages)"
     redo_extra=()
     [ "$NO_UPDATE_PDF" = "1" ] && redo_extra+=(--no-update-pdf)
     ./ocr.sh --redo --mode pages --threshold "$THRESHOLD" --jobs "$JOBS" --per-file-jobs "$PER_FILE_JOBS" ${redo_extra[@]+"${redo_extra[@]}"}
 
-    step "5/5  Uppdaterad kvalitetsbedömning"
+    step "6/6  Uppdaterad kvalitetsbedömning"
     ./quality.sh
   fi
 
@@ -202,6 +206,7 @@ wpu_dir = root / "downloaded" / "wpu_files"
 # Importera merge_pages direkt så vi slipper subprocess per fil.
 sys.path.insert(0, str(root / "src"))
 from merge_pages import merge_one  # noqa: E402
+from normalize_text import process_file as normalize_file  # noqa: E402
 
 raw = defaultdict(list)
 with open(jsonl, encoding="utf-8") as f:
@@ -266,6 +271,12 @@ for txt_name, pages in bad.items():
             merge_one(stem, txt_dir, out_dir)
         except Exception as e:  # noqa: BLE001
             print(f"  [merge_pages] FEL {stem}: {e}", file=sys.stderr)
+        txt_file = txt_dir / f"{stem}.txt"
+        if txt_file.exists():
+            try:
+                normalize_file(txt_file)
+            except Exception as e:  # noqa: BLE001
+                print(f"  [normalize] FEL {stem}: {e}", file=sys.stderr)
 PYEOF
   exit 0
 fi
@@ -344,6 +355,12 @@ redo_one() {
         --quiet \
         "$pdf" "$out_pdf" 2>"$log"; then
     pdftotext -layout "$out_pdf" "$out_txt"
+    "$ROOT/.venv/bin/python" -c "
+import sys; sys.path.insert(0, '$ROOT/src')
+from normalize_text import process_file
+from pathlib import Path
+process_file(Path('$out_txt'))
+" 2>/dev/null || true
     rm -f "$log"
   else
     echo "[fel] $base — se loggen nedan:" >&2
