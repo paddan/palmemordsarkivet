@@ -11,7 +11,7 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from llm_correct import _openai, _resolve_api_key
+from llm_correct import _correct_all, _openai, _resolve_api_key
 
 
 def test_claude_reads_anthropic_key(monkeypatch):
@@ -116,3 +116,61 @@ def test_openai_uses_local_as_fallback_api_key():
         ))
     assert captured_kwargs["api_key"] == "local"
     assert captured_kwargs["base_url"] == "http://localhost:11434/v1"
+
+
+def test_correct_all_dispatches_to_claude(tmp_path):
+    txt_dir = tmp_path / "text"
+    txt_dir.mkdir()
+    pages_dir = tmp_path / "text_pages"
+    pages_dir.mkdir()
+
+    stem = "testdok"
+    (txt_dir / f"{stem}.txt").write_text("sida ett\fsida två", encoding="utf-8")
+    (pages_dir / stem).mkdir()
+
+    provider_cfg = {
+        "provider": "claude",
+        "model": "claude-haiku-4-5-20251001",
+        "base_url": "",
+        "api_key": "",
+    }
+
+    with patch("llm_correct._claude", new=AsyncMock(return_value="rättad")) as mock_claude, \
+         patch("merge_pages.merge_one"):
+        asyncio.run(_correct_all(
+            bad={"testdok.txt": [1]},
+            txt_dir=txt_dir,
+            pages_dir=pages_dir,
+            provider_cfg=provider_cfg,
+            dry_run=False,
+        ))
+    mock_claude.assert_called_once()
+
+
+def test_correct_all_dispatches_to_openai(tmp_path):
+    txt_dir = tmp_path / "text"
+    txt_dir.mkdir()
+    pages_dir = tmp_path / "text_pages"
+    pages_dir.mkdir()
+
+    stem = "testdok"
+    (txt_dir / f"{stem}.txt").write_text("sida ett\fsida två", encoding="utf-8")
+    (pages_dir / stem).mkdir()
+
+    provider_cfg = {
+        "provider": "openai",
+        "model": "gpt-4o-mini",
+        "base_url": "",
+        "api_key": "sk-test",
+    }
+
+    with patch("llm_correct._openai", new=AsyncMock(return_value="rättad")) as mock_openai, \
+         patch("merge_pages.merge_one"):
+        asyncio.run(_correct_all(
+            bad={"testdok.txt": [1]},
+            txt_dir=txt_dir,
+            pages_dir=pages_dir,
+            provider_cfg=provider_cfg,
+            dry_run=False,
+        ))
+    mock_openai.assert_called_once()

@@ -83,6 +83,8 @@ async def _claude(text: str, model: str) -> str:
 
 
 async def _openai(text: str, model: str, base_url: str, api_key: str) -> str:
+    if AsyncOpenAI is None:
+        raise RuntimeError("openai-paketet saknas — kör: pip install openai")
     client = AsyncOpenAI(
         api_key=api_key or "local",
         base_url=base_url or None,
@@ -102,7 +104,7 @@ async def _correct_all(
     bad: dict[str, list[int]],
     txt_dir: Path,
     pages_dir: Path,
-    model: str,
+    provider_cfg: dict,
     dry_run: bool,
 ) -> None:
     from merge_pages import merge_one  # noqa: PLC0415
@@ -146,7 +148,15 @@ async def _correct_all(
             if dry_run:
                 continue
 
-            corrected = await _claude(page_text, model)
+            if provider_cfg["provider"] == "claude":
+                corrected = await _claude(page_text, provider_cfg["model"])
+            else:
+                corrected = await _openai(
+                    page_text,
+                    provider_cfg["model"],
+                    provider_cfg["base_url"],
+                    provider_cfg["api_key"],
+                )
             (stem_dir / f'page-{p:03d}.txt').write_text(
                 normalize(corrected), encoding='utf-8'
             )
