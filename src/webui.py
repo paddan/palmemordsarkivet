@@ -219,6 +219,10 @@ st.session_state.setdefault("mcp_mode", False)
 st.session_state.setdefault("do_rerank", True)
 
 
+def _on_mcp_change() -> None:
+    st.session_state.do_rerank = not st.session_state.get("mcp_mode")
+
+
 def _on_rerank_change() -> None:
     if st.session_state.get("mcp_mode"):
         st.session_state.mcp_mode = False
@@ -250,6 +254,7 @@ with st.sidebar:
         help="Modellen söker autonomt med egna verktyg — bättre på komplexa frågor, men långsammare. "
              "I detta läge får du en chatt där modellen minns tidigare frågor.",
         disabled=backend["kind"] not in ("claude", "openai"),
+        on_change=_on_mcp_change,
     )
     if mcp_mode and st.button("Ny konversation", use_container_width=True):
         st.session_state.chat_history = []
