@@ -471,6 +471,10 @@ async def stream_openai_mcp(
                 text_placeholder.markdown(final)
                 messages.append({"role": "assistant", "content": final})
                 break
+        else:
+            msg = "*[Svar avklippt — modellen nådde gränsen för antal verktygsanrop.]*"
+            parts.append(msg)
+            text_placeholder.markdown(msg)
     except Exception as exc:
         error_msg = f"*Fel vid anrop till {cfg['model']}: {exc}*"
         parts.append(error_msg)
