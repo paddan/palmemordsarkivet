@@ -237,13 +237,16 @@ with st.sidebar:
     mcp_mode = st.toggle(
         "Utredningsläge (MCP)",
         value=False,
-        help="Claude söker autonomt med egna verktyg — bättre på komplexa frågor, men långsammare. "
-             "I detta läge får du en chatt där Claude minns tidigare frågor.",
-        disabled=backend["kind"] != "claude",
+        help="Modellen söker autonomt med egna verktyg — bättre på komplexa frågor, men långsammare. "
+             "I detta läge får du en chatt där modellen minns tidigare frågor.",
+        disabled=backend["kind"] not in ("claude", "openai"),
     )
     if mcp_mode and st.button("Ny konversation", use_container_width=True):
         ss.chat_history = []
-        ss.mcp_session_id = None
+        if backend["kind"] == "claude":
+            ss.mcp_session_id = None
+        else:
+            ss.openai_chat_messages = []
         st.rerun()
     do_rerank = st.toggle("Använd cross-encoder reranker", value=True,
                           help="Långsammare första gången (laddar ~568 MB) men bättre precision.",
@@ -277,6 +280,7 @@ ss.setdefault("answer", "")
 # MCP-chatt: history-lista med {"role", "text", "sources"} och resume-id för Claude.
 ss.setdefault("chat_history", [])
 ss.setdefault("mcp_session_id", None)
+ss.setdefault("openai_chat_messages", [])
 
 # Klick på inline-citatknapp i svaret: ?pdf=<base64-encoded path> → öppna PDF.
 # PDF-sökvägen kodas direkt i URL:en så det fungerar även om session_state
