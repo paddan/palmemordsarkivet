@@ -242,9 +242,9 @@ with st.sidebar:
         disabled=backend["kind"] not in ("claude", "openai"),
     )
     if mcp_mode and st.button("Ny konversation", use_container_width=True):
-        ss.chat_history = []
-        ss.mcp_session_id = None
-        ss.openai_chat_messages = []
+        st.session_state.chat_history = []
+        st.session_state.mcp_session_id = None
+        st.session_state.openai_chat_messages = []
         st.rerun()
     do_rerank = st.toggle("Använd cross-encoder reranker", value=True,
                           help="Långsammare första gången (laddar ~568 MB) men bättre precision.",
