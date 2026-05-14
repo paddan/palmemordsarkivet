@@ -16,6 +16,7 @@ import asyncio
 import json
 import os
 import sys
+import time
 from collections import defaultdict
 from pathlib import Path
 
@@ -64,6 +65,7 @@ async def _correct_all(
 
     total = sum(len(v) for v in bad.values())
     done = 0
+    t0 = time.monotonic()
 
     for txt_name, pages in bad.items():
         stem = txt_name[:-4] if txt_name.endswith('.txt') else txt_name
@@ -87,12 +89,16 @@ async def _correct_all(
 
             done += 1
             page_text = normalize(page_texts[idx])
+            elapsed = time.monotonic() - t0
+            rate = done / elapsed if elapsed else 0
+            eta = int((total - done) / rate) if rate else 0
+            eta_s = f'{eta // 60}m{eta % 60:02d}s'
             if not page_text.strip():
-                print(f'  [{done}/{total}] {stem} sida {p}: tom — hoppar')
+                print(f'  [{done}/{total}] {stem} sida {p}: tom — hoppar  eta {eta_s}')
                 (stem_dir / f'page-{p:03d}.llm').touch()
                 continue
 
-            print(f'  [{done}/{total}] {stem} sida {p} ({len(page_text)} tecken)')
+            print(f'  [{done}/{total}] {stem} sida {p} ({len(page_text)} tecken)  eta {eta_s}')
             if dry_run:
                 continue
 

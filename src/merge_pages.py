@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -146,10 +147,20 @@ def main() -> int:
             return 1
         stems = sorted(p.name for p in pages_dir.iterdir() if p.is_dir())
         updated = 0
-        for stem in stems:
+        total = len(stems)
+        t0 = time.monotonic()
+        label = f"Slår ihop {total} dokument…"
+        print(label, end=" ", flush=True)
+        for i, stem in enumerate(stems, 1):
             if merge_one(stem, txt_dir, pages_dir):
                 updated += 1
-        print(f"\nKlart. {updated} av {len(stems)} filer uppdaterades.")
+            elapsed = time.monotonic() - t0
+            rate = i / elapsed if elapsed else 0
+            eta = int((total - i) / rate) if rate else 0
+            eta_s = f"{eta // 60}m{eta % 60:02d}s"
+            print(f"\r{label} {i}/{total} eta {eta_s}", end="", flush=True)
+        print()
+        print(f"Klart. {updated} av {total} filer uppdaterades.")
     else:
         merge_one(args.stem, txt_dir, pages_dir)
     return 0

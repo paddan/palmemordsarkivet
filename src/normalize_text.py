@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 import sys
+import time
 import unicodedata
 from pathlib import Path
 
@@ -79,20 +80,31 @@ def main() -> None:
         print(f'Inga .txt-filer i {txt_dir}')
         return
 
+    total = len(files)
     changed = errors = 0
-    for f in files:
+    t0 = time.monotonic()
+    label = f"Normaliserar {total} filer…"
+    print(label, end=' ', flush=True)
+    for i, f in enumerate(files, 1):
         try:
             was_changed = process_file(f, dry_run=args.dry_run)
             if was_changed:
                 changed += 1
                 if args.stats or args.dry_run:
-                    print(f'  [ändrad] {f.name}')
+                    print(f'\n  [ändrad] {f.name}', end='')
         except OSError as e:
-            print(f'  [fel] {f.name}: {e}', file=sys.stderr)
+            print(f'\n  [fel] {f.name}: {e}', file=sys.stderr, end='')
             errors += 1
+        elapsed = time.monotonic() - t0
+        rate = i / elapsed if elapsed else 0
+        eta = int((total - i) / rate) if rate else 0
+        eta_s = f'{eta // 60}m{eta % 60:02d}s'
+        print(f'\r{label} {i}/{total} eta {eta_s}', end='', flush=True)
+        if i == total:
+            print()
 
     prefix = '[dry-run] ' if args.dry_run else ''
-    print(f'{prefix}{changed}/{len(files)} filer normaliserade'
+    print(f'{prefix}{changed}/{total} filer normaliserade'
           + (f' ({errors} fel)' if errors else '') + '.')
 
 

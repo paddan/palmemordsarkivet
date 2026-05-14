@@ -19,6 +19,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from collections import Counter
 from pathlib import Path
 
@@ -141,25 +142,36 @@ def main() -> int:
         counter = Counter()
         cached_mtimes.clear()
 
-    for f in all_files:
+    total = len(all_files)
+    label = f"Läser {total} filer…"
+    print(label, end=" ", file=sys.stderr, flush=True)
+    t0 = time.monotonic()
+    for i, f in enumerate(all_files, 1):
         try:
             mtime = f.stat().st_mtime
         except OSError:
             continue
         if not args.rebuild and f.name in cached_mtimes and cached_mtimes[f.name] == mtime:
             n_cached += 1
-            continue
-        # Ny eller ändrad fil — läs om
-        try:
-            text = f.read_text(encoding="utf-8", errors="replace")
-        except OSError as e:
-            log_error("build_user_words", f.name, str(e))
-            continue
-        for w in ALPHA_WORD_RE.findall(text):
-            counter[w.lower()] += 1
-        cached_mtimes[f.name] = mtime
-        n_files += 1
-        n_updated += 1
+        else:
+            try:
+                text = f.read_text(encoding="utf-8", errors="replace")
+            except OSError as e:
+                log_error("build_user_words", f.name, str(e))
+            else:
+                for w in ALPHA_WORD_RE.findall(text):
+                    counter[w.lower()] += 1
+                cached_mtimes[f.name] = mtime
+                n_updated += 1
+        if i % 50 == 0 or i == total:
+            elapsed = time.monotonic() - t0
+            rate = i / elapsed if elapsed else 0
+            eta = int((total - i) / rate) if rate else 0
+            eta_s = f"{eta // 60}m{eta % 60:02d}s"
+            print(f"\r{label} {i}/{total} eta {eta_s}", end="",
+                  file=sys.stderr, flush=True)
+            if i == total:
+                print(file=sys.stderr)
 
     n_files = len(all_files)
     print(f"Läste {n_updated} nya/ändrade filer ({n_cached} cachadde), "

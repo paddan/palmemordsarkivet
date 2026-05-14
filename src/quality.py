@@ -21,6 +21,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 try:
@@ -196,6 +197,7 @@ def main() -> int:
 
     prefix = f"Bedömer {len(files)} filer…"
     print(prefix, end=" ", file=sys.stderr, flush=True)
+    t0 = time.monotonic()
     rows = []
     pages_fp = None
     if args.per_page:
@@ -203,8 +205,13 @@ def main() -> int:
         pages_fp = Path(args.pages_out).open("w", encoding="utf-8")
     try:
         for i, f in enumerate(files, 1):
-            if i % 100 == 0 or i == len(files):
-                print(f"\r{prefix} {i}/{len(files)}", end="", file=sys.stderr)
+            if i % 10 == 0 or i == len(files):
+                elapsed = time.monotonic() - t0
+                rate = i / elapsed if elapsed else 0
+                eta = int((len(files) - i) / rate) if rate else 0
+                eta_s = f"{eta // 60}m{eta % 60:02d}s"
+                print(f"\r{prefix} {i}/{len(files)} eta {eta_s}", end="",
+                      file=sys.stderr, flush=True)
                 if i == len(files):
                     print(file=sys.stderr)
             try:
