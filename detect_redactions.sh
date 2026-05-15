@@ -83,6 +83,7 @@ find "$TXT" -name '*.txt' -print0 \
           --engine detect-only \
           --in "$pdf" \
           --txt-dir "$TXT" \
+          --ocr-dir "$ROOT/generated/ocr" \
           --dpi "$DPI" 2>/dev/null || echo "fel")
       fi
     fi

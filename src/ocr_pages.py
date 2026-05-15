@@ -273,10 +273,14 @@ def detect_redactions_file(
     txt_file: Path,
     marker: Path,
     dpi: int = 72,
+    ocr_pdf: Path | None = None,
 ) -> int:
     """Infoga [MASKAD] i befintlig txt-fil baserat på bildanalys av pdf.
 
     Renderar sidor vid låg DPI (behövs bara för att hitta stora svarta block).
+    Om ocr_pdf anges används dess textlager (via PyMuPDF) för att positionera
+    [MASKAD] exakt efter hur textrader faktiskt fördelar sig på sidan, istället
+    för att approximera med jämn fördelning.
     Idempotent via marker-fil. Returnerar antal infogade block.
     """
     if marker.exists():
@@ -288,23 +292,66 @@ def detect_redactions_file(
     full_text = txt_file.read_text(encoding="utf-8", errors="replace")
     pages_text = full_text.split("\f")
 
-    n_blocks = 0
-    updated = False
-    for page_num, image in render_pages(pdf, dpi):
-        page_idx = page_num - 1
-        if page_idx >= len(pages_text):
-            continue
-        page_text = pages_text[page_idx]
-        if "[MASKAD]" in page_text:
-            continue
-        blocks = detect_redactions_image(image)
-        if not blocks:
-            continue
-        pages_text[page_idx] = _merge_redaction_markers(
-            page_text, blocks, image.height
-        )
-        n_blocks += len(blocks)
-        updated = True
+    # Öppna OCR-PDF en gång för alla sidor (om tillgänglig).
+    ocr_doc = None
+    if ocr_pdf is not None and ocr_pdf.exists():
+        try:
+            import pymupdf
+            ocr_doc = pymupdf.open(str(ocr_pdf))
+        except Exception:
+            pass
+
+    pt_per_px = 72.0 / dpi  # bildpixlar → PDF-punkter (vid dpi=72 är faktorn 1.0)
+
+    try:
+        n_blocks = 0
+        updated = False
+        for page_num, image in render_pages(pdf, dpi):
+            page_idx = page_num - 1
+            if page_idx >= len(pages_text):
+                continue
+            page_text = pages_text[page_idx]
+            if "[MASKAD]" in page_text:
+                continue
+            blocks = detect_redactions_image(image)
+            if not blocks:
+                continue
+
+            # Hämta y-mittpunkter för textrader från OCR-PDF:ens textlager.
+            y_centers: list[float] = []
+            if ocr_doc is not None and page_idx < len(ocr_doc):
+                try:
+                    for blk in ocr_doc[page_idx].get_text("dict")["blocks"]:
+                        if blk.get("type") != 0:
+                            continue
+                        for ln in blk.get("lines", []):
+                            y0, y1 = ln["bbox"][1], ln["bbox"][3]
+                            y_centers.append((y0 + y1) / 2)
+                    y_centers.sort()
+                except Exception:
+                    y_centers = []
+
+            lines = page_text.split("\n")
+            n = len(lines)
+            insertions: list[tuple[int, str]] = []
+            for b0, b1 in blocks:
+                if y_centers:
+                    # Exakt: räkna PDF-rader ovanför blockets mittpunkt.
+                    mid_pt = (b0 + b1) / 2 * pt_per_px
+                    pdf_idx = sum(1 for y in y_centers if y < mid_pt)
+                    idx = max(0, min(n, round(pdf_idx / len(y_centers) * n)))
+                else:
+                    # Fallback: proportionell mot bildhöjd (jämn fördelning antas).
+                    idx = max(0, min(n, round((b0 + b1) / 2 / image.height * n)))
+                insertions.append((idx, "[MASKAD]"))
+            for idx, m in sorted(insertions, key=lambda x: x[0], reverse=True):
+                lines.insert(idx, m)
+            pages_text[page_idx] = "\n".join(lines)
+            n_blocks += len(blocks)
+            updated = True
+    finally:
+        if ocr_doc is not None:
+            ocr_doc.close()
 
     if updated:
         txt_file.write_text("\f".join(pages_text), encoding="utf-8")
@@ -338,9 +385,9 @@ def main() -> int:
                     help="kommaseparerade sidnummer (1-baserade); default alla")
     ap.add_argument("--ocr-dir",
                     default=os.environ.get("OCR_DIR"),
-                    help="om satt + engine=surya: patcha textlagret i "
-                         "<ocr-dir>/<stem>.pdf med Surya-text på de "
-                         "OCR:ade sidorna (default: av)")
+                    help="katalog med OCR-ade PDF:er (generated/ocr). "
+                         "detect-only: används för exakt radpositionering via PyMuPDF. "
+                         "surya: patchar textlagret i <ocr-dir>/<stem>.pdf (default: av)")
     ap.add_argument("--no-update-pdf", action="store_true",
                     help="stäng av PDF-textlager-patchen även om --ocr-dir är satt")
     ap.add_argument("--no-detect-redactions", action="store_true",
@@ -359,7 +406,8 @@ def main() -> int:
         txt_dir = Path(args.txt_dir) if args.txt_dir else ROOT / "generated" / "text"
         txt_file = txt_dir / f"{pdf.stem}.txt"
         marker = txt_dir / f"{pdf.stem}.redact"
-        n = detect_redactions_file(pdf, txt_file, marker, args.dpi)
+        ocr_pdf = Path(args.ocr_dir) / f"{pdf.stem}.pdf" if args.ocr_dir else None
+        n = detect_redactions_file(pdf, txt_file, marker, args.dpi, ocr_pdf=ocr_pdf)
         print(f"inga" if n == 0 else f"{n} block")
         return 0
 
