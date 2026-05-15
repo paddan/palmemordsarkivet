@@ -19,6 +19,9 @@ Användning: $(basename "$0") [flaggor]
   --jobs N                parallella processer (4)
   --dpi N                 render-DPI (72)
   --rebuild               kör om alla filer (ignorera .redact-markörer)
+  --rebuild-text          regenerera .txt från generated/ocr/*.pdf innan körning,
+                          tar även bort .redact-markörer (innebär --rebuild).
+                          Kör ./normalize.sh efteråt för att normalisera om.
   -h, --help              visa denna hjälp
 EOF
 }
@@ -29,16 +32,18 @@ TXT=${TXT:-}
 JOBS=${JOBS:-4}
 DPI=${DPI:-72}
 REBUILD=0
+REBUILD_TEXT=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --root)     ROOT="$2"; shift 2 ;;
-    --in)       IN="$2"; shift 2 ;;
-    --txt)      TXT="$2"; shift 2 ;;
-    --jobs)     JOBS="$2"; shift 2 ;;
-    --dpi)      DPI="$2"; shift 2 ;;
-    --rebuild)  REBUILD=1; shift ;;
-    -h|--help)  usage; exit 0 ;;
+    --root)          ROOT="$2"; shift 2 ;;
+    --in)            IN="$2"; shift 2 ;;
+    --txt)           TXT="$2"; shift 2 ;;
+    --jobs)          JOBS="$2"; shift 2 ;;
+    --dpi)           DPI="$2"; shift 2 ;;
+    --rebuild)       REBUILD=1; shift ;;
+    --rebuild-text)  REBUILD_TEXT=1; REBUILD=1; shift ;;
+    -h|--help)       usage; exit 0 ;;
     *) echo "okänd flagga: $1" >&2; usage >&2; exit 2 ;;
   esac
 done
@@ -51,6 +56,23 @@ source .venv/bin/activate
 
 PYBIN="$ROOT/.venv/bin/python"
 WPU_DIR="$ROOT/downloaded/wpu_files"
+
+if [ "$REBUILD_TEXT" = "1" ]; then
+  OCR_DIR="$ROOT/generated/ocr"
+  echo "Regenererar .txt-filer från $OCR_DIR/*.pdf ..."
+  count=0
+  errors=0
+  while IFS= read -r -d '' pdf; do
+    stem=$(basename "$pdf" .pdf)
+    if pdftotext -layout "$pdf" "$TXT/$stem.txt" 2>/dev/null; then
+      count=$((count + 1))
+    else
+      echo "  [fel] pdftotext: $stem" >&2
+      errors=$((errors + 1))
+    fi
+  done < <(find "$OCR_DIR" -name '*.pdf' -print0)
+  echo "  $count .txt-filer regenererade${errors:+, $errors fel}."
+fi
 
 if [ "$REBUILD" = "1" ]; then
   echo "Tar bort .redact-markörer..."
@@ -103,3 +125,6 @@ find "$TXT" -name '*.txt' -print0 \
 
 rm -rf "$PROGRESS_DIR"
 echo "Klart."
+if [ "$REBUILD_TEXT" = "1" ]; then
+  echo "Kör nu './normalize.sh' för att normalisera om de regenererade textfilerna."
+fi
