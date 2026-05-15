@@ -203,7 +203,7 @@ if [ "$MODE" = "pages" ]; then
   [ -x "$PYBIN" ] || PYBIN="python3"
 
   "$PYBIN" - "$PAGES_JSONL" "$THRESHOLD" "$IN" "$PAGES_OUT" "$ROOT" "$OCR" "$NO_UPDATE_PDF" "$TXT" <<'PYEOF'
-import json, subprocess, sys
+import json, subprocess, sys, time
 from collections import defaultdict
 from pathlib import Path
 
@@ -251,10 +251,33 @@ if not bad:
           f"{skipped_already}/{total_bad} redan försökta).")
     sys.exit(0)
 
-print(f"Hittade {sum(len(v) for v in bad.values())} nya dåliga sidor i "
-      f"{len(bad)} filer ({skipped_already} redan försökta hoppas över).")
+total_files = len(bad)
+total_pages = sum(len(set(v)) for v in bad.values())
+print(f"Hittade {total_pages} nya dåliga sidor i "
+      f"{total_files} filer ({skipped_already} redan försökta hoppas över).")
+
+def fmt_eta(seconds):
+    s = int(seconds)
+    if s >= 3600:
+        return f"{s // 3600}h{s % 3600 // 60:02d}m"
+    return f"{s // 60}m{s % 60:02d}s"
+
+start_ts = time.monotonic()
+done_files = 0
+done_pages = 0
 for txt_name, pages in bad.items():
     stem = txt_name[:-4] if txt_name.endswith(".txt") else txt_name
+    pages_set = sorted(set(pages))
+    n_pages = len(pages_set)
+    pages_arg = ",".join(str(p) for p in pages_set)
+
+    elapsed = time.monotonic() - start_ts
+    if done_pages > 0:
+        eta_str = fmt_eta(elapsed / done_pages * (total_pages - done_pages))
+    else:
+        eta_str = "--"
+    print(f"[surya {done_files + 1}/{total_files} | {n_pages}s | eta {eta_str}] {stem}")
+
     pdf = in_dir / f"{stem}.pdf"
     if not pdf.exists():
         wpu_pdf = wpu_dir / f"{stem}.pdf"
@@ -262,8 +285,8 @@ for txt_name, pages in bad.items():
             pdf = wpu_pdf
         else:
             print(f"  SAKNAS: {pdf} (även {wpu_pdf})")
+            done_files += 1
             continue
-    pages_arg = ",".join(str(p) for p in sorted(set(pages)))
     cmd = [
         sys.executable, str(root / "src" / "ocr_pages.py"),
         "--in", str(pdf),
@@ -274,11 +297,15 @@ for txt_name, pages in bad.items():
     ]
     if no_update == "1":
         cmd.append("--no-update-pdf")
-    print(f"[redo-pages] {stem}: sidor {pages_arg}")
+    t0 = time.monotonic()
     r = subprocess.run(cmd, check=False)
+    took = time.monotonic() - t0
+    done_files += 1
+    done_pages += n_pages
     # Per-dokument-merge direkt efter ocr_pages.py är klar: ersätt motsvarande
     # sidor i text/<stem>.txt så att ingest fångar dem via mtime.
     if r.returncode == 0:
+        print(f"  → ok ({took:.0f}s)")
         try:
             merge_one(stem, txt_dir, out_dir)
         except Exception as e:  # noqa: BLE001
@@ -289,6 +316,8 @@ for txt_name, pages in bad.items():
                 normalize_file(txt_file)
             except Exception as e:  # noqa: BLE001
                 print(f"  [normalize] FEL {stem}: {e}", file=sys.stderr)
+    else:
+        print(f"  → FEL ({took:.0f}s)", file=sys.stderr)
 PYEOF
   exit 0
 fi
