@@ -18,6 +18,8 @@
 
 set -eu
 
+trap 'trap - INT TERM; echo; echo "Avbruten — avslutar underprocesser..."; kill 0 2>/dev/null; exit 130' INT TERM
+
 usage() {
   cat <<EOF
 Användning: $(basename "$0") [flaggor]
@@ -62,6 +64,7 @@ Flaggor (default visas inom parentes):
                           'inga användbara chunks' (skrivs till generated/unusable.txt).
   --no-update-pdf         hoppa PDF-textlager-patchen efter Surya per sida
                           (default: textlagret i \$OCR/<stem>.pdf uppdateras)
+  --retry-failed          ta bort .ocr-failed-markörer så att misslyckade filer körs om
   -h, --help              visa denna hjälp
 EOF
 }
@@ -82,6 +85,7 @@ CSV=${CSV:-}
 PAGES_JSONL=${PAGES_JSONL:-}
 PAGES_OUT=${PAGES_OUT:-}
 FROM_LIST=${FROM_LIST:-}
+RETRY_FAILED=${RETRY_FAILED:-0}
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -101,6 +105,7 @@ while [ $# -gt 0 ]; do
     --pages-jsonl)     PAGES_JSONL="$2"; shift 2 ;;
     --pages-out)       PAGES_OUT="$2"; shift 2 ;;
     --from-list)       FROM_LIST="$2"; shift 2 ;;
+    --retry-failed)    RETRY_FAILED=1; shift ;;
     -h|--help)         usage; exit 0 ;;
     *) echo "okänd flagga: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -131,14 +136,17 @@ step() {
 if [ "$REDO_ONLY" = "0" ]; then
   t0=$(date +%s)
 
+  retry_flag=()
+  [ "$RETRY_FAILED" = "1" ] && retry_flag+=(--retry-failed)
+
   step "1/7  Tesseract-OCR (./ocr_tesseract.sh --jobs $JOBS)"
-  ./ocr_tesseract.sh --jobs "$JOBS" --per-file-jobs "$PER_FILE_JOBS"
+  ./ocr_tesseract.sh --jobs "$JOBS" --per-file-jobs "$PER_FILE_JOBS" ${retry_flag[@]+"${retry_flag[@]}"}
 
   if [ -d "$ROOT/downloaded/wpu_files" ]; then
     # Wpu-filer får samma behandling som palme-filer: tesseract → generated/text/ + generated/ocr/.
     # Sen jämför merge_wpu och raderar förlorarens text/+ocr/-filer.
     step "1b/7  Tesseract-OCR av wpu-PDF:er"
-    ./ocr_tesseract.sh --in "$ROOT/downloaded/wpu_files" --jobs "$JOBS" --per-file-jobs "$PER_FILE_JOBS"
+    ./ocr_tesseract.sh --in "$ROOT/downloaded/wpu_files" --jobs "$JOBS" --per-file-jobs "$PER_FILE_JOBS" ${retry_flag[@]+"${retry_flag[@]}"}
 
     step "2/7  Sammanfoga wpu.nu-text (./merge_wpu.sh)"
     ./merge_wpu.sh

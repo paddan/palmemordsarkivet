@@ -11,6 +11,8 @@
 
 set -u
 
+trap 'trap - INT TERM; echo; echo "Avbruten — avslutar alla OCR-processer..."; kill 0 2>/dev/null; exit 130' INT TERM
+
 usage() {
   cat <<EOF
 Användning: $(basename "$0") [flaggor]
@@ -33,6 +35,7 @@ motsvarande env-var (versaler, understreck) — flagga vinner över env-var.
   --min-text-chars N      tröskel för "har redan text" (200)
   --image-dpi N           bild-DPI för OCR (300)
   --errors-log FILE       logg-fil för fel (\$ROOT/generated/errors.log)
+  --retry-failed          ta bort .ocr-failed-markörer så att misslyckade filer körs om
   -h, --help              visa denna hjälp och avsluta
 EOF
 }
@@ -52,6 +55,7 @@ PER_FILE_JOBS=${PER_FILE_JOBS:-2}
 MIN_TEXT_CHARS=${MIN_TEXT_CHARS:-200}
 IMAGE_DPI=${IMAGE_DPI:-300}
 ERRORS_LOG=${ERRORS_LOG:-}
+RETRY_FAILED=${RETRY_FAILED:-0}
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -70,6 +74,7 @@ while [ $# -gt 0 ]; do
     --min-text-chars)   MIN_TEXT_CHARS="$2"; shift 2 ;;
     --image-dpi)        IMAGE_DPI="$2"; shift 2 ;;
     --errors-log)       ERRORS_LOG="$2"; shift 2 ;;
+    --retry-failed)     RETRY_FAILED=1; shift ;;
     -h|--help)          usage; exit 0 ;;
     *) echo "okänd flagga: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -223,11 +228,12 @@ run_ocr() {
 }
 
 process_one() {
-  local f="$1" base out_pdf out_txt existing has_text _STATUS _OCR_RETRIES="" marker
+  local f="$1" base out_pdf out_txt existing has_text _STATUS _OCR_RETRIES="" marker failed_marker
   base=$(basename "$f" .pdf)
   out_pdf="$OCR/$base.pdf"
   out_txt="$TXT/$base.txt"
   marker="$OCR/$base.ocr-done"
+  failed_marker="$OCR/$base.ocr-failed"
 
   # Idempotens via markörfil — txt kan ha raderats av merge_wpu (som bara
   # raderar .txt och .pdf, inte markören). Lazy migration: skapa markör om
@@ -237,6 +243,12 @@ process_one() {
   fi
   if [ -f "$marker" ]; then
     printf 'hoppar' > "$PROGRESS_DIR/${base}.status"
+    return 0
+  fi
+
+  # Hoppa över filer som tidigare misslyckats — radera .ocr-failed för att försöka igen.
+  if [ -f "$failed_marker" ]; then
+    printf 'fel-skip' > "$PROGRESS_DIR/${base}.status"
     return 0
   fi
 
@@ -270,6 +282,7 @@ process_one() {
         _STATUS="${_STATUS}${_OCR_RETRIES}"
         pdftotext -layout "$out_pdf" "$out_txt"
       else
+        touch "$failed_marker"
         printf 'fel' > "$PROGRESS_DIR/${base}.status"
         return 1
       fi
@@ -280,6 +293,7 @@ process_one() {
       _STATUS="${_STATUS}${_OCR_RETRIES}"
       pdftotext -layout "$out_pdf" "$out_txt"
     else
+      touch "$failed_marker"
       printf 'fel' > "$PROGRESS_DIR/${base}.status"
       return 1
     fi
@@ -291,6 +305,16 @@ process_one() {
 export -f process_one run_ocr _run_ocrmypdf log_err
 export IN OCR TXT PER_FILE_JOBS MIN_TEXT_CHARS LANGS PSM \
        USER_WORDS USER_WORDS_AUTO TESS_CONFIG TESSDATA_PREFIX IMAGE_DPI ERRORS_LOG
+
+if [ "$RETRY_FAILED" = "1" ]; then
+  count=$(find "$OCR" -name '*.ocr-failed' 2>/dev/null | wc -l | tr -d ' ')
+  if [ "$count" -gt 0 ]; then
+    echo "Tar bort $count .ocr-failed-markörer..."
+    find "$OCR" -name '*.ocr-failed' -delete
+  else
+    echo "Inga .ocr-failed-markörer att ta bort."
+  fi
+fi
 
 TOTAL=$(find "$IN" -name '*.pdf' | wc -l | tr -d ' ')
 PROGRESS_DIR=$(mktemp -d)
@@ -324,16 +348,24 @@ rm -rf "$PROGRESS_DIR"
 echo
 echo "Kontrollerar att alla PDF:er finns i $OCR/ …"
 missing=0
+known_failed=0
 while IFS= read -r -d '' f; do
   base=$(basename "$f" .pdf)
   if [ ! -s "$OCR/$base.pdf" ]; then
-    echo "  SAKNAS: $base.pdf"
-    missing=$((missing + 1))
+    if [ -f "$OCR/$base.ocr-failed" ]; then
+      known_failed=$((known_failed + 1))
+    else
+      echo "  SAKNAS: $base.pdf"
+      missing=$((missing + 1))
+    fi
   fi
 done < <(find "$IN" -name '*.pdf' -print0)
-if [ "$missing" -eq 0 ]; then
+if [ "$missing" -eq 0 ] && [ "$known_failed" -eq 0 ]; then
   echo "  OK — alla $(find "$IN" -name '*.pdf' | wc -l | tr -d ' ') PDF:er finns i $OCR/."
+elif [ "$missing" -eq 0 ]; then
+  echo "  $known_failed PDF:er hoppades över (tidigare misslyckanden — radera .ocr-failed för att försöka igen)."
 else
   echo "  $missing PDF:er saknas i $OCR/ — kör om skriptet."
+  [ "$known_failed" -gt 0 ] && echo "  $known_failed tidigare misslyckanden hoppades över."
   exit 1
 fi
