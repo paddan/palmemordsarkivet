@@ -5,6 +5,7 @@ Kör med:
 eller manuellt:
     .venv/bin/streamlit run webui.py
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -46,7 +47,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 st.set_page_config(page_title="Palmemordsarkivet", layout="wide")
 st.title("Palmemordsarkivet")
-st.caption("Fråga arkivet — sökning + Claude Opus 4.7 med källhänvisningar.")
+st.caption("Fråga arkivet — sökning + AI med källhänvisningar.")
 
 
 @st.cache_resource(show_spinner="Laddar embedding-modell…")
@@ -132,7 +133,9 @@ def linkify_citations(text: str) -> str:
         nr, page = m.group(1), m.group(2)
         if nr not in nr_to_pdf:
             return m.group(0)
-        token = base64.urlsafe_b64encode(str(nr_to_pdf[nr]).encode()).decode().rstrip("=")
+        token = (
+            base64.urlsafe_b64encode(str(nr_to_pdf[nr]).encode()).decode().rstrip("=")
+        )
         href = f"?pdf={token}"
         return (
             f'<a href="{href}" target="pdf_opener" '
@@ -156,21 +159,37 @@ st.markdown(
 
 BACKENDS = {
     "Claude Opus 4.7": {"kind": "claude", "model": CLAUDE_MODEL},
-    "OpenAI GPT-5": {"kind": "openai", "model": "gpt-5",
-                     "base_url": "https://api.openai.com/v1",
-                     "env": "OPENAI_API_KEY"},
-    "OpenAI GPT-4o": {"kind": "openai", "model": "gpt-4o",
-                      "base_url": "https://api.openai.com/v1",
-                      "env": "OPENAI_API_KEY"},
-    "DeepSeek V4": {"kind": "openai", "model": "deepseek-chat",
-                    "base_url": "https://api.deepseek.com/v1",
-                    "env": "DEEPSEEK_API_KEY"},
-    "DeepSeek Reasoner": {"kind": "openai", "model": "deepseek-reasoner",
-                          "base_url": "https://api.deepseek.com/v1",
-                          "env": "DEEPSEEK_API_KEY"},
-    "OpenAI-kompatibel (custom)": {"kind": "openai", "model": "llama3.1:8b",
-                                   "base_url": "http://localhost:1234/v1",
-                                   "env": None, "configurable": True},
+    "OpenAI GPT-5": {
+        "kind": "openai",
+        "model": "gpt-5",
+        "base_url": "https://api.openai.com/v1",
+        "env": "OPENAI_API_KEY",
+    },
+    "OpenAI GPT-4o": {
+        "kind": "openai",
+        "model": "gpt-4o",
+        "base_url": "https://api.openai.com/v1",
+        "env": "OPENAI_API_KEY",
+    },
+    "DeepSeek V4": {
+        "kind": "openai",
+        "model": "deepseek-chat",
+        "base_url": "https://api.deepseek.com/v1",
+        "env": "DEEPSEEK_API_KEY",
+    },
+    "DeepSeek Reasoner": {
+        "kind": "openai",
+        "model": "deepseek-reasoner",
+        "base_url": "https://api.deepseek.com/v1",
+        "env": "DEEPSEEK_API_KEY",
+    },
+    "OpenAI-kompatibel (custom)": {
+        "kind": "openai",
+        "model": "llama3.1:8b",
+        "base_url": "http://localhost:1234/v1",
+        "env": None,
+        "configurable": True,
+    },
 }
 
 OPENAI_TOOLS = [
@@ -186,10 +205,26 @@ OPENAI_TOOLS = [
                 "type": "object",
                 "properties": {
                     "query": {"type": "string", "description": "Sökfrågan på svenska"},
-                    "top_k": {"type": "integer", "description": "Antal kandidater att hämta (5–50)", "default": 20},
-                    "top_n": {"type": "integer", "description": "Antal att behålla efter reranking (1–15)", "default": 6},
-                    "hybrid": {"type": "boolean", "description": "Kombinera vektor- och BM25-sökning", "default": True},
-                    "rerank": {"type": "boolean", "description": "Omranka med cross-encoder för bättre precision", "default": True},
+                    "top_k": {
+                        "type": "integer",
+                        "description": "Antal kandidater att hämta (5–50)",
+                        "default": 20,
+                    },
+                    "top_n": {
+                        "type": "integer",
+                        "description": "Antal att behålla efter reranking (1–15)",
+                        "default": 6,
+                    },
+                    "hybrid": {
+                        "type": "boolean",
+                        "description": "Kombinera vektor- och BM25-sökning",
+                        "default": True,
+                    },
+                    "rerank": {
+                        "type": "boolean",
+                        "description": "Omranka med cross-encoder för bättre precision",
+                        "default": True,
+                    },
                 },
                 "required": ["query"],
             },
@@ -206,7 +241,10 @@ OPENAI_TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "source": {"type": "string", "description": "Filnamn från söktträff, t.ex. '281 — Titel….txt'"},
+                    "source": {
+                        "type": "string",
+                        "description": "Filnamn från söktträff, t.ex. '281 — Titel….txt'",
+                    },
                     "page": {"type": "integer", "description": "Sidnummer (1-baserat)"},
                 },
                 "required": ["source", "page"],
@@ -237,22 +275,29 @@ with st.sidebar:
         backend = {
             **backend,
             "base_url": st.text_input(
-                "Endpoint-URL", value=backend["base_url"],
+                "Endpoint-URL",
+                value=backend["base_url"],
                 help="OpenAI-kompatibel /v1-endpoint (Ollama, LM Studio, "
-                     "llama.cpp, vLLM, fjärr-OpenAI-API, ...)"),
+                "llama.cpp, vLLM, fjärr-OpenAI-API, ...)",
+            ),
             "model": st.text_input(
-                "Modellnamn", value=backend["model"],
+                "Modellnamn",
+                value=backend["model"],
                 help="T.ex. `llama3.1:8b` (Ollama), `gpt-4o-mini`, eller "
-                     "vad providern kräver"),
+                "vad providern kräver",
+            ),
             "api_key_override": st.text_input(
-                "API-nyckel (valfritt)", value="", type="password",
-                help="Lämna tomt för Ollama/lokala servrar utan auth"),
+                "API-nyckel (valfritt)",
+                value="",
+                type="password",
+                help="Lämna tomt för Ollama/lokala servrar utan auth",
+            ),
         }
     mcp_mode = st.toggle(
         "Utredningsläge (MCP)",
         key="mcp_mode",
         help="Modellen söker autonomt med egna verktyg — bättre på komplexa frågor, men långsammare. "
-             "I detta läge får du en chatt där modellen minns tidigare frågor.",
+        "I detta läge får du en chatt där modellen minns tidigare frågor.",
         disabled=backend["kind"] not in ("claude", "openai"),
         on_change=_on_mcp_change,
     )
@@ -261,25 +306,37 @@ with st.sidebar:
         st.session_state.mcp_session_id = None
         st.session_state.openai_chat_messages = []
         st.rerun()
-    do_rerank = st.toggle("Använd cross-encoder reranker",
-                          key="do_rerank",
-                          help="Långsammare första gången (laddar ~568 MB) men bättre precision. "
-                               "Klicka för att byta till RAG-läget när utredningsläget är aktivt.",
-                          on_change=_on_rerank_change)
+    do_rerank = st.toggle(
+        "Använd cross-encoder reranker",
+        key="do_rerank",
+        help="Långsammare första gången (laddar ~568 MB) men bättre precision. "
+        "Klicka för att byta till RAG-läget när utredningsläget är aktivt.",
+        on_change=_on_rerank_change,
+    )
     top_k = st.slider(
-        "Hämta top-K kandidater", 5, 50, 20,
+        "Hämta top-K kandidater",
+        5,
+        50,
+        20,
         help="Antal chunks som vektorsökningen plockar fram ur indexet i första "
-             "steget. Högre K → fler alternativ för rerankern att välja bland "
-             "(bättre täckning) men långsammare. Utan reranker används bara de "
-             "första top-N av dessa.")
+        "steget. Högre K → fler alternativ för rerankern att välja bland "
+        "(bättre täckning) men långsammare. Utan reranker används bara de "
+        "första top-N av dessa.",
+    )
     top_n = st.slider(
-        "Skicka top-N till AI", 1, 15, 6,
+        "Skicka top-N till AI",
+        1,
+        15,
+        6,
         help="Antal chunks (efter ev. reranking) som faktiskt skickas som "
-             "kontext till språkmodellen. Högre N → mer underlag men längre "
-             "prompt, högre kostnad och risk att modellen tappar fokus.")
+        "kontext till språkmodellen. Högre N → mer underlag men längre "
+        "prompt, högre kostnad och risk att modellen tappar fokus.",
+    )
 
 if backend["kind"] == "claude":
-    if not (os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") or os.environ.get("ANTHROPIC_API_KEY")):
+    if not (
+        os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") or os.environ.get("ANTHROPIC_API_KEY")
+    ):
         st.error("Sätt `CLAUDE_CODE_OAUTH_TOKEN` eller `ANTHROPIC_API_KEY` i miljön.")
         st.stop()
 elif backend.get("env") and not os.environ.get(backend["env"]):
@@ -319,8 +376,9 @@ if "pdf" in qp:
     st.query_params.clear()
 
 
-async def stream_mcp(q: str, placeholder, parts: list[str],
-                     resume_id: str | None) -> str | None:
+async def stream_mcp(
+    q: str, placeholder, parts: list[str], resume_id: str | None
+) -> str | None:
     """Utredningsläge: Claude anropar search_archive/get_page autonomt.
 
     Returnerar Claudes session_id så att nästa fråga kan resume:a samma
@@ -328,15 +386,26 @@ async def stream_mcp(q: str, placeholder, parts: list[str],
     db_dir = ROOT / "generated" / "lancedb"
     env = {
         "DB_DIR": str(db_dir),
-        **{k: v for k, v in os.environ.items()
-           if k in ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY",
-                    "PATH", "HOME", "VIRTUAL_ENV", "EMBED_MODEL")},
+        **{
+            k: v
+            for k, v in os.environ.items()
+            if k
+            in (
+                "CLAUDE_CODE_OAUTH_TOKEN",
+                "ANTHROPIC_API_KEY",
+                "PATH",
+                "HOME",
+                "VIRTUAL_ENV",
+                "EMBED_MODEL",
+            )
+        },
     }
     options = ClaudeAgentOptions(
         system_prompt=MCP_SYSTEM_PROMPT,
         model=CLAUDE_MODEL,
-        mcp_servers={"arkiv": {"command": sys.executable,
-                                "args": [str(MCP_SERVER)], "env": env}},
+        mcp_servers={
+            "arkiv": {"command": sys.executable, "args": [str(MCP_SERVER)], "env": env}
+        },
         allowed_tools=["mcp__arkiv__search_archive", "mcp__arkiv__get_page"],
         thinking=ThinkingConfigAdaptive(type="adaptive"),
         effort="high",
@@ -376,6 +445,7 @@ async def stream_claude(user_msg: str, placeholder, parts: list[str]) -> None:
 
 async def stream_openai(user_msg: str, placeholder, parts: list[str], cfg) -> None:
     from openai import AsyncOpenAI  # noqa: PLC0415
+
     api_key = os.environ.get(cfg["env"]) if cfg.get("env") else "ollama"
     client = AsyncOpenAI(api_key=api_key or "ollama", base_url=cfg["base_url"])
     stream = await client.chat.completions.create(
@@ -423,6 +493,7 @@ async def stream_mcp_to_string(q: str, resume_id: str | None) -> tuple[str, str 
 
 def _run_tool(name: str, arguments: dict) -> str:
     import mcp_server  # type: ignore  # noqa: PLC0415
+
     mcp_server._table = table
     mcp_server._model = embed_model
     if name == "search_archive":
@@ -465,11 +536,13 @@ async def stream_openai_mcp(
             msg = choice.message
 
             if choice.finish_reason == "tool_calls" and msg.tool_calls:
-                messages.append({
-                    "role": "assistant",
-                    "content": msg.content,
-                    "tool_calls": [tc.model_dump() for tc in msg.tool_calls],
-                })
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": msg.content,
+                        "tool_calls": [tc.model_dump() for tc in msg.tool_calls],
+                    }
+                )
                 for tc in msg.tool_calls:
                     args = json.loads(tc.function.arguments)
                     tool_count += 1
@@ -479,11 +552,13 @@ async def stream_openai_mcp(
                         label = f'get_page: {args.get("source", "")}, sida {args.get("page", "")}'
                     status_box.write(label)
                     result = _run_tool(tc.function.name, args)
-                    messages.append({
-                        "role": "tool",
-                        "content": result,
-                        "tool_call_id": tc.id,
-                    })
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "content": result,
+                            "tool_call_id": tc.id,
+                        }
+                    )
             else:
                 final = msg.content or ""
                 parts.append(final)
@@ -531,7 +606,11 @@ if mcp_mode:
                     with st.expander(f"Källor ({len(srcs)})", expanded=False):
                         for i, h in enumerate(srcs):
                             pdf = find_pdf(h["source"])
-                            stem = h["source"][:-4] if h["source"].endswith(".txt") else h["source"]
+                            stem = (
+                                h["source"][:-4]
+                                if h["source"].endswith(".txt")
+                                else h["source"]
+                            )
                             with st.container(border=True):
                                 cols = st.columns([5, 2])
                                 with cols[0]:
@@ -554,11 +633,13 @@ if mcp_mode:
                     stream_mcp_to_string(chat_q, ss.mcp_session_id)
                 )
             ss.mcp_session_id = new_id
-            ss.chat_history.append({
-                "role": "assistant",
-                "text": answer,
-                "sources": extract_cited_sources(answer),
-            })
+            ss.chat_history.append(
+                {
+                    "role": "assistant",
+                    "text": answer,
+                    "sources": extract_cited_sources(answer),
+                }
+            )
             st.rerun()
     else:
         for turn_idx, turn in enumerate(ss.chat_history):
@@ -569,7 +650,11 @@ if mcp_mode:
                     with st.expander(f"Källor ({len(srcs)})", expanded=False):
                         for i, h in enumerate(srcs):
                             pdf = find_pdf(h["source"])
-                            stem = h["source"][:-4] if h["source"].endswith(".txt") else h["source"]
+                            stem = (
+                                h["source"][:-4]
+                                if h["source"].endswith(".txt")
+                                else h["source"]
+                            )
                             with st.container(border=True):
                                 cols = st.columns([5, 2])
                                 with cols[0]:
@@ -585,7 +670,9 @@ if mcp_mode:
         chat_q = st.chat_input("Ställ en fråga till utredningsassistenten…")
         if chat_q and chat_q.strip():
             if not ss.openai_chat_messages:
-                ss.openai_chat_messages.append({"role": "system", "content": MCP_SYSTEM_PROMPT})
+                ss.openai_chat_messages.append(
+                    {"role": "system", "content": MCP_SYSTEM_PROMPT}
+                )
             ss.openai_chat_messages.append({"role": "user", "content": chat_q})
             ss.chat_history.append({"role": "user", "text": chat_q, "sources": []})
             with st.chat_message("user"):
@@ -594,11 +681,13 @@ if mcp_mode:
                 answer = asyncio.run(
                     stream_openai_mcp_to_string(backend, ss.openai_chat_messages)
                 )
-            ss.chat_history.append({
-                "role": "assistant",
-                "text": answer,
-                "sources": extract_cited_sources(answer),
-            })
+            ss.chat_history.append(
+                {
+                    "role": "assistant",
+                    "text": answer,
+                    "sources": extract_cited_sources(answer),
+                }
+            )
             st.rerun()
 else:
     with st.form("ask"):
@@ -618,7 +707,9 @@ else:
                 hits = rerank(q, hits, top_n)
             else:
                 hits = hits[:top_n]
-            status.update(label=f"Hittade {len(hits)} relevanta chunks", state="complete")
+            status.update(
+                label=f"Hittade {len(hits)} relevanta chunks", state="complete"
+            )
         ss.hits = hits
 
         st.subheader(f"Svar ({backend_name})")
@@ -644,10 +735,12 @@ if ss.hits and not mcp_mode:
                     if h.get("page"):
                         st.caption(f"sida {h['page']}")
                 with cols[1]:
-                    if pdf and st.button("Öppna PDF", key=f"open_pdf_{i}",
-                                         use_container_width=True):
+                    if pdf and st.button(
+                        "Öppna PDF", key=f"open_pdf_{i}", use_container_width=True
+                    ):
                         subprocess.Popen(["open", str(pdf)])
                 with cols[2]:
-                    if txt and st.button("Öppna text", key=f"open_txt_{i}",
-                                         use_container_width=True):
+                    if txt and st.button(
+                        "Öppna text", key=f"open_txt_{i}", use_container_width=True
+                    ):
                         subprocess.Popen(["open", str(txt)])

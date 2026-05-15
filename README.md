@@ -12,13 +12,13 @@ Webgränssnittet har två söklägen:
 
 **RAG (standard)** — *retrieval-augmented generation*. En fast pipeline: frågan
 embedas och matchas mot vektorindexet, de bästa utdragen rerankas, och de
-6 mest relevanta skickas som kontext till Claude som formulerar svaret med
+6 mest relevanta skickas som kontext till AI som formulerar svaret med
 källhänvisningar. Snabbt och förutsägbart — passar enkla faktafrågor där ett
 söksteg räcker.
 
 ![Web-gränssnitt — RAG-läge](web-ui-2.png)
 
-**MCP (utredningsläge)** — Claude söker *autonomt* via
+**MCP (utredningsläge)** — AI söker *autonomt* via
 [Model Context Protocol](https://modelcontextprotocol.io). Istället för en
 fast pipeline får Claude tillgång till verktyg (`search_archive`, `get_page`)
 som den anropar hur många gånger den vill — provar olika söktermer, följer
@@ -33,7 +33,7 @@ på komplexa flerstegs-frågor, men långsammare (~1–3 min).
 ./install.sh           # installera alla beroenden (brew, Python-paket, tessdata)
 ```
 
-Sätt sedan en API-nyckel:
+Sätt sedan en API-nyckel för den LLM du vill använda:
 
 ```bash
 export CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...   # Pro/Max-abonnemang (rekommenderas)
