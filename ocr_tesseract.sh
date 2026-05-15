@@ -349,23 +349,30 @@ echo
 echo "Kontrollerar att alla PDF:er finns i $OCR/ …"
 missing=0
 known_failed=0
+merged_away=0
 while IFS= read -r -d '' f; do
   base=$(basename "$f" .pdf)
   if [ ! -s "$OCR/$base.pdf" ]; then
     if [ -f "$OCR/$base.ocr-failed" ]; then
       known_failed=$((known_failed + 1))
+    elif [ -f "$OCR/$base.ocr-done" ]; then
+      # PDF saknas men .ocr-done finns — merge_wpu raderade den (palme-versionen vann).
+      merged_away=$((merged_away + 1))
     else
       echo "  SAKNAS: $base.pdf"
       missing=$((missing + 1))
     fi
   fi
 done < <(find "$IN" -name '*.pdf' -print0)
-if [ "$missing" -eq 0 ] && [ "$known_failed" -eq 0 ]; then
-  echo "  OK — alla $(find "$IN" -name '*.pdf' | wc -l | tr -d ' ') PDF:er finns i $OCR/."
-elif [ "$missing" -eq 0 ]; then
-  echo "  $known_failed PDF:er hoppades över (tidigare misslyckanden — radera .ocr-failed för att försöka igen)."
+total=$(find "$IN" -name '*.pdf' | wc -l | tr -d ' ')
+if [ "$missing" -eq 0 ]; then
+  msg="  OK — $total PDF:er bearbetade"
+  [ "$merged_away" -gt 0 ] && msg="$msg ($merged_away ersatta av palme-versionen)"
+  [ "$known_failed" -gt 0 ] && msg="$msg, $known_failed misslyckanden hoppades över"
+  echo "$msg."
 else
   echo "  $missing PDF:er saknas i $OCR/ — kör om skriptet."
   [ "$known_failed" -gt 0 ] && echo "  $known_failed tidigare misslyckanden hoppades över."
+  [ "$merged_away" -gt 0 ] && echo "  $merged_away ersatta av palme-versionen (merge_wpu)."
   exit 1
 fi
