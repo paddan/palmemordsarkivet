@@ -13,7 +13,7 @@ När du gör förändringar i projektet ska du **alltid** uppdatera både `CLAUD
 
 **palmemordsarkivet** laddar ner, OCR-processar och gör ~3 700 PDF-dokument (~33 000 sidor) från palmemordsarkivet.se sökbara via RAG + Claude Opus 4.7. Alla kommentarer och docstrings är på svenska.
 
-Pipeline: download → OCR (Tesseract + optional Surya) → normalize → quality scoring → LanceDB ingest → RAG query → Streamlit UI.
+Pipeline: download → OCR (Tesseract + optional Surya) → detect redactions → normalize → quality scoring → LanceDB ingest → RAG query → Streamlit UI.
 
 ## Directory Structure
 

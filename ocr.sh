@@ -29,8 +29,8 @@ Default-läge (full pipeline):
   1b./ocr_tesseract.sh --in downloaded/wpu_files # Tesseract på downloaded/wpu_files/ (om finns)
   2. ./merge_wpu.sh                           # jämför wpu vs palme; raderar
                                               # förloraren (om files_wpu/ finns)
-  3. ./normalize.sh                           # regelbaserad textnormalisering
-  4. ./detect_redactions.sh                   # infoga [MASKAD] i text
+  3. ./detect_redactions.sh                   # infoga [MASKAD] i text
+  4. ./normalize.sh                           # regelbaserad textnormalisering
   5. ./quality.sh --per-page                  # quality.csv + quality_pages.jsonl
   6. ./ocr.sh --redo --mode pages             # Surya på sidor under tröskeln
                                               # (palme + kvarvarande wpu)
@@ -152,11 +152,11 @@ if [ "$REDO_ONLY" = "0" ]; then
     ./merge_wpu.sh
   fi
 
-  step "3/7  Normalisering (./normalize.sh)"
-  ./normalize.sh
-
-  step "4/7  Redaktionsdetektering (./detect_redactions.sh)"
+  step "3/7  Redaktionsdetektering (./detect_redactions.sh)"
   ./detect_redactions.sh
+
+  step "4/7  Normalisering (./normalize.sh)"
+  ./normalize.sh
 
   step "5/7  Kvalitetsbedömning (./quality.sh --per-page)"
   ./quality.sh --per-page
