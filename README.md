@@ -44,6 +44,13 @@ export ANTHROPIC_API_KEY=sk-ant-...               # API-credits
 Kör sedan pipeline:
 
 ```bash
+./run_pipeline.sh      # kör alla steg i ett (download → OCR → ingest)
+./web.sh               # Starta webgränssnittet och ställ frågor
+```
+
+Eller steg för steg:
+
+```bash
 ./download.sh          # 1. Ladda ner alla PDF:er (~3 700 st, tar några timmar)
 ./download_wpu.sh      # 1b. (valfritt) Ladda ner WPU PDF:er (~7100 st)
 ./ocr.sh               # 2. OCR → text (Tesseract + Surya på svåra sidor, tar flera timmar)
@@ -386,6 +393,7 @@ lokalt (via `open`) i en gömd iframe så huvudsidan inte laddas om.
 
 | Fil | Vad |
 |---|---|
+| `run_pipeline.sh` | Kör hela pipelinen i ett kommando: download → OCR → ingest (flaggor: `--skip-wpu`, `--skip-redo`, `--with-llm`, `--rebuild-index`, `--jobs N`) |
 | `download.sh` → `src/download.py` | Hämta PDF:er från Drive |
 | `download_wpu.sh` → `src/download_wpu.py` | Ladda ner alla PDF:er från wpu.nu → `downloaded/wpu_files/` |
 | `merge_wpu.sh` → `src/merge_wpu.py` | Jämför wpu- och palme-text per fil, behåll bäst kvalitet |

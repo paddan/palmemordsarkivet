@@ -53,6 +53,7 @@ Data-kataloger (gitignored):
 .venv/bin/pytest tests/
 
 # Workflow
+./run_pipeline.sh                    # Hela pipelinen i ett: download → OCR → ingest
 ./download.sh                        # Hämta PDF:er från Google Sheet
 ./ocr.sh                             # Tesseract → normalize → quality → Surya på dåliga sidor
 ./ocr.sh --skip-redo                 # Bara Tesseract + normalize + quality
