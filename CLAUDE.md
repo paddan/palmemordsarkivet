@@ -76,7 +76,7 @@ Env-variabler: `CLAUDE_CODE_OAUTH_TOKEN` (Pro/Max, räknas mot prenumeration) el
 
 **mtime-tracking (ingest.py)**: Varje `.txt`-fil jämförs mot lagrad mtime; nyare fil → re-ingest. Legacy-rader har `mtime=0.0` och re-indexeras inte automatiskt — använd `--reindex-since`.
 
-**Redaktionsdetektering (ocr_pages.py)**: Hittar svarta maskeringsblock i bilder och infogar `[MASKAD]` i texten. På som standard; `--no-detect-redactions` stänger av.
+**Redaktionsdetektering (ocr_pages.py)**: Hittar svarta maskeringsblock i bilder och infogar `[MASKAD]` i texten. På som standard; `--no-detect-redactions` stänger av. `detect_redactions.sh` skriver alltid en `.redact`-markörfil per PDF och förfiltrerar listan innan `xargs` — filer med markör spawnar inga subprocesser alls.
 
 **Per-dokument-cleanup (ocr.sh + Surya)**: Efter att `ocr_pages.py` är klar kör `ocr.sh` automatiskt `merge_pages.merge_one` + `normalize_text.process_file`, raderar `page-NNN.txt`/`.png` men behåller `page-NNN.json` som idempotens-markör.
 
