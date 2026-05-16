@@ -1,8 +1,58 @@
-"""Tester för should_reingest och find_orphans från rag/ingest.py."""
+"""Tester för should_reingest, find_orphans och _table_exists från rag/ingest.py."""
 
 from __future__ import annotations
 
-from ingest import find_orphans, should_reingest
+from ingest import _table_exists, find_orphans, should_reingest
+
+
+# ---------------------------------------------------------------------------
+# Minimala mock-objekt för att testa _table_exists utan att starta LanceDB.
+# ---------------------------------------------------------------------------
+
+class _PydanticStyleResponse:
+    """Simulerar ListTablesResponse från lancedb ≥0.20 (har .tables-attribut)."""
+    def __init__(self, table_names: list[str]) -> None:
+        self.tables = table_names
+
+    def __iter__(self):
+        # Pydantic-modellens __iter__ ger nyckel-värde-par, inte tabellnamn —
+        # det är precis den fällan som orsakade ursprungsbuggarna.
+        yield from [("tables", self.tables), ("page_token", None)]
+
+
+class _MockDB:
+    def __init__(self, result) -> None:
+        self._result = result
+
+    def list_tables(self):
+        return self._result
+
+
+def test_table_exists_pydantic_response_found() -> None:
+    # lancedb ≥0.20: list_tables() returnerar objekt med .tables, inte en ren lista.
+    db = _MockDB(_PydanticStyleResponse(["chunks", "other"]))
+    assert _table_exists(db, "chunks") is True
+
+
+def test_table_exists_pydantic_response_not_found() -> None:
+    db = _MockDB(_PydanticStyleResponse(["other"]))
+    assert _table_exists(db, "chunks") is False
+
+
+def test_table_exists_pydantic_response_empty() -> None:
+    db = _MockDB(_PydanticStyleResponse([]))
+    assert _table_exists(db, "chunks") is False
+
+
+def test_table_exists_plain_list_fallback_found() -> None:
+    # Äldre lancedb returnerade en ren lista — fallback via list(result).
+    db = _MockDB(["chunks", "other"])
+    assert _table_exists(db, "chunks") is True
+
+
+def test_table_exists_plain_list_fallback_not_found() -> None:
+    db = _MockDB([])
+    assert _table_exists(db, "chunks") is False
 
 
 def test_unchanged_file_skipped() -> None:

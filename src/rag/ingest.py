@@ -153,6 +153,13 @@ def is_useful(chunk: str) -> bool:
     return alnum / len(chunk) >= MIN_ALNUM_RATIO
 
 
+def _table_exists(db: lancedb.LanceDBConnection, name: str) -> bool:
+    # lancedb ≥0.20 returnerar ListTablesResponse (Pydantic), inte en ren lista.
+    result = db.list_tables()
+    names = result.tables if hasattr(result, "tables") else list(result)
+    return name in names
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -212,9 +219,9 @@ def main() -> int:
         *[pa.field(f, pa.string()) for f in NAME_FIELDS],
     ])
 
-    if args.rebuild and TABLE in db.list_tables():
+    if args.rebuild and _table_exists(db, TABLE):
         db.drop_table(TABLE)
-    if TABLE in db.list_tables():
+    if _table_exists(db, TABLE):
         table = db.open_table(TABLE)
         # Migration: lägg till mtime-kolumn om den saknas (legacy-tabell).
         if "mtime" not in table.schema.names:
