@@ -286,7 +286,6 @@ def detect_redactions_file(
     if marker.exists():
         return 0
     if not txt_file.exists():
-        marker.write_text("", encoding="utf-8")
         return 0
 
     full_text = txt_file.read_text(encoding="utf-8", errors="replace")

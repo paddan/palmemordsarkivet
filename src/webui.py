@@ -621,7 +621,10 @@ if mcp_mode:
                                         key=f"chat_pdf_{turn_idx}_{i}",
                                         use_container_width=True,
                                     ):
-                                        subprocess.Popen(["open", str(pdf)])
+                                        try:
+                                            subprocess.Popen(["open", str(pdf)])
+                                        except OSError as e:
+                                            st.error(f"Kan inte öppna fil: {e}")
 
         chat_q = st.chat_input("Ställ en fråga till utredningsassistenten…")
         if chat_q and chat_q.strip():
@@ -665,7 +668,10 @@ if mcp_mode:
                                         key=f"chat_pdf_{turn_idx}_{i}",
                                         use_container_width=True,
                                     ):
-                                        subprocess.Popen(["open", str(pdf)])
+                                        try:
+                                            subprocess.Popen(["open", str(pdf)])
+                                        except OSError as e:
+                                            st.error(f"Kan inte öppna fil: {e}")
 
         chat_q = st.chat_input("Ställ en fråga till utredningsassistenten…")
         if chat_q and chat_q.strip():
@@ -738,9 +744,15 @@ if ss.hits and not mcp_mode:
                     if pdf and st.button(
                         "Öppna PDF", key=f"open_pdf_{i}", use_container_width=True
                     ):
-                        subprocess.Popen(["open", str(pdf)])
+                        try:
+                            subprocess.Popen(["open", str(pdf)])
+                        except OSError as e:
+                            st.error(f"Kan inte öppna fil: {e}")
                 with cols[2]:
                     if txt and st.button(
                         "Öppna text", key=f"open_txt_{i}", use_container_width=True
                     ):
-                        subprocess.Popen(["open", str(txt)])
+                        try:
+                            subprocess.Popen(["open", str(txt)])
+                        except OSError as e:
+                            st.error(f"Kan inte öppna fil: {e}")

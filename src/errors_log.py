@@ -25,11 +25,13 @@ def _make_logger() -> logging.Logger:
     logger = logging.getLogger("palme.errors")
     if logger.handlers:
         return logger
+    LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     handler = logging.handlers.RotatingFileHandler(
         str(LOG_PATH),
         maxBytes=_MAX_BYTES,
         backupCount=_BACKUP_COUNT,
         encoding="utf-8",
+        delay=True,
     )
     handler.setFormatter(_RawFormatter())
     logger.addHandler(handler)

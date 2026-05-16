@@ -212,9 +212,9 @@ def main() -> int:
         *[pa.field(f, pa.string()) for f in NAME_FIELDS],
     ])
 
-    if args.rebuild and TABLE in db.list_tables().tables:
+    if args.rebuild and TABLE in db.list_tables():
         db.drop_table(TABLE)
-    if TABLE in db.list_tables().tables:
+    if TABLE in db.list_tables():
         table = db.open_table(TABLE)
         # Migration: lägg till mtime-kolumn om den saknas (legacy-tabell).
         if "mtime" not in table.schema.names:

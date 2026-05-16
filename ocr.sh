@@ -396,12 +396,13 @@ redo_one() {
         --quiet \
         "$pdf" "$out_pdf" 2>"$log"; then
     pdftotext -layout "$out_pdf" "$out_txt"
-    "$ROOT/.venv/bin/python" -c "
-import sys; sys.path.insert(0, '$ROOT/src')
+    "$ROOT/.venv/bin/python" - "$ROOT/src" "$out_txt" <<'PYEOF' 2>/dev/null || true
+import sys
+sys.path.insert(0, sys.argv[1])
 from normalize_text import process_file
 from pathlib import Path
-process_file(Path('$out_txt'))
-" 2>/dev/null || true
+process_file(Path(sys.argv[2]))
+PYEOF
     rm -f "$log"
   else
     echo "[fel] $base — se loggen nedan:" >&2

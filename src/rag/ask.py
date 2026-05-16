@@ -66,7 +66,7 @@ Regler:
 - OCR-fel kan förekomma i materialet."""
 
 
-SELECT_COLS = ["text", "source", "page", "nr", "titel", "anmarkning"]
+SELECT_COLS = ["text", "source", "page", "chunk_idx", "nr", "titel", "anmarkning"]
 
 
 def search(table, model, q: str, top_k: int) -> list[dict]:

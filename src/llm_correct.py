@@ -125,6 +125,7 @@ async def _correct_all(
         stem_dir.mkdir(parents=True, exist_ok=True)
 
         file_changed = False
+        pending_markers: list[Path] = []
         for p in sorted(set(pages)):
             idx = p - 1
             if idx < 0 or idx >= len(page_texts):
@@ -159,12 +160,14 @@ async def _correct_all(
             (stem_dir / f'page-{p:03d}.txt').write_text(
                 normalize(corrected), encoding='utf-8'
             )
-            (stem_dir / f'page-{p:03d}.llm').touch()
+            pending_markers.append(stem_dir / f'page-{p:03d}.llm')
             file_changed = True
 
         if file_changed and not dry_run:
             try:
                 merge_one(stem, txt_dir, pages_dir)
+                for _m in pending_markers:
+                    _m.touch()
             except Exception as e:  # noqa: BLE001
                 print(f'  [merge-fel] {stem}: {e}', file=sys.stderr)
 

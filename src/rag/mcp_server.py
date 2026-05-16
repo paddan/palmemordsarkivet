@@ -93,7 +93,9 @@ def get_page(
     t.ex. sidorna precis före/efter ett intressant stycke.
     """
     stem = source[:-4] if source.endswith(".txt") else source
-    txt = _text_dir / f"{stem}.txt"
+    txt = (_text_dir / f"{stem}.txt").resolve()
+    if not txt.is_relative_to(_text_dir.resolve()):
+        return "Ogiltig filsökväg."
     if not txt.exists():
         return f"Hittade inte {source} i text/-katalogen."
 
