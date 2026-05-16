@@ -328,11 +328,9 @@ def main() -> int:
     for prefix, file_id in todo:
         # Idempotency 1: manifestet (drive_id)
         if file_id in manifest_ids:
-            progress("[hoppar-m] ", prefix)
             continue
         # Idempotency 2: filnamns-stem (pre-manifest)
         if prefix in existing_stems:
-            progress("[hoppar]   ", prefix)
             continue
 
         progress("[hämtar]   ", prefix, f"  id={file_id}")

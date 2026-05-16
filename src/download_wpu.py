@@ -172,12 +172,13 @@ def main() -> int:
     print(f"  {len(pdfs)} PDF-filer på wpu.nu (av {len(all_wpu)} totalt)")
 
     already_local = (
-        {f.name for f in out_dir.glob("*.pdf")} if out_dir.is_dir() else set()
+        {f.name.lower() for f in out_dir.iterdir() if f.is_file() and f.suffix.lower() == ".pdf"}
+        if out_dir.is_dir() else set()
     )
 
     to_download = [
         f for f in pdfs
-        if args.rebuild or f["name"] not in already_local
+        if args.rebuild or f["name"].lower() not in already_local
     ]
     n_skip = len(pdfs) - len(to_download)
 

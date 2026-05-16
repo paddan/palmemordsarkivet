@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import json
 import math
 import os
 import re
@@ -245,6 +246,19 @@ def main() -> int:
         table = db.create_table(TABLE, schema=schema)
         already = {}
 
+    # Läs in oanvändbara filers mtime så de hoppas över tills de ändras på disk.
+    unusable_mtimes_file = Path(args.unusable_list).with_name("unusable_mtimes.json")
+    if unusable_mtimes_file.exists():
+        try:
+            for fname, mtime in json.loads(
+                unusable_mtimes_file.read_text(encoding="utf-8")
+            ).items():
+                m = float(mtime)
+                if fname not in already or m > already[fname]:
+                    already[fname] = m
+        except Exception:
+            pass
+
     print(f"Laddar embedding-modell {args.model} (första gången tar några minuter)…")
     model = SentenceTransformer(args.model)
 
@@ -287,6 +301,7 @@ def main() -> int:
     t0 = time.monotonic()
     total_chunks = 0
     unusable: list[str] = []
+    unusable_mtimes: dict[str, float] = {}
 
     for i, (f, disk_mtime, is_reingest) in enumerate(todo, 1):
         meta = parse_filename(f.stem)
@@ -315,6 +330,7 @@ def main() -> int:
         if not rows:
             print(f"  [{i}/{len(todo)}] {f.name}: inga användbara chunks")
             unusable.append(f.name)
+            unusable_mtimes[f.name] = disk_mtime
             continue
 
         # e5 vill ha "passage: " på dokument
@@ -364,6 +380,23 @@ def main() -> int:
     if unusable:
         unusable_path = Path(args.unusable_list)
         unusable_path.write_text("\n".join(unusable) + "\n", encoding="utf-8")
+        # Spara mtime per oanvändbar fil så nästa körning kan hoppa över dem.
+        existing_um: dict[str, float] = {}
+        if unusable_mtimes_file.exists():
+            try:
+                existing_um = {
+                    k: float(v)
+                    for k, v in json.loads(
+                        unusable_mtimes_file.read_text(encoding="utf-8")
+                    ).items()
+                }
+            except Exception:
+                pass
+        existing_um.update(unusable_mtimes)
+        unusable_mtimes_file.write_text(
+            json.dumps(existing_um, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
         print(
             f"\n{len(unusable)} filer producerade noll användbara chunks — "
             f"skrivna till {unusable_path}.\n"

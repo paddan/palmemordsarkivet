@@ -60,11 +60,11 @@ step() {
 t0=$(date +%s)
 
 step "1/5  Ladda ner PDF:er (./download.sh)"
-./download.sh
+./download.sh || { rc=$?; [ "$rc" -eq 2 ] || exit "$rc"; }
 
 if [ "$SKIP_WPU" = "0" ]; then
   step "2/5  Ladda ner wpu.nu-PDF:er (./download_wpu.sh)"
-  ./download_wpu.sh
+  ./download_wpu.sh || { rc=$?; [ "$rc" -eq 2 ] || exit "$rc"; }
 else
   echo
   echo "━━━━━ Hoppar steg 2 (--skip-wpu) ━━━━━"
