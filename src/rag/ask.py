@@ -28,6 +28,8 @@ except ImportError:  # pragma: no cover
     def log_error(component: str, item: str, message: str) -> None:
         pass
 
+from ingest import _table_exists  # type: ignore  # noqa: E402
+
 from claude_agent_sdk import (  # noqa: E402
     AssistantMessage,
     ClaudeAgentOptions,
@@ -121,10 +123,19 @@ def search_hybrid(table, model, q: str, top_k: int) -> list[dict]:
     return [bag[k] for k, _ in ranked[:top_k]]
 
 
-def rerank(q: str, hits: list[dict], top_n: int) -> list[dict]:
-    from sentence_transformers import CrossEncoder
+_cross_encoder = None
 
-    ce = CrossEncoder(RERANK_MODEL)
+
+def _get_cross_encoder():
+    global _cross_encoder
+    if _cross_encoder is None:
+        from sentence_transformers import CrossEncoder
+        _cross_encoder = CrossEncoder(RERANK_MODEL)
+    return _cross_encoder
+
+
+def rerank(q: str, hits: list[dict], top_n: int) -> list[dict]:
+    ce = _get_cross_encoder()
     pairs = [(q, h["text"]) for h in hits]
     scores = ce.predict(pairs, show_progress_bar=False)
     ranked = sorted(zip(scores, hits), key=lambda x: -float(x[0]))
@@ -245,7 +256,7 @@ async def main_async(args) -> int:
         return 0
 
     db = lancedb.connect(str(db_dir))
-    if TABLE not in db.list_tables().tables:
+    if not _table_exists(db, TABLE):
         print(f"Tabell '{TABLE}' finns inte — kör ingest.py först.", file=sys.stderr)
         return 1
     table = db.open_table(TABLE)

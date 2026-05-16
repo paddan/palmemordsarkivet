@@ -1,8 +1,10 @@
-"""Tester för should_reingest, find_orphans och _table_exists från rag/ingest.py."""
+"""Tester för should_reingest, find_orphans, _table_exists och _source_predicate från rag/ingest.py."""
 
 from __future__ import annotations
 
-from ingest import _table_exists, find_orphans, should_reingest
+import pytest
+
+from ingest import _source_predicate, _table_exists, find_orphans, should_reingest
 
 
 # ---------------------------------------------------------------------------
@@ -104,3 +106,32 @@ def test_find_orphans_empty_when_all_match() -> None:
 def test_find_orphans_sorted() -> None:
     stored = {"z.txt", "a.txt", "m.txt"}
     assert find_orphans(stored, set()) == ["a.txt", "m.txt", "z.txt"]
+
+
+# ---------------------------------------------------------------------------
+# _source_predicate — SQL-sanitering för LanceDB delete
+# ---------------------------------------------------------------------------
+
+def test_source_predicate_normal_filename() -> None:
+    pred = _source_predicate("281 — Titel.txt")
+    assert pred == "source = '281 — Titel.txt'"
+
+
+def test_source_predicate_escapes_single_quote() -> None:
+    pred = _source_predicate("fil'test.txt")
+    assert pred == "source = 'fil''test.txt'"
+
+
+def test_source_predicate_double_single_quote() -> None:
+    pred = _source_predicate("it's here.txt")
+    assert pred == "source = 'it''s here.txt'"
+
+
+def test_source_predicate_rejects_control_characters() -> None:
+    with pytest.raises(ValueError, match="kontrolltecken"):
+        _source_predicate("fil\x00hack.txt")
+
+
+def test_source_predicate_rejects_newline() -> None:
+    with pytest.raises(ValueError, match="kontrolltecken"):
+        _source_predicate("fil\nhack.txt")

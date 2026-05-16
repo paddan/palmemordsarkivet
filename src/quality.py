@@ -71,9 +71,16 @@ def has_hunspell_swe() -> bool:
     return _hunspell_available
 
 
+_text_layer_cache: dict[tuple[str, Path], bool] = {}
+
+
 def original_had_text(stem: str, files_dir: Path = FILES_DIR) -> bool:
+    key = (stem, files_dir)
+    if key in _text_layer_cache:
+        return _text_layer_cache[key]
     pdf = files_dir / f"{stem}.pdf"
     if not pdf.exists():
+        _text_layer_cache[key] = False
         return False
     try:
         out = subprocess.run(
@@ -81,9 +88,12 @@ def original_had_text(stem: str, files_dir: Path = FILES_DIR) -> bool:
             capture_output=True, timeout=60,
         )
     except (subprocess.SubprocessError, FileNotFoundError):
+        _text_layer_cache[key] = False
         return False
     chars = sum(1 for c in out.stdout.decode("utf-8", errors="replace") if not c.isspace())
-    return chars > MIN_TEXT_CHARS
+    result = chars > MIN_TEXT_CHARS
+    _text_layer_cache[key] = result
+    return result
 
 
 def hunspell_pct(words: list[str]) -> float | None:

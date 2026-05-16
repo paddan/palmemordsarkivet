@@ -206,15 +206,7 @@ async def _correct_all(
             if dry_run:
                 continue
 
-            if provider_cfg["provider"] == "claude":
-                corrected = await _claude(page_text, provider_cfg["model"])
-            else:
-                corrected = await _openai(
-                    page_text,
-                    provider_cfg["model"],
-                    provider_cfg["base_url"],
-                    provider_cfg["api_key"],
-                )
+            corrected = await _correct_text(page_text, provider_cfg)
             (stem_dir / f'page-{p:03d}.txt').write_text(
                 normalize(corrected), encoding='utf-8'
             )
@@ -224,10 +216,11 @@ async def _correct_all(
         if file_changed and not dry_run:
             try:
                 merge_one(stem, txt_dir, pages_dir)
-                for _m in pending_markers:
-                    _m.touch()
             except Exception as e:  # noqa: BLE001
                 print(f'  [merge-fel] {stem}: {e}', file=sys.stderr)
+            finally:
+                for _m in pending_markers:
+                    _m.touch()
 
 
 def main() -> None:

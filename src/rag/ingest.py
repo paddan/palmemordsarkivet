@@ -23,6 +23,12 @@ import lancedb
 import pyarrow as pa
 from sentence_transformers import SentenceTransformer
 
+try:
+    from errors_log import log_error  # type: ignore
+except Exception:  # pragma: no cover
+    def log_error(component: str, item: str, message: str) -> None:
+        pass
+
 ROOT = Path(__file__).resolve().parents[2]
 TEXT_DIR = ROOT / "generated" / "text"
 DB_DIR = ROOT / "generated" / "lancedb"
@@ -334,18 +340,24 @@ def main() -> int:
             continue
 
         # e5 vill ha "passage: " på dokument
-        embeddings = model.encode(
-            [f"passage: {r['text']}" for r in rows],
-            batch_size=32,
-            show_progress_bar=False,
-            convert_to_numpy=True,
-            normalize_embeddings=True,
-        )
-        for idx, v in enumerate(embeddings):
-            if not all(math.isfinite(x) for x in v):
-                raise ValueError(f"{f.name} chunk {idx}: embedding innehåller NaN/Inf")
-            if not any(v):
-                raise ValueError(f"{f.name} chunk {idx}: embedding är all-nollor")
+        try:
+            embeddings = model.encode(
+                [f"passage: {r['text']}" for r in rows],
+                batch_size=32,
+                show_progress_bar=False,
+                convert_to_numpy=True,
+                normalize_embeddings=True,
+            )
+            for idx, v in enumerate(embeddings):
+                if not all(math.isfinite(x) for x in v):
+                    raise ValueError(f"chunk {idx}: embedding innehåller NaN/Inf")
+                if not any(v):
+                    raise ValueError(f"chunk {idx}: embedding är all-nollor")
+        except Exception as e:  # noqa: BLE001
+            print(f"  [{i}/{len(todo)}] SKIP {f.name}: embedding-fel — {e}", file=sys.stderr)
+            log_error("ingest.embed", f.name, str(e))
+            continue
+
         for r, v in zip(rows, embeddings):
             r["vector"] = v.tolist()
 
