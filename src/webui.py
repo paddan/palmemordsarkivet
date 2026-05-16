@@ -18,6 +18,9 @@ from pathlib import Path
 
 MCP_SERVER = Path(__file__).resolve().parent / "rag" / "mcp_server.py"
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import config as _llm_config  # noqa: E402
+
 import lancedb
 import streamlit as st
 from sentence_transformers import SentenceTransformer
@@ -82,6 +85,33 @@ def find_pdf(source_txt: str) -> Path | None:
         if p.is_file():
             return p
     return None
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _fetch_models(base_url: str, api_key: str) -> list[str]:
+    """Hämta tillgängliga modeller från en OpenAI-kompatibel /v1/models-endpoint."""
+    import json as _json
+
+    url = base_url.rstrip("/") + "/models"
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    try:
+        import httpx
+        resp = httpx.get(url, headers=headers, timeout=5.0)
+        resp.raise_for_status()
+        data = resp.json()
+    except ImportError:
+        import urllib.request
+        req = urllib.request.Request(url)
+        for k, v in headers.items():
+            req.add_header(k, v)
+        try:
+            with urllib.request.urlopen(req, timeout=5) as r:
+                data = _json.loads(r.read())
+        except Exception:
+            return []
+    except Exception:
+        return []
+    return sorted(m["id"] for m in data.get("data", []))
 
 
 def find_txt(source_txt: str) -> Path | None:
@@ -158,30 +188,35 @@ st.markdown(
 )
 
 BACKENDS = {
-    "Claude Opus 4.7": {"kind": "claude", "model": CLAUDE_MODEL},
-    "OpenAI GPT-5": {
-        "kind": "openai",
-        "model": "gpt-5",
-        "base_url": "https://api.openai.com/v1",
-        "env": "OPENAI_API_KEY",
+    "Claude": {
+        "kind": "claude",
+        "model": CLAUDE_MODEL,
+        "models": [
+            "claude-opus-4-7",
+            "claude-sonnet-4-6",
+            "claude-haiku-4-5-20251001",
+        ],
     },
-    "OpenAI GPT-4o": {
+    "OpenAI": {
         "kind": "openai",
         "model": "gpt-4o",
+        "models": ["gpt-5", "gpt-5-mini", "gpt-4.1", "gpt-4.1-mini", "gpt-4o", "gpt-4o-mini", "o3", "o3-pro", "o4-mini"],
         "base_url": "https://api.openai.com/v1",
         "env": "OPENAI_API_KEY",
     },
-    "DeepSeek V4": {
+    "DeepSeek": {
         "kind": "openai",
         "model": "deepseek-chat",
+        "models": ["deepseek-chat", "deepseek-reasoner"],
         "base_url": "https://api.deepseek.com/v1",
         "env": "DEEPSEEK_API_KEY",
     },
-    "DeepSeek Reasoner": {
+    "Ollama (lokal)": {
         "kind": "openai",
-        "model": "deepseek-reasoner",
-        "base_url": "https://api.deepseek.com/v1",
-        "env": "DEEPSEEK_API_KEY",
+        "model": "gemma3:12b",
+        "base_url": "http://localhost:11434/v1",
+        "env": None,
+        "configurable": True,
     },
     "OpenAI-kompatibel (custom)": {
         "kind": "openai",
@@ -191,6 +226,16 @@ BACKENDS = {
         "configurable": True,
     },
 }
+
+_saved_llm = _llm_config.load()
+_BACKEND_KEYS = list(BACKENDS.keys())
+
+# Initiera session_state en gång från sparad config — ingen index=-parameter behövs.
+if "backend_name" not in st.session_state:
+    _saved_name = _saved_llm.get("backend_name", _BACKEND_KEYS[0])
+    st.session_state["backend_name"] = (
+        _saved_name if _saved_name in _BACKEND_KEYS else _BACKEND_KEYS[0]
+    )
 
 OPENAI_TOOLS = [
     {
@@ -269,30 +314,70 @@ def _on_rerank_change() -> None:
 
 with st.sidebar:
     st.header("Inställningar")
-    backend_name = st.selectbox("AI-modell", list(BACKENDS.keys()), index=0)
+    backend_name = st.selectbox("AI-modell", _BACKEND_KEYS, key="backend_name")
     backend = BACKENDS[backend_name]
-    if backend.get("configurable"):
+    _is_saved = backend_name == _saved_llm.get("backend_name")
+    if "models" in backend and not backend.get("configurable"):
+        _cur_model = _saved_llm.get("model") if _is_saved else backend["model"]
+        _model_list = backend["models"]
+        if backend.get("base_url") and backend.get("env"):
+            _api_key = os.environ.get(backend["env"], "")
+            _fetched = _fetch_models(backend["base_url"], _api_key)
+            _skip = {
+                "embedding", "tts", "whisper", "dall", "instruct",
+                "realtime", "audio", "transcription", "moderation",
+                "babbage", "davinci", "search",
+            }
+            _fetched = [m for m in _fetched if not any(s in m.lower() for s in _skip)]
+            if _fetched:
+                _model_list = _fetched
+        _model_idx = _model_list.index(_cur_model) if _cur_model in _model_list else 0
         backend = {
             **backend,
-            "base_url": st.text_input(
-                "Endpoint-URL",
-                value=backend["base_url"],
-                help="OpenAI-kompatibel /v1-endpoint (Ollama, LM Studio, "
-                "llama.cpp, vLLM, fjärr-OpenAI-API, ...)",
-            ),
-            "model": st.text_input(
+            "model": st.selectbox("Modellnamn", _model_list, index=_model_idx, key=f"model_{backend_name}"),
+        }
+    if backend.get("configurable"):
+        _cur_url = _saved_llm.get("base_url") if _is_saved else backend["base_url"]
+        _cur_model = _saved_llm.get("model") if _is_saved else backend["model"]
+        _base_url = st.text_input(
+            "Endpoint-URL",
+            value=_cur_url,
+            help="OpenAI-kompatibel /v1-endpoint (Ollama, LM Studio, "
+            "llama.cpp, vLLM, fjärr-OpenAI-API, ...)",
+        )
+        _available_models = _fetch_models(_base_url, "")
+        if _available_models:
+            _model_idx = (
+                _available_models.index(_cur_model)
+                if _cur_model in _available_models
+                else 0
+            )
+            _model = st.selectbox("Modellnamn", _available_models, index=_model_idx, key=f"model_{backend_name}")
+        else:
+            _model = st.text_input(
                 "Modellnamn",
-                value=backend["model"],
+                value=_cur_model,
                 help="T.ex. `llama3.1:8b` (Ollama), `gpt-4o-mini`, eller "
                 "vad providern kräver",
-            ),
-            "api_key_override": st.text_input(
-                "API-nyckel (valfritt)",
-                value="",
-                type="password",
-                help="Lämna tomt för Ollama/lokala servrar utan auth",
-            ),
+            )
+        _api_key_override = st.text_input(
+            "API-nyckel (valfritt)",
+            value="",
+            type="password",
+            help="Lämna tomt för Ollama/lokala servrar utan auth",
+        )
+        backend = {
+            **backend,
+            "base_url": _base_url,
+            "model": _model,
+            "api_key_override": _api_key_override,
         }
+    _llm_config.save({
+        "backend_name": backend_name,
+        "provider": backend["kind"],
+        "model": backend["model"],
+        "base_url": backend.get("base_url", ""),
+    })
     mcp_mode = st.toggle(
         "Utredningsläge (MCP)",
         key="mcp_mode",
@@ -444,18 +529,29 @@ async def stream_claude(user_msg: str, placeholder, parts: list[str]) -> None:
 
 
 async def stream_openai(user_msg: str, placeholder, parts: list[str], cfg) -> None:
-    from openai import AsyncOpenAI  # noqa: PLC0415
+    from openai import AsyncOpenAI, NotFoundError  # noqa: PLC0415
 
     api_key = os.environ.get(cfg["env"]) if cfg.get("env") else "ollama"
-    client = AsyncOpenAI(api_key=api_key or "ollama", base_url=cfg["base_url"])
-    stream = await client.chat.completions.create(
-        model=cfg["model"],
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_msg},
-        ],
-        stream=True,
-    )
+    base_url = cfg["base_url"]
+    model = cfg["model"]
+    client = AsyncOpenAI(api_key=api_key or "ollama", base_url=base_url)
+    try:
+        stream = await client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_msg},
+            ],
+            stream=True,
+        )
+    except NotFoundError as exc:
+        hint = ""
+        if "page not found" in str(exc).lower() or "404" in str(exc):
+            hint = f"\n\n**Tips:** Kontrollera att endpoint-URL:en är rätt (`{base_url}`). Ollamas standard är `http://localhost:11434/v1`."
+        elif "not found" in str(exc).lower():
+            hint = f"\n\n**Tips:** Modellen `{model}` finns inte. Kör `ollama pull {model}` eller välj ett annat modellnamn."
+        st.error(f"404 från {base_url}: {exc}{hint}")
+        return
     async for chunk in stream:
         if not chunk.choices:
             continue

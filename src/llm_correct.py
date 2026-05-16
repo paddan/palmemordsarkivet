@@ -29,6 +29,7 @@ except ImportError:
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from normalize_text import normalize  # noqa: E402
+import config as _llm_config  # noqa: E402
 
 HAIKU_MODEL = "claude-haiku-4-5-20251001"
 
@@ -179,10 +180,10 @@ def main() -> None:
     )
     ap.add_argument('--threshold', type=float, default=50.0,
                     help='score-tröskel (default: 50)')
-    ap.add_argument('--provider', default='claude', choices=['claude', 'openai'],
-                    help='LLM-provider (default: claude)')
+    ap.add_argument('--provider', default='',
+                    help='LLM-provider: claude eller openai (default: från llm_config.json)')
     ap.add_argument('--model', default='',
-                    help='modellnamn (default: haiku för claude, gpt-4o-mini för openai)')
+                    help='modellnamn (default: från llm_config.json)')
     ap.add_argument('--base-url', default='',
                     help='override API-URL för OpenAI-kompatibla providers (Ollama, DeepSeek, ...)')
     ap.add_argument('--api-key', default='',
@@ -207,14 +208,20 @@ def main() -> None:
         print(f'Saknar {jsonl} — kör ./quality.sh --per-page först.', file=sys.stderr)
         sys.exit(1)
 
-    default_model = HAIKU_MODEL if args.provider == 'claude' else OPENAI_DEFAULT_MODEL
-    model = args.model or default_model
-    api_key = _resolve_api_key(args.provider, args.base_url, args.api_key)
+    saved_cfg = _llm_config.load()
+    provider = args.provider or saved_cfg.get("provider", "claude")
+    if provider not in ("claude", "openai"):
+        provider = "claude"
+    base_url = args.base_url or saved_cfg.get("base_url", "")
+    saved_model = saved_cfg.get("model", "") if not args.provider else ""
+    default_model = HAIKU_MODEL if provider == 'claude' else OPENAI_DEFAULT_MODEL
+    model = args.model or saved_model or default_model
+    api_key = _resolve_api_key(provider, base_url, args.api_key)
 
     provider_cfg = {
-        "provider": args.provider,
+        "provider": provider,
         "model": model,
-        "base_url": args.base_url,
+        "base_url": base_url,
         "api_key": api_key,
     }
 
@@ -249,7 +256,7 @@ def main() -> None:
 
     print(f'Rättar {total} sidor i {len(bad)} filer'
           + (f' ({skipped} redan rättade hoppas över)' if skipped else '')
-          + f' med {args.provider}/{model}.')
+          + f' med {provider}/{model}.')
     if args.dry_run:
         print('[dry-run — inga filer skrivs]')
 
