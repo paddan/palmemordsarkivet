@@ -368,7 +368,7 @@ def main() -> int:
             f"\n{len(unusable)} filer producerade noll användbara chunks — "
             f"skrivna till {unusable_path}.\n"
             f"Kör om OCR med:  ./ocr.sh --redo --mode files "
-            f"--from-list {unusable_path.name}"
+            f"--from-list {unusable_path}"
         )
     return 0
 
