@@ -53,8 +53,15 @@ except Exception:  # pragma: no cover
 def render_pages(pdf_path: Path, dpi: int):
     import pypdfium2 as pdfium  # local import — Surya/Vision-pad kanske saknar
     pdf = pdfium.PdfDocument(str(pdf_path))
-    for i, page in enumerate(pdf, start=1):
-        yield i, page.render(scale=dpi / 72).to_pil()
+    try:
+        for i in range(len(pdf)):
+            try:
+                page = pdf[i]
+                yield i + 1, page.render(scale=dpi / 72).to_pil()
+            except pdfium.PdfiumError as exc:
+                print(f"  [render_pages] sida {i + 1} kunde inte laddas: {exc}", file=sys.stderr)
+    finally:
+        pdf.close()
 
 
 def ocr_tesseract(png_path: Path, langs: str = "swe") -> str:
