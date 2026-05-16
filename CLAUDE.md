@@ -26,7 +26,7 @@ src/
   download.py          # Google Drive PDF downloader, manifest tracking
   quality.py           # OCR quality scoring (0–100 heuristics + optional hunspell)
   ocr_pages.py         # Per-page OCR pipeline (Tesseract/Surya) + redaktionsdetektering
-  normalize_text.py    # Rule-based OCR normalization (ligatures, whitespace). Idempotent.
+  normalize_text.py    # Rule-based OCR normalization (ligatures, whitespace). Inkrementellt idempotent via stamp-fil.
   llm_correct.py       # LLM post-correction av dåliga OCR-sidor via Claude Haiku
   merge_pages.py       # Slå ihop text_pages/<stem>/page-*.txt → text/<stem>.txt
   build_user_words.py  # Generera Tesseract user-words från OCR-text
@@ -35,7 +35,7 @@ src/
   rag/
     ingest.py          # LanceDB vector index builder
     ask.py             # RAG query + Claude integration
-tests/                 # pytest (test_quality, test_chunk, test_download, test_merge_pages, test_detect_redactions, test_reingest)
+tests/                 # pytest (test_quality, test_chunk, test_download, test_merge_pages, test_detect_redactions, test_reingest, test_normalize_text)
 *.sh                   # Bash-wrappers (aktiverar .venv, läser API-nycklar, vidarebefordrar flaggor)
 tessdata/              # swe_best.traineddata, swe.user-words, tesseract.config
 ```
@@ -79,6 +79,8 @@ Env-variabler: `CLAUDE_CODE_OAUTH_TOKEN` (Pro/Max, räknas mot prenumeration) el
 **Redaktionsdetektering (ocr_pages.py)**: Hittar svarta maskeringsblock i bilder och infogar `[MASKAD]` i texten. På som standard; `--no-detect-redactions` stänger av.
 
 **Per-dokument-cleanup (ocr.sh + Surya)**: Efter att `ocr_pages.py` är klar kör `ocr.sh` automatiskt `merge_pages.merge_one` + `normalize_text.process_file`, raderar `page-NNN.txt`/`.png` men behåller `page-NNN.json` som idempotens-markör.
+
+**Stamp-filbaserad normalisering (normalize_text.py)**: `normalize.sh` skapar `generated/text/.normalize_stamp` efter en lyckad körning. Nästa körning filtrerar bort `.txt`-filer vars mtime ≤ stampens mtime — bara nya/ändrade filer normaliseras. `--rebuild` ignorerar stämpeln. Stämpeln skapas inte vid `--dry-run` eller om det finns fel. Ta bort `.normalize_stamp` manuellt för att tvinga om-normalisering av alla filer.
 
 ## Common Gotchas
 

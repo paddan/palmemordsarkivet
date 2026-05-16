@@ -21,6 +21,7 @@ Skickas vidare till src/normalize_text.py (alla okända flaggor passerar igenom)
   --txt DIR               text-katalog (default: <root>/generated/text)
   --dry-run               visa vad som skulle ändras utan att skriva
   --stats                 visa per-fil-statistik för ändrade filer
+  --rebuild               ignorera stamp-fil och normalisera alla filer
 EOF
 }
 

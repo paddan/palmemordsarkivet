@@ -119,20 +119,34 @@ def main() -> None:
                     help='visa vad som skulle ändras utan att skriva')
     ap.add_argument('--stats', action='store_true',
                     help='visa per-fil-statistik för ändrade filer')
+    ap.add_argument('--rebuild', action='store_true',
+                    help='ignorera stamp-fil och normalisera alla filer')
     args = ap.parse_args()
 
     root = Path(args.root) if args.root else ROOT
     txt_dir = Path(args.txt) if args.txt else root / 'generated' / 'text'
+    stamp = txt_dir / '.normalize_stamp'
 
-    files = sorted(txt_dir.glob('*.txt'))
+    since: float = 0.0
+    if not args.rebuild and not args.dry_run and stamp.exists():
+        since = stamp.stat().st_mtime
+
+    all_files = sorted(txt_dir.glob('*.txt'))
+    files = [f for f in all_files if f.stat().st_mtime > since] if since else all_files
+    skipped = len(all_files) - len(files)
+
     if not files:
-        print(f'Inga .txt-filer i {txt_dir}')
+        if skipped:
+            print(f'Normalisering klar — {skipped} filer oförändrade sedan senaste körning.')
+        else:
+            print(f'Inga .txt-filer i {txt_dir}')
         return
 
     total = len(files)
     changed = errors = 0
     t0 = time.monotonic()
-    label = f"Normaliserar {total} filer…"
+    skip_note = f' ({skipped} oförändrade hoppas över)' if skipped else ''
+    label = f"Normaliserar {total} filer{skip_note}…"
     print(label, end=' ', flush=True)
     for i, f in enumerate(files, 1):
         try:
@@ -155,6 +169,9 @@ def main() -> None:
     prefix = '[dry-run] ' if args.dry_run else ''
     print(f'{prefix}{changed}/{total} filer normaliserade'
           + (f' ({errors} fel)' if errors else '') + '.')
+
+    if not args.dry_run and not errors:
+        stamp.touch()
 
 
 if __name__ == '__main__':
