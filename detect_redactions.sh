@@ -23,6 +23,8 @@ Användning: $(basename "$0") [flaggor]
   --rebuild-text          regenerera .txt från generated/ocr/*.pdf innan körning,
                           tar även bort .redact-markörer (innebär --rebuild).
                           Kör ./normalize.sh efteråt för att normalisera om.
+  --files-from FILE       bearbeta bara filer listade i FILE (ett filnamn per rad,
+                          .txt-suffix trimmas). Används av ocr.sh --from-list.
   -h, --help              visa denna hjälp
 EOF
 }
@@ -34,6 +36,7 @@ JOBS=${JOBS:-4}
 DPI=${DPI:-72}
 REBUILD=0
 REBUILD_TEXT=0
+FILES_FROM=${FILES_FROM:-}
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -44,6 +47,7 @@ while [ $# -gt 0 ]; do
     --dpi)           DPI="$2"; shift 2 ;;
     --rebuild)       REBUILD=1; shift ;;
     --rebuild-text)  REBUILD_TEXT=1; REBUILD=1; shift ;;
+    --files-from)    FILES_FROM="$2"; shift 2 ;;
     -h|--help)       usage; exit 0 ;;
     *) echo "okänd flagga: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -80,13 +84,23 @@ if [ "$REBUILD" = "1" ]; then
   find "$TXT" -name '*.redact' -delete
 fi
 
-ALL_TOTAL=$(find "$TXT" -name '*.txt' | wc -l | tr -d ' ')
-
-# Förfiltrera: samla bara filer som saknar .redact-markör.
 PENDING=()
-while IFS= read -r -d '' f; do
-  [ -f "${f%.txt}.redact" ] || PENDING+=("$f")
-done < <(find "$TXT" -name '*.txt' -print0)
+if [ -n "$FILES_FROM" ]; then
+  ALL_TOTAL=0
+  while IFS= read -r line; do
+    stem="${line%.txt}"
+    [ -n "$stem" ] || continue
+    txt_file="$TXT/$stem.txt"
+    [ -f "$txt_file" ] || continue
+    ALL_TOTAL=$((ALL_TOTAL + 1))
+    [ -f "$TXT/$stem.redact" ] || PENDING+=("$txt_file")
+  done < "$FILES_FROM"
+else
+  ALL_TOTAL=$(find "$TXT" -name '*.txt' | wc -l | tr -d ' ')
+  while IFS= read -r -d '' f; do
+    [ -f "${f%.txt}.redact" ] || PENDING+=("$f")
+  done < <(find "$TXT" -name '*.txt' -print0)
+fi
 
 SKIPPED=$(( ALL_TOTAL - ${#PENDING[@]} ))
 TOTAL=${#PENDING[@]}

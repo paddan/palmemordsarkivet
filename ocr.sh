@@ -190,8 +190,7 @@ fi
 # --------------------------------------------------------------------
 if [ "$MODE" = "pages" ]; then
   [ -f "$PAGES_JSONL" ] || { echo "Saknar $PAGES_JSONL — kör './quality.sh --per-page' först."; exit 1; }
-else
-  [ -f "$CSV" ] || { echo "Saknar $CSV — kör quality.py först."; exit 1; }
+elif [ -z "${FROM_LIST:-}" ]; then
   command -v ocrmypdf >/dev/null || { echo "saknar ocrmypdf"; exit 1; }
   command -v pdftotext >/dev/null || { echo "saknar pdftotext"; exit 1; }
 fi
@@ -276,7 +275,6 @@ for txt_name, pages in bad.items():
         eta_str = fmt_eta(elapsed / done_pages * (total_pages - done_pages))
     else:
         eta_str = "--"
-    print(f"[surya {done_files + 1}/{total_files} | {n_pages}s | eta {eta_str}] {stem}")
 
     pdf = in_dir / f"{stem}.pdf"
     if not pdf.exists():
@@ -284,9 +282,9 @@ for txt_name, pages in bad.items():
         if wpu_pdf.exists():
             pdf = wpu_pdf
         else:
-            print(f"  SAKNAS: {pdf} (även {wpu_pdf})")
             done_files += 1
             continue
+    print(f"[surya {done_files + 1}/{total_files} | {n_pages}s | eta {eta_str}] {stem}")
     cmd = [
         sys.executable, str(root / "src" / "ocr_pages.py"),
         "--in", str(pdf),
@@ -326,54 +324,92 @@ fi
 PYBIN="$ROOT/.venv/bin/python"
 [ -x "$PYBIN" ] || PYBIN="python3"
 
-TARGETS=()
+# --from-list: nollställ markörer för de listade filerna och kör hela pipeline:n.
 if [ -n "${FROM_LIST:-}" ]; then
   [ -f "$FROM_LIST" ] || { echo "Saknar --from-list-fil: $FROM_LIST"; exit 1; }
+
+  OCR_DIR="${OCR:-$ROOT/generated/ocr}"
+  TXT_DIR="${TXT:-$ROOT/generated/text}"
+  PAGES_DIR="${PAGES_OUT:-$ROOT/generated/text_pages}"
+
+  count=0
   while IFS= read -r line; do
-    line="${line%.txt}"
-    [ -n "$line" ] && TARGETS+=("$line")
+    stem="${line%.txt}"
+    [ -n "$stem" ] || continue
+    rm -f "$OCR_DIR/$stem.ocr-done" "$OCR_DIR/$stem.ocr-failed"
+    rm -f "$TXT_DIR/$stem.txt" "$TXT_DIR/$stem.redact"
+    # Surya-markörer tas bort så att dåliga sidor kan köras om.
+    find "$PAGES_DIR/$stem" -name 'page-*.json' -delete 2>/dev/null || true
+    count=$((count + 1))
   done < "$FROM_LIST"
-else
-  # Plocka filnamnen ur CSV via python — awk förstår inte CSV-kvotering
-  # (filnamn kan innehålla komman och blir då dubbelkvoterade).
-  while IFS= read -r line; do
-    [ -n "$line" ] && TARGETS+=("$line")
-  done < <(
-    "$PYBIN" - "$CSV" "$THRESHOLD" "$SOURCE" <<'PYEOF'
+
+  echo "Nollställde $count filer — kör full pipeline..."
+  t0=$(date +%s)
+
+  step "1/5  Tesseract-OCR"
+  ./ocr_tesseract.sh --files-from "$FROM_LIST" --jobs "$JOBS" --per-file-jobs "$PER_FILE_JOBS"
+
+  step "2/5  Redaktionsdetektering"
+  ./detect_redactions.sh --files-from "$FROM_LIST"
+
+  step "3/5  Normalisering"
+  ./normalize.sh --files-from "$FROM_LIST"
+
+  step "4/5  Kvalitetsbedömning"
+  ./quality.sh --per-page --files-from "$FROM_LIST"
+
+  if ! "$ROOT/.venv/bin/python" -c "import surya" 2>/dev/null; then
+    echo
+    echo "===== Hoppar över Surya (inte installerat) ====="
+  else
+    step "5/5  Om-OCR med Surya på sidor < $THRESHOLD"
+    redo_extra=()
+    [ "$NO_UPDATE_PDF" = "1" ] && redo_extra+=(--no-update-pdf)
+    ./ocr.sh --redo --mode pages --threshold "$THRESHOLD" --jobs "$JOBS" \
+             --per-file-jobs "$PER_FILE_JOBS" ${redo_extra[@]+"${redo_extra[@]}"}
+    ./quality.sh --files-from "$FROM_LIST"
+  fi
+
+  t1=$(date +%s)
+  echo
+  echo "===== Klart på $((t1 - t0))s ====="
+  exit 0
+fi
+
+# Utan --from-list: plocka filnamnen ur CSV — awk förstår inte CSV-kvotering
+# (filnamn kan innehålla komman och blir då dubbelkvoterade).
+[ -f "$CSV" ] || { echo "Saknar $CSV — kör quality.py först."; exit 1; }
+
+TARGETS=()
+while IFS= read -r line; do
+  [ -n "$line" ] && TARGETS+=("$line")
+done < <(
+  "$PYBIN" -c "
 import csv, sys
 csv_path, thr, src = sys.argv[1], float(sys.argv[2]), sys.argv[3]
-with open(csv_path, encoding="utf-8", newline="") as f:
+with open(csv_path, encoding='utf-8', newline='') as f:
     for row in csv.DictReader(f):
         try:
-            score = float(row.get("score") or 0)
+            score = float(row.get('score') or 0)
         except ValueError:
             continue
         if score >= thr:
             continue
-        if src != "any" and row.get("source") != src:
+        if src != 'any' and row.get('source') != src:
             continue
-        name = row["file"]
-        if name.endswith(".txt"):
+        name = row['file']
+        if name.endswith('.txt'):
             name = name[:-4]
         print(name)
-PYEOF
-  )
-fi
+" "$CSV" "$THRESHOLD" "$SOURCE"
+)
 
 if [ ${#TARGETS[@]} -eq 0 ]; then
-  if [ -n "${FROM_LIST:-}" ]; then
-    echo "Inga filer i $FROM_LIST."
-  else
-    echo "Inga filer matchade (THRESHOLD=$THRESHOLD, SOURCE=$SOURCE)."
-  fi
+  echo "Inga filer matchade (THRESHOLD=$THRESHOLD, SOURCE=$SOURCE)."
   exit 0
 fi
 
-if [ -n "${FROM_LIST:-}" ]; then
-  echo "Kör om OCR på ${#TARGETS[@]} filer från $FROM_LIST..."
-else
-  echo "Kör om OCR på ${#TARGETS[@]} filer (THRESHOLD=$THRESHOLD, SOURCE=$SOURCE)..."
-fi
+echo "Kör om OCR på ${#TARGETS[@]} filer (THRESHOLD=$THRESHOLD, SOURCE=$SOURCE)..."
 
 redo_one() {
   local base="$1" pdf out_pdf out_txt log
@@ -396,8 +432,6 @@ redo_one() {
         --quiet \
         "$pdf" "$out_pdf" 2>"$log"; then
     pdftotext -layout "$out_pdf" "$out_txt"
-    # Heredoc i exporterade funktioner deserialiseras inte korrekt av bash —
-    # använd -c med argv istället.
     "$ROOT/.venv/bin/python" -c "
 import sys; sys.path.insert(0, sys.argv[1])
 from normalize_text import process_file

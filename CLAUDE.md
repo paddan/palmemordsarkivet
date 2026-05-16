@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Commit och push
 
-Använd alltid `/cap`-skillen för att commita och pusha — kör inte `git commit`/`git push` direkt. `/cap` granskar ändringarna, frågar om problem ska fixas, committar och pushar.
+Kör **inte** `/cap` automatiskt efter varje ändring — användaren kör det själv när hen är redo. Kör aldrig `git commit`/`git push` direkt heller.
 
 ## Dokumentation hålls synkad
 

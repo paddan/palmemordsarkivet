@@ -121,19 +121,30 @@ def main() -> None:
                     help='visa per-fil-statistik för ändrade filer')
     ap.add_argument('--rebuild', action='store_true',
                     help='ignorera stamp-fil och normalisera alla filer')
+    ap.add_argument('--files-from', default='',
+                    help='bearbeta bara filer listade i FILE (ett filnamn per rad)')
     args = ap.parse_args()
 
     root = Path(args.root) if args.root else ROOT
     txt_dir = Path(args.txt) if args.txt else root / 'generated' / 'text'
     stamp = txt_dir / '.normalize_stamp'
 
-    since: float = 0.0
-    if not args.rebuild and not args.dry_run and stamp.exists():
-        since = stamp.stat().st_mtime
-
     all_files = sorted(txt_dir.glob('*.txt'))
-    files = [f for f in all_files if f.stat().st_mtime > since] if since else all_files
-    skipped = len(all_files) - len(files)
+
+    if args.files_from:
+        listed_names: set[str] = set()
+        for line in Path(args.files_from).read_text(encoding='utf-8').splitlines():
+            name = line.strip()
+            if name:
+                listed_names.add(name if name.endswith('.txt') else name + '.txt')
+        files = [f for f in all_files if f.name in listed_names]
+        skipped = 0
+    else:
+        since: float = 0.0
+        if not args.rebuild and not args.dry_run and stamp.exists():
+            since = stamp.stat().st_mtime
+        files = [f for f in all_files if f.stat().st_mtime > since] if since else all_files
+        skipped = len(all_files) - len(files)
 
     if not files:
         if skipped:
@@ -170,7 +181,7 @@ def main() -> None:
     print(f'{prefix}{changed}/{total} filer normaliserade'
           + (f' ({errors} fel)' if errors else '') + '.')
 
-    if not args.dry_run and not errors:
+    if not args.dry_run and not errors and not args.files_from:
         stamp.touch()
 
 

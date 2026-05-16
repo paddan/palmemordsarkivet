@@ -35,6 +35,8 @@ motsvarande env-var (versaler, understreck) — flagga vinner över env-var.
   --min-text-chars N      tröskel för "har redan text" (200)
   --image-dpi N           bild-DPI för OCR (300)
   --errors-log FILE       logg-fil för fel (\$ROOT/generated/errors.log)
+  --files-from FILE       lista med filstammar att bearbeta (en per rad, .txt trimmas);
+                          om utelämnad bearbetas alla PDF:er i --in
   --retry-failed          ta bort .ocr-failed-markörer så att misslyckade filer körs om
   -h, --help              visa denna hjälp och avsluta
 EOF
@@ -56,6 +58,7 @@ MIN_TEXT_CHARS=${MIN_TEXT_CHARS:-200}
 IMAGE_DPI=${IMAGE_DPI:-300}
 ERRORS_LOG=${ERRORS_LOG:-}
 RETRY_FAILED=${RETRY_FAILED:-0}
+FILES_FROM=${FILES_FROM:-}
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -74,6 +77,7 @@ while [ $# -gt 0 ]; do
     --min-text-chars)   MIN_TEXT_CHARS="$2"; shift 2 ;;
     --image-dpi)        IMAGE_DPI="$2"; shift 2 ;;
     --errors-log)       ERRORS_LOG="$2"; shift 2 ;;
+    --files-from)       FILES_FROM="$2"; shift 2 ;;
     --retry-failed)     RETRY_FAILED=1; shift ;;
     -h|--help)          usage; exit 0 ;;
     *) echo "okänd flagga: $1" >&2; usage >&2; exit 2 ;;
@@ -316,13 +320,31 @@ if [ "$RETRY_FAILED" = "1" ]; then
   fi
 fi
 
-TOTAL=$(find "$IN" -name '*.pdf' | wc -l | tr -d ' ')
+# Bygg PDF-lista: antingen från --files-from eller find.
+PDFLIST=$(mktemp)
+if [ -n "$FILES_FROM" ]; then
+  [ -f "$FILES_FROM" ] || { echo "Saknar --files-from-fil: $FILES_FROM" >&2; exit 1; }
+  while IFS= read -r line; do
+    stem="${line%.txt}"
+    [ -n "$stem" ] || continue
+    pdf="$IN/$stem.pdf"
+    [ -f "$pdf" ] && echo "$pdf" >> "$PDFLIST"
+  done < "$FILES_FROM"
+else
+  find "$IN" -name '*.pdf' >> "$PDFLIST"
+fi
+
+TOTAL=$(wc -l < "$PDFLIST" | tr -d ' ')
 PROGRESS_DIR=$(mktemp -d)
 START_TS=$(date +%s)
 export TOTAL PROGRESS_DIR START_TS
-echo "Hittade $TOTAL PDF:er att bearbeta..."
+if [ -n "$FILES_FROM" ]; then
+  echo "Bearbetar $TOTAL filer från $FILES_FROM..."
+else
+  echo "Hittade $TOTAL PDF:er att bearbeta..."
+fi
 
-find "$IN" -name '*.pdf' -print0 \
+tr '\n' '\0' < "$PDFLIST" \
   | xargs -0 -n 1 -P "$JOBS" bash -c '
     process_one "$@"
     ret=$?
@@ -332,47 +354,51 @@ find "$IN" -name '*.pdf' -print0 \
     count=$(find "$PROGRESS_DIR" -name "*.done" | wc -l | tr -d " ")
     now=$(date +%s)
     elapsed=$((now - START_TS))
-    if [ "$elapsed" -gt 0 ] && [ "$count" -gt 0 ]; then
-      remaining=$((TOTAL - count))
-      eta_s=$(( remaining * elapsed / count ))
-      printf "[%s %d/%d eta %dm%02ds] %s\n" "$status" "$count" "$TOTAL" "$((eta_s/60))" "$((eta_s%60))" "$base"
-    else
-      printf "[%s %d/%d] %s\n" "$status" "$count" "$TOTAL" "$base"
+    if [ "$status" != "hoppar" ] && [ "$status" != "fel-skip" ]; then
+      if [ "$elapsed" -gt 0 ] && [ "$count" -gt 0 ]; then
+        remaining=$((TOTAL - count))
+        eta_s=$(( remaining * elapsed / count ))
+        printf "[%s %d/%d eta %dm%02ds] %s\n" "$status" "$count" "$TOTAL" "$((eta_s/60))" "$((eta_s%60))" "$base"
+      else
+        printf "[%s %d/%d] %s\n" "$status" "$count" "$TOTAL" "$base"
+      fi
     fi
     exit $ret
   ' _
 
+rm -f "$PDFLIST"
 rm -rf "$PROGRESS_DIR"
 
-# Slutkontroll: alla PDF:er i files/ ska finnas i ocr/
-echo
-echo "Kontrollerar att alla PDF:er finns i $OCR/ …"
-missing=0
-known_failed=0
-merged_away=0
-while IFS= read -r -d '' f; do
-  base=$(basename "$f" .pdf)
-  if [ ! -s "$OCR/$base.pdf" ]; then
-    if [ -f "$OCR/$base.ocr-failed" ]; then
-      known_failed=$((known_failed + 1))
-    elif [ -f "$OCR/$base.ocr-done" ]; then
-      # PDF saknas men .ocr-done finns — merge_wpu raderade den (palme-versionen vann).
-      merged_away=$((merged_away + 1))
-    else
-      echo "  SAKNAS: $base.pdf"
-      missing=$((missing + 1))
+# Slutkontroll körs bara vid full körning (inte --files-from).
+if [ -z "$FILES_FROM" ]; then
+  echo
+  echo "Kontrollerar att alla PDF:er finns i $OCR/ …"
+  missing=0
+  known_failed=0
+  merged_away=0
+  while IFS= read -r -d '' f; do
+    base=$(basename "$f" .pdf)
+    if [ ! -s "$OCR/$base.pdf" ]; then
+      if [ -f "$OCR/$base.ocr-failed" ]; then
+        known_failed=$((known_failed + 1))
+      elif [ -f "$OCR/$base.ocr-done" ]; then
+        merged_away=$((merged_away + 1))
+      else
+        echo "  SAKNAS: $base.pdf"
+        missing=$((missing + 1))
+      fi
     fi
+  done < <(find "$IN" -name '*.pdf' -print0)
+  total=$(find "$IN" -name '*.pdf' | wc -l | tr -d ' ')
+  if [ "$missing" -eq 0 ]; then
+    msg="  OK — $total PDF:er bearbetade"
+    [ "$merged_away" -gt 0 ] && msg="$msg ($merged_away ersatta av palme-versionen)"
+    [ "$known_failed" -gt 0 ] && msg="$msg, $known_failed misslyckanden hoppades över"
+    echo "$msg."
+  else
+    echo "  $missing PDF:er saknas i $OCR/ — kör om skriptet."
+    [ "$known_failed" -gt 0 ] && echo "  $known_failed tidigare misslyckanden hoppades över."
+    [ "$merged_away" -gt 0 ] && echo "  $merged_away ersatta av palme-versionen (merge_wpu)."
+    exit 1
   fi
-done < <(find "$IN" -name '*.pdf' -print0)
-total=$(find "$IN" -name '*.pdf' | wc -l | tr -d ' ')
-if [ "$missing" -eq 0 ]; then
-  msg="  OK — $total PDF:er bearbetade"
-  [ "$merged_away" -gt 0 ] && msg="$msg ($merged_away ersatta av palme-versionen)"
-  [ "$known_failed" -gt 0 ] && msg="$msg, $known_failed misslyckanden hoppades över"
-  echo "$msg."
-else
-  echo "  $missing PDF:er saknas i $OCR/ — kör om skriptet."
-  [ "$known_failed" -gt 0 ] && echo "  $known_failed tidigare misslyckanden hoppades över."
-  [ "$merged_away" -gt 0 ] && echo "  $merged_away ersatta av palme-versionen (merge_wpu)."
-  exit 1
 fi

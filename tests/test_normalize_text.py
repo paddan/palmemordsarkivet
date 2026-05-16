@@ -135,3 +135,29 @@ def test_dry_run_does_not_create_stamp(txt_dir):
     (txt_dir / "a.txt").write_text("ﬁnns text", encoding="utf-8")
     _run_main(["--dry-run"], txt_dir)
     assert not (txt_dir / ".normalize_stamp").exists()
+
+
+def test_files_from_only_processes_listed(tmp_path, txt_dir):
+    (txt_dir / "a.txt").write_text("ﬁnns text", encoding="utf-8")
+    (txt_dir / "b.txt").write_text("ﬂöde text", encoding="utf-8")
+    (txt_dir / "c.txt").write_text("ﬀlera ord", encoding="utf-8")
+
+    files_list = tmp_path / "lista.txt"
+    files_list.write_text("a.txt\nb.txt\n", encoding="utf-8")
+
+    _run_main(["--files-from", str(files_list)], txt_dir)
+
+    assert (txt_dir / "a.txt").read_text(encoding="utf-8") == "finns text"
+    assert (txt_dir / "b.txt").read_text(encoding="utf-8") == "flöde text"
+    assert (txt_dir / "c.txt").read_text(encoding="utf-8") == "ﬀlera ord"
+
+
+def test_files_from_does_not_create_stamp(tmp_path, txt_dir):
+    (txt_dir / "a.txt").write_text("ﬁnns text", encoding="utf-8")
+
+    files_list = tmp_path / "lista.txt"
+    files_list.write_text("a.txt\n", encoding="utf-8")
+
+    _run_main(["--files-from", str(files_list)], txt_dir)
+
+    assert not (txt_dir / ".normalize_stamp").exists()

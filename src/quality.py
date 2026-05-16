@@ -174,6 +174,8 @@ def main() -> int:
                     help=f"katalog med original-PDF:er (default: {FILES_DIR})")
     ap.add_argument("--rebuild", action="store_true",
                     help="ignorera stämpelfil och kör om alla filer")
+    ap.add_argument("--files-from", default="",
+                    help="bedöm bara filer listade i FILE (ett filnamn per rad)")
     args = ap.parse_args()
 
     text_dir = Path(args.text_dir)
@@ -229,7 +231,35 @@ def main() -> int:
                 except Exception:
                     cached_pages.clear()
 
-    if stamp_mtime is not None:
+    if args.files_from:
+        listed_names: set[str] = set()
+        for line in Path(args.files_from).read_text(encoding="utf-8").splitlines():
+            name = line.strip()
+            if name:
+                listed_names.add(name if name.endswith(".txt") else name + ".txt")
+        files_to_score = [f for f in files_all if f.name in listed_names]
+        # Ladda cachad data för merge om stämpellogiken inte redan gjort det
+        if not cached_rows and not args.rebuild and out_path.exists():
+            try:
+                with out_path.open(encoding="utf-8", newline="") as fp:
+                    for row in csv.DictReader(fp):
+                        cached_rows[row["file"]] = row
+            except Exception:
+                pass
+        if args.per_page and not cached_pages:
+            pages_path = Path(args.pages_out)
+            if pages_path.exists():
+                try:
+                    with pages_path.open(encoding="utf-8") as fp:
+                        for line in fp:
+                            try:
+                                d = json.loads(line)
+                                cached_pages[(d["file"], d["page"])] = d
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+    elif stamp_mtime is not None:
         files_to_score = [f for f in files_all if f.stat().st_mtime > stamp_mtime]
     else:
         files_to_score = files_all
@@ -315,7 +345,7 @@ def main() -> int:
             for d in new_pages:
                 fp.write(json.dumps(d, ensure_ascii=False) + "\n")
 
-    if not args.limit:
+    if not args.limit and not args.files_from:
         stamp_path.touch()
 
     ocr = [r for r in rows if r.get("source") == "ocr"]
