@@ -25,7 +25,6 @@ Användning: $(basename "$0") [flaggor]
   --skip-wpu          hoppa wpu.nu-nedladdning (steg 2)
   --skip-redo         hoppa Surya-steget i OCR (snabbare, skickas till ocr.sh)
   --with-llm          kör llm_correct.sh efter OCR (betald, kräver API-nyckel)
-  --rebuild-index     bygg LanceDB-index från noll (skickas till ingest.sh)
   --jobs N            parallella processer i OCR (standard: 4)
   -h, --help          visa denna hjälp
 EOF
@@ -35,7 +34,6 @@ ROOT=${ROOT:-$(cd "$(dirname "$0")" && pwd)}
 SKIP_WPU=0
 SKIP_REDO=0
 WITH_LLM=0
-REBUILD_INDEX=0
 JOBS=${JOBS:-4}
 
 while [ $# -gt 0 ]; do
@@ -43,7 +41,6 @@ while [ $# -gt 0 ]; do
     --skip-wpu)      SKIP_WPU=1; shift ;;
     --skip-redo)     SKIP_REDO=1; shift ;;
     --with-llm)      WITH_LLM=1; shift ;;
-    --rebuild-index) REBUILD_INDEX=1; shift ;;
     --jobs)          JOBS="$2"; shift 2 ;;
     -h|--help)       usage; exit 0 ;;
     *) echo "okänd flagga: $1" >&2; usage >&2; exit 2 ;;
@@ -57,18 +54,36 @@ step() {
   echo "━━━━━ $1 ━━━━━"
 }
 
+count_pdfs() {
+  find "$1" -iname "*.pdf" 2>/dev/null | wc -l | tr -d ' '
+}
+
 t0=$(date +%s)
 
+palme_before=$(count_pdfs "$ROOT/downloaded/files")
 step "1/5  Ladda ner PDF:er (./download.sh)"
 ./download.sh || { rc=$?; [ "$rc" -eq 2 ] || exit "$rc"; }
+palme_after=$(count_pdfs "$ROOT/downloaded/files")
+new_files=$(( palme_after - palme_before ))
 
 if [ "$SKIP_WPU" = "0" ]; then
+  wpu_before=$(count_pdfs "$ROOT/downloaded/wpu_files")
   step "2/5  Ladda ner wpu.nu-PDF:er (./download_wpu.sh)"
   ./download_wpu.sh || { rc=$?; [ "$rc" -eq 2 ] || exit "$rc"; }
+  wpu_after=$(count_pdfs "$ROOT/downloaded/wpu_files")
+  new_files=$(( new_files + wpu_after - wpu_before ))
 else
   echo
   echo "━━━━━ Hoppar steg 2 (--skip-wpu) ━━━━━"
 fi
+
+if [ "$new_files" -le 0 ]; then
+  t1=$(date +%s); elapsed=$((t1 - t0)); m=$((elapsed / 60)); s=$((elapsed % 60))
+  echo
+  echo "━━━━━ Inga nya filer — hoppar steg 3–5 (${m}m${s}s) ━━━━━"
+  exit 0
+fi
+echo "  ${new_files} nya filer — fortsätter med OCR och ingest."
 
 step "3/5  OCR + normalisering + kvalitetsbedömning (./ocr.sh)"
 ocr_flags=()
@@ -85,9 +100,7 @@ else
 fi
 
 step "5/5  Indexera till LanceDB (./ingest.sh)"
-ingest_flags=()
-[ "$REBUILD_INDEX" = "1" ] && ingest_flags+=(--rebuild)
-./ingest.sh ${ingest_flags[@]+"${ingest_flags[@]}"}
+./ingest.sh
 
 t1=$(date +%s)
 elapsed=$((t1 - t0))
