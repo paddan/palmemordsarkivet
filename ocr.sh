@@ -381,7 +381,7 @@ redo_one() {
   out_pdf="$OCR/$base.pdf"
   out_txt="$TXT/$base.txt"
 
-  [ -f "$pdf" ] || { echo "  SAKNAS: $pdf"; return 1; }
+  [ -f "$pdf" ] || return 1
 
   echo "[redo] $base"
   rm -f "$out_pdf" "$out_txt"
