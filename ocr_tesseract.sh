@@ -320,7 +320,7 @@ if [ "$RETRY_FAILED" = "1" ]; then
   fi
 fi
 
-# Bygg PDF-lista: antingen från --files-from eller find.
+# Bygg PDF-lista: antingen från --files-from eller find med förfiltrering.
 PDFLIST=$(mktemp)
 if [ -n "$FILES_FROM" ]; then
   [ -f "$FILES_FROM" ] || { echo "Saknar --files-from-fil: $FILES_FROM" >&2; exit 1; }
@@ -331,7 +331,15 @@ if [ -n "$FILES_FROM" ]; then
     [ -f "$pdf" ] && echo "$pdf" >> "$PDFLIST"
   done < "$FILES_FROM"
 else
-  find "$IN" -name '*.pdf' >> "$PDFLIST"
+  # Förfiltrera: hoppa PDF:er med .ocr-done- eller .ocr-failed-markör så att
+  # TOTAL speglar faktiskt arbete och onödiga subprocesser undviks.
+  ALL_TOTAL=$(find "$IN" -name '*.pdf' | wc -l | tr -d ' ')
+  while IFS= read -r -d '' pdf; do
+    base="${pdf##*/}"; base="${base%.pdf}"
+    if [ ! -f "$OCR/$base.ocr-done" ] && [ ! -f "$OCR/$base.ocr-failed" ]; then
+      echo "$pdf" >> "$PDFLIST"
+    fi
+  done < <(find "$IN" -name '*.pdf' -print0)
 fi
 
 TOTAL=$(wc -l < "$PDFLIST" | tr -d ' ')
@@ -340,6 +348,8 @@ START_TS=$(date +%s)
 export TOTAL PROGRESS_DIR START_TS
 if [ -n "$FILES_FROM" ]; then
   echo "Bearbetar $TOTAL filer från $FILES_FROM..."
+elif [ "$TOTAL" -lt "$ALL_TOTAL" ]; then
+  echo "Hittade $TOTAL nya PDF:er ($((ALL_TOTAL - TOTAL)) redan klara)..."
 else
   echo "Hittade $TOTAL PDF:er att bearbeta..."
 fi
