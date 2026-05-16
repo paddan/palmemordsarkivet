@@ -396,13 +396,14 @@ redo_one() {
         --quiet \
         "$pdf" "$out_pdf" 2>"$log"; then
     pdftotext -layout "$out_pdf" "$out_txt"
-    "$ROOT/.venv/bin/python" - "$ROOT/src" "$out_txt" <<'PYEOF' 2>/dev/null || true
-import sys
-sys.path.insert(0, sys.argv[1])
+    # Heredoc i exporterade funktioner deserialiseras inte korrekt av bash —
+    # använd -c med argv istället.
+    "$ROOT/.venv/bin/python" -c "
+import sys; sys.path.insert(0, sys.argv[1])
 from normalize_text import process_file
 from pathlib import Path
 process_file(Path(sys.argv[2]))
-PYEOF
+" "$ROOT/src" "$out_txt" 2>/dev/null || true
     rm -f "$log"
   else
     echo "[fel] $base — se loggen nedan:" >&2
@@ -412,7 +413,7 @@ PYEOF
   fi
 }
 export -f redo_one
-export IN OCR TXT PER_FILE_JOBS
+export IN OCR TXT PER_FILE_JOBS ROOT
 
 # || true: enskilda filfel ska inte stoppa batchen (set -e annars).
 printf '%s\0' ${TARGETS[@]+"${TARGETS[@]}"} \
