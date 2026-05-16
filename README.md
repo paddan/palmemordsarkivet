@@ -45,7 +45,7 @@ Kör sedan pipeline:
 
 ```bash
 ./download.sh          # 1. Ladda ner alla PDF:er (~3 700 st, tar några timmar)
-./download_wpu.sh      # 2. Ladda ner WPU PDF:er (~7100 st, tar några timmar)
+./download_wpu.sh      # 1b. (valfritt) Ladda ner WPU PDF:er (~7100 st)
 ./ocr.sh               # 2. OCR → text (Tesseract + Surya på svåra sidor, tar flera timmar)
 ./ingest.sh            # 3. Bygg vektorindex i LanceDB (kan ta flera timmar)
 ./web.sh               # 4. Starta webgränssnittet och ställ frågor
@@ -396,6 +396,9 @@ lokalt (via `open`) i en gömd iframe så huvudsidan inte laddas om.
 | `merge_pages.sh` → `src/merge_pages.py` | Slå ihop `generated/text_pages/<stem>/page-*.txt` in i `generated/text/<stem>.txt` |
 | `build_user_words.sh` → `src/build_user_words.py` | Bygg `tessdata/swe.user-words.auto` från `generated/text/*.txt` |
 | `quality.sh` → `src/quality.py` | Heuristisk kvalitetsbedömning av `generated/text/*.txt` (`--per-page` finns) |
+| `normalize.sh` → `src/normalize_text.py` | Regelbaserad OCR-normalisering (körs automatiskt av `ocr.sh`) |
+| `llm_correct.sh` → `src/llm_correct.py` | LLM-korrektion av dåliga OCR-sidor via Claude Haiku |
+| `detect_redactions.sh` → `src/ocr_pages.py` | Kör redaktionsdetektering på befintliga text/OCR-par |
 | `ingest.sh` → `src/rag/ingest.py` | Bygg vektorindex (LanceDB + BM25 FTS) |
 | `ask.sh` → `src/rag/ask.py` | Frågefronten — RAG-läge och `--mcp`-läge |
 | `src/rag/mcp_server.py` | MCP-server med `search_archive` och `get_page` (startas av ask.py/webui.py) |
@@ -443,9 +446,10 @@ echo "katt hus blabla" | hunspell -d sv_SE -l   # ska skriva ut "blabla"
 .venv/bin/pytest tests/
 ```
 
-Testerna täcker `score_text`, `chunk_text`, `extract_drive_id` och
-`sniff_extension`. Fixturen som genererar en mini-PDF med pymupdf skipas
-gracefully om pymupdf inte är installerat.
+Testerna täcker: `score_text` (quality), `chunk_text` (ingest), `extract_drive_id`/`sniff_extension` (download),
+`detect_redactions_image` (ocr_pages), `merge_one` (merge_pages), `merge_wpu` (merge_wpu),
+LLM-korrektionslogiken (llm_correct) och re-ingest-flödet (ingest).
+Fixturen som genererar en mini-PDF med pymupdf skipas gracefully om pymupdf inte är installerat.
 
 ## Felloggning
 
@@ -474,5 +478,5 @@ filen (delete + add).
 
 ## Licens
 
-Skripten är personliga arbetsverktyg, ingen explicit licens. Materialet i
-arkivet ägs av sina respektive upphovsmän.
+Koden är licensierad under [MIT](LICENSE). Materialet i arkivet ägs av sina
+respektive upphovsmän och berörs inte av denna licens.
