@@ -272,8 +272,8 @@ def main() -> int:
         return 0
 
     if stamp_mtime is not None:
-        prefix = (f"Bedömer {len(files_to_score)}/{len(files_all)} filer"
-                  f" ({len(files_all) - len(files_to_score)} oförändrade hoppas)…")
+        prefix = (f"Bedömer {len(files_to_score)} filer"
+                  f" ({len(files_all) - len(files_to_score)} oförändrade hoppas över)…")
     else:
         prefix = f"Bedömer {len(files_to_score)} filer…"
     print(prefix, end=" ", file=sys.stderr, flush=True)
@@ -334,7 +334,11 @@ def main() -> int:
         w = csv.DictWriter(fp, fieldnames=cols, extrasaction="ignore")
         w.writeheader()
         w.writerows(rows)
-    print(f"\nSkrev {out_path} — {len(rows)} rader, sorterat värst först.")
+    cached_count = len(rows) - len(new_rows)
+    if cached_count:
+        print(f"\nUppdaterade {out_path} — {len(new_rows)} nya + {cached_count} oförändrade = {len(rows)} rader totalt.")
+    else:
+        print(f"\nSkrev {out_path} — {len(rows)} rader, sorterat värst först.")
 
     if args.per_page:
         Path(args.pages_out).parent.mkdir(parents=True, exist_ok=True)
@@ -348,9 +352,14 @@ def main() -> int:
     if not args.limit and not args.files_from:
         stamp_path.touch()
 
-    ocr = [r for r in rows if r.get("source") == "ocr"]
-    txt = [r for r in rows if r.get("source") == "text-layer"]
-    print(f"\n  text-layer (original hade text):  {len(txt)}")
+    # Vid inkrementell körning: visa stats för de nyligen bedömda filerna.
+    # Vid fullständig körning (ingen cache): visa stats för alla.
+    display_rows = new_rows if cached_count else rows
+    stats_label = "Nya filer" if cached_count else "Alla filer"
+    ocr = [r for r in display_rows if r.get("source") == "ocr"]
+    txt = [r for r in display_rows if r.get("source") == "text-layer"]
+    print(f"\n{stats_label}:")
+    print(f"  text-layer (original hade text):  {len(txt)}")
     print(f"  ocr (Tesseract):                  {len(ocr)}")
     if ocr:
         s = sorted(float(r["score"]) for r in ocr)
