@@ -100,6 +100,63 @@ async def _openai(text: str, model: str, base_url: str, api_key: str) -> str:
     return response.choices[0].message.content or text
 
 
+async def _correct_text(text: str, provider_cfg: dict) -> str:
+    if provider_cfg["provider"] == "claude":
+        return await _claude(text, provider_cfg["model"])
+    return await _openai(
+        text,
+        provider_cfg["model"],
+        provider_cfg["base_url"],
+        provider_cfg["api_key"],
+    )
+
+
+async def _test_mode(txt_path: Path, provider_cfg: dict, threshold: float) -> None:
+    """Test-läge: rätta en textfil och jämför quality-poäng sida för sida."""
+    from quality import has_hunspell_swe, score_text  # noqa: PLC0415
+
+    raw = txt_path.read_text(encoding='utf-8', errors='replace')
+    pages = raw.split('\f')
+    use_hunspell = has_hunspell_swe()
+
+    print(f'Test: {txt_path} ({len(pages)} sida{"r" if len(pages) != 1 else ""})'
+          f' — {provider_cfg["provider"]}/{provider_cfg["model"]}'
+          + (' + hunspell' if use_hunspell else ''))
+    print(f'Tröskel: {threshold:.0f}\n')
+
+    before: list[float] = []
+    corrected_pages: list[str] = []
+    for i, page in enumerate(pages, 1):
+        norm = normalize(page)
+        s = score_text(norm, use_hunspell).get('score', 0.0)
+        before.append(s)
+        if not norm.strip() or s >= threshold:
+            corrected_pages.append(norm)
+            continue
+        print(f'  Sida {i}: score {s:.0f} → rättar…')
+        corrected_pages.append(normalize(await _correct_text(norm, provider_cfg)))
+
+    after = [score_text(p, use_hunspell).get('score', 0.0) for p in corrected_pages]
+
+    tmp_dir = ROOT / 'tmp'
+    tmp_dir.mkdir(exist_ok=True)
+    tmp = tmp_dir / f'llm_test_{txt_path.stem}.txt'
+    tmp.write_text('\f'.join(corrected_pages), encoding='utf-8')
+
+    print(f'\n{"Sida":>5}  {"Före":>6}  {"Efter":>6}  {"Δ":>6}')
+    print('─' * 30)
+    for i, (b, a) in enumerate(zip(before, after), 1):
+        delta = a - b
+        marker = ' ↑' if delta > 1 else (' ↓' if delta < -1 else '')
+        print(f'{i:>5}  {b:>6.1f}  {a:>6.1f}  {delta:>+6.1f}{marker}')
+    if len(before) > 1:
+        avg_b = sum(before) / len(before)
+        avg_a = sum(after) / len(after)
+        print('─' * 30)
+        print(f'{"Snitt":>5}  {avg_b:>6.1f}  {avg_a:>6.1f}  {avg_a - avg_b:>+6.1f}')
+    print(f'\nSparat: {tmp}')
+
+
 async def _correct_all(
     bad: dict[str, list[int]],
     txt_dir: Path,
@@ -197,16 +254,14 @@ def main() -> None:
     ap.add_argument('--root', default='', help='projektrot')
     ap.add_argument('--dry-run', action='store_true',
                     help='visa vad som skulle rättas utan att göra det')
+    ap.add_argument('--test', metavar='FIL',
+                    help='test-läge: rätta en enskild .txt-fil och jämför quality-poäng')
     args = ap.parse_args()
 
     root = Path(args.root) if args.root else ROOT
     jsonl = Path(args.pages_jsonl) if args.pages_jsonl else root / 'generated' / 'quality_pages.jsonl'
     txt_dir = Path(args.txt) if args.txt else root / 'generated' / 'text'
     pages_dir = Path(args.pages_out) if args.pages_out else root / 'generated' / 'text_pages'
-
-    if not jsonl.exists():
-        print(f'Saknar {jsonl} — kör ./quality.sh --per-page först.', file=sys.stderr)
-        sys.exit(1)
 
     saved_cfg = _llm_config.load()
     provider = args.provider or saved_cfg.get("provider", "claude")
@@ -224,6 +279,18 @@ def main() -> None:
         "base_url": base_url,
         "api_key": api_key,
     }
+
+    if args.test:
+        txt_path = Path(args.test)
+        if not txt_path.is_file():
+            print(f'Filen finns inte: {txt_path}', file=sys.stderr)
+            sys.exit(1)
+        asyncio.run(_test_mode(txt_path, provider_cfg, args.threshold))
+        return
+
+    if not jsonl.exists():
+        print(f'Saknar {jsonl} — kör ./quality.sh --per-page först.', file=sys.stderr)
+        sys.exit(1)
 
     # Samla dåliga sidor ur JSONL
     raw: dict[str, list[int]] = defaultdict(list)
