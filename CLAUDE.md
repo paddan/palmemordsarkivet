@@ -82,6 +82,8 @@ Env-variabler: `CLAUDE_CODE_OAUTH_TOKEN` (Pro/Max, räknas mot prenumeration) el
 
 **Stamp-filbaserad normalisering (normalize_text.py)**: `normalize.sh` skapar `generated/text/.normalize_stamp` efter en lyckad körning. Nästa körning filtrerar bort `.txt`-filer vars mtime ≤ stampens mtime — bara nya/ändrade filer normaliseras. `--rebuild` ignorerar stämpeln. Stämpeln skapas inte vid `--dry-run` eller om det finns fel. Ta bort `.normalize_stamp` manuellt för att tvinga om-normalisering av alla filer.
 
+**Stamp-filbaserad quality-bedömning (quality.py)**: `quality.sh` skapar `generated/.quality_stamp` efter en lyckad körning. Nästa körning laddar befintlig `quality.csv` (och `quality_pages.jsonl` om `--per-page`) och bedömer bara `.txt`-filer med mtime > stampens mtime. Oförändrade filer behåller sina gamla poäng i den sammanslagna outputen. `--rebuild` kör om alla filer. `--limit` skapar ingen stämpel (testläge).
+
 ## Common Gotchas
 
 1. **Beroendepinning**: `sentence-transformers<5` och `transformers<5` är avsiktligt pinnade — v5 bryter cross-encoder och AutoProcessor.

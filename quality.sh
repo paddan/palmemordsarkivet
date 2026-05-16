@@ -27,6 +27,7 @@ Skickas vidare till quality.py (alla okända flaggor passerar igenom):
   --pages-out FILE        sökväg för per-sida-output
   --text-dir DIR          katalog med .txt-filer att bedöma (default: generated/text/)
   --files-dir DIR         katalog med original-PDF:er (default: downloaded/files/)
+  --rebuild               ignorera stämpelfil och kör om alla filer
 
 För full quality.py-hjälp: ./quality.sh -- --help
 EOF

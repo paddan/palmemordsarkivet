@@ -410,8 +410,13 @@ lokalt (via `open`) i en gömd iframe så huvudsidan inte laddas om.
 ### Bonus: kvalitetskoll
 
 ```bash
-./quality.sh --top 30
+./quality.sh --top 30      # bedöm och visa värsta 30
+./quality.sh --rebuild     # ignorera stämpelfil, kör om alla filer
 ```
+
+Körs inkrementellt — bara filer som ändrats sedan förra körningen bedöms om;
+`generated/.quality_stamp` styr vad som är nytt. Ta bort stämpeln (eller kör
+`--rebuild`) för att tvinga om-bedömning av allt.
 
 Skriver `generated/quality.csv` (sorterat värst först) med poäng 0–100 per fil baserat på
 junk-tecken-andel, andel 1–2-tecken-ord, ihopklistrade ord, siffror inuti ord

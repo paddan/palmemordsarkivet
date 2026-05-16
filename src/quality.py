@@ -172,10 +172,15 @@ def main() -> int:
                     help=f"katalog med .txt-filer (default: {TEXT_DIR})")
     ap.add_argument("--files-dir", default=str(FILES_DIR),
                     help=f"katalog med original-PDF:er (default: {FILES_DIR})")
+    ap.add_argument("--rebuild", action="store_true",
+                    help="ignorera stämpelfil och kör om alla filer")
     args = ap.parse_args()
 
     text_dir = Path(args.text_dir)
     files_dir = Path(args.files_dir)
+    out_path = Path(args.out)
+    stamp_path = out_path.parent / ".quality_stamp"
+
     if not text_dir.exists():
         print(f"Saknar {text_dir}/", file=sys.stderr)
         return 1
@@ -188,62 +193,110 @@ def main() -> int:
             file=sys.stderr,
         )
 
-    files = sorted(text_dir.glob("*.txt"))
-    if not files:
+    files_all = sorted(text_dir.glob("*.txt"))
+    if not files_all:
         print(f"Inga .txt-filer i {text_dir}/", file=sys.stderr)
         return 1
     if args.limit:
-        files = files[: args.limit]
+        files_all = files_all[: args.limit]
 
-    prefix = f"Bedömer {len(files)} filer…"
+    # Inkrementell logik: ladda befintliga poäng och filtrera till bara ändrade filer.
+    # Liknar stamp-fil-mekanismen i normalize_text.py. Inaktiveras av --rebuild eller --limit.
+    cached_rows: dict[str, dict] = {}           # filename → rad från befintlig CSV
+    cached_pages: dict[tuple, dict] = {}        # (filename, page) → rad från befintlig JSONL
+    stamp_mtime: float | None = None
+
+    if not args.rebuild and not args.limit and stamp_path.exists() and out_path.exists():
+        stamp_mtime = stamp_path.stat().st_mtime
+        try:
+            with out_path.open(encoding="utf-8", newline="") as fp:
+                for row in csv.DictReader(fp):
+                    cached_rows[row["file"]] = row
+        except Exception:
+            stamp_mtime = None
+
+        if args.per_page and stamp_mtime is not None:
+            pages_path = Path(args.pages_out)
+            if pages_path.exists():
+                try:
+                    with pages_path.open(encoding="utf-8") as fp:
+                        for line in fp:
+                            try:
+                                d = json.loads(line)
+                                cached_pages[(d["file"], d["page"])] = d
+                            except Exception:
+                                pass
+                except Exception:
+                    cached_pages.clear()
+
+    if stamp_mtime is not None:
+        files_to_score = [f for f in files_all if f.stat().st_mtime > stamp_mtime]
+    else:
+        files_to_score = files_all
+
+    if not files_to_score:
+        print(
+            f"Alla {len(files_all)} filer oförändrade sedan stämpeln — hoppar quality-bedömning.",
+            file=sys.stderr,
+        )
+        return 0
+
+    if stamp_mtime is not None:
+        prefix = (f"Bedömer {len(files_to_score)}/{len(files_all)} filer"
+                  f" ({len(files_all) - len(files_to_score)} oförändrade hoppas)…")
+    else:
+        prefix = f"Bedömer {len(files_to_score)} filer…"
     print(prefix, end=" ", file=sys.stderr, flush=True)
+
     t0 = time.monotonic()
-    rows = []
-    pages_fp = None
-    if args.per_page:
-        Path(args.pages_out).parent.mkdir(parents=True, exist_ok=True)
-        pages_fp = Path(args.pages_out).open("w", encoding="utf-8")
-    try:
-        for i, f in enumerate(files, 1):
-            if i % 10 == 0 or i == len(files):
-                elapsed = time.monotonic() - t0
-                rate = i / elapsed if elapsed else 0
-                eta = int((len(files) - i) / rate) if rate else 0
-                eta_s = f"{eta // 60}m{eta % 60:02d}s"
-                print(f"\r{prefix} {i}/{len(files)} eta {eta_s}", end="",
-                      file=sys.stderr, flush=True)
-                if i == len(files):
-                    print(file=sys.stderr)
-            try:
-                text = f.read_text(encoding="utf-8", errors="replace")
-            except OSError as e:
-                print(f"  SKIP {f.name}: {e}", file=sys.stderr)
-                log_error("quality", f.name, str(e))
-                continue
-            scored = score_text(text, use_hunspell)
-            scored["file"] = f.name
-            scored["source"] = "text-layer" if original_had_text(f.stem, files_dir) else "ocr"
-            rows.append(scored)
+    new_rows: list[dict] = []
+    new_pages: list[dict] = []
 
-            if pages_fp is not None:
-                pages = text.split("\f") if "\f" in text else [text]
-                for p_idx, page_text in enumerate(pages, start=1):
-                    p_scored = score_text(page_text, use_hunspell=False)
-                    p_scored["file"] = f.name
-                    p_scored["page"] = p_idx
-                    alnum = sum(1 for c in page_text if c.isalnum())
-                    if alnum < MIN_PAGE_ALNUM:
-                        # Bildsida eller tom sida — ingen text att förbättra
-                        p_scored["score"] = 100.0
-                        p_scored["image_page"] = True
-                    pages_fp.write(json.dumps(p_scored, ensure_ascii=False) + "\n")
-    finally:
-        if pages_fp is not None:
-            pages_fp.close()
+    for i, f in enumerate(files_to_score, 1):
+        if i % 10 == 0 or i == len(files_to_score):
+            elapsed = time.monotonic() - t0
+            rate = i / elapsed if elapsed else 0
+            eta = int((len(files_to_score) - i) / rate) if rate else 0
+            eta_s = f"{eta // 60}m{eta % 60:02d}s"
+            print(f"\r{prefix} {i}/{len(files_to_score)} eta {eta_s}", end="",
+                  file=sys.stderr, flush=True)
+            if i == len(files_to_score):
+                print(file=sys.stderr)
+        try:
+            text = f.read_text(encoding="utf-8", errors="replace")
+        except OSError as e:
+            print(f"  SKIP {f.name}: {e}", file=sys.stderr)
+            log_error("quality", f.name, str(e))
+            continue
+        scored = score_text(text, use_hunspell)
+        scored["file"] = f.name
+        scored["source"] = "text-layer" if original_had_text(f.stem, files_dir) else "ocr"
+        new_rows.append(scored)
 
-    rows.sort(key=lambda r: r["score"])
+        if args.per_page:
+            pages = text.split("\f") if "\f" in text else [text]
+            for p_idx, page_text in enumerate(pages, start=1):
+                p_scored = score_text(page_text, use_hunspell=False)
+                p_scored["file"] = f.name
+                p_scored["page"] = p_idx
+                alnum = sum(1 for c in page_text if c.isalnum())
+                if alnum < MIN_PAGE_ALNUM:
+                    # Bildsida eller tom sida — ingen text att förbättra
+                    p_scored["score"] = 100.0
+                    p_scored["image_page"] = True
+                new_pages.append(p_scored)
 
-    out_path = Path(args.out)
+    # Slå ihop gamla (oförändrade) och nya poäng.
+    rescored_names = {r["file"] for r in new_rows}
+    current_names = {f.name for f in files_all}
+    rows: list[dict] = [
+        row for fname, row in cached_rows.items()
+        if fname not in rescored_names and fname in current_names
+    ]
+    rows.extend(new_rows)
+    rows.sort(key=lambda r: float(r.get("score") or 0))
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     cols = ["file", "source", "score", "chars", "pct_swe", "junk_ratio",
             "short_word_ratio", "long_word_ratio", "digit_in_word_ratio",
             "avg_word_len", "vowel_ratio"]
@@ -253,12 +306,24 @@ def main() -> int:
         w.writerows(rows)
     print(f"\nSkrev {out_path} — {len(rows)} rader, sorterat värst först.")
 
-    ocr = [r for r in rows if r["source"] == "ocr"]
-    txt = [r for r in rows if r["source"] == "text-layer"]
+    if args.per_page:
+        Path(args.pages_out).parent.mkdir(parents=True, exist_ok=True)
+        with Path(args.pages_out).open("w", encoding="utf-8") as fp:
+            for (fname, _page), d in cached_pages.items():
+                if fname not in rescored_names and fname in current_names:
+                    fp.write(json.dumps(d, ensure_ascii=False) + "\n")
+            for d in new_pages:
+                fp.write(json.dumps(d, ensure_ascii=False) + "\n")
+
+    if not args.limit:
+        stamp_path.touch()
+
+    ocr = [r for r in rows if r.get("source") == "ocr"]
+    txt = [r for r in rows if r.get("source") == "text-layer"]
     print(f"\n  text-layer (original hade text):  {len(txt)}")
     print(f"  ocr (Tesseract):                  {len(ocr)}")
     if ocr:
-        s = sorted(r["score"] for r in ocr)
+        s = sorted(float(r["score"]) for r in ocr)
         print(f"  OCR median-score: {s[len(s) // 2]}")
         print(f"  OCR sidor med score < 50: {sum(1 for x in s if x < 50)}")
         print(f"  OCR sidor med score < 30: {sum(1 for x in s if x < 30)}")
@@ -266,8 +331,9 @@ def main() -> int:
     if args.top:
         print(f"\nVärsta {args.top} (alla källor):")
         for r in rows[:args.top]:
-            swe = f"swe={r['pct_swe']:.0%}" if r["pct_swe"] is not None else "swe=?"
-            print(f"  {r['score']:5.1f}  [{r['source']:10}] {swe:10}  {r['file'][:90]}")
+            pct = r.get("pct_swe")
+            swe = f"swe={float(pct):.0%}" if pct not in (None, "") else "swe=?"
+            print(f"  {float(r['score']):5.1f}  [{r.get('source', '?'):10}] {swe:10}  {r['file'][:90]}")
 
     return 0
 
