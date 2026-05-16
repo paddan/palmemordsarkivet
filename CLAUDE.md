@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Commit och push
+
+Använd alltid `/cap`-skillen för att commita och pusha — kör inte `git commit`/`git push` direkt. `/cap` granskar ändringarna, frågar om problem ska fixas, committar och pushar.
+
 ## Dokumentation hålls synkad
 
 När du gör förändringar i projektet ska du **alltid** uppdatera både `CLAUDE.md` och `README.md` i samma commit — om ändringen påverkar något i dem.
