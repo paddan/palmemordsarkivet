@@ -71,11 +71,12 @@ Inspektera med t.ex. `sqlite3 generated/state.db`. Tabellerna:
 - `quality` / `quality_pages` — kvalitetspoäng per fil och sida
 - `ingest` — vad som indexerats i LanceDB och med vilken text_mtime
 - `llm_corrections` — vilka sidor som LLM-korrigerats
+- `wpu_decisions` — vilka wpu-stems `merge_wpu` redan fattat beslut för
 
 **Migrering från äldre versioner:** kör `./migrate_to_db.sh` en gång. Skriptet är
 idempotent. När pipelinen verifierats mot state.db i några körningar kan
 `cleanup_legacy_state.sh` köras för att ta bort gamla filmarkörer (manifest.csv,
-stamp-filer, .redact, page-*.json, quality.csv/jsonl).
+stamp-filer, .redact, page-*.json, quality.csv/jsonl, text_wpu/*.done).
 
 **Livscykel:** radera inte `generated/state.db` mitt under en pågående
 pipeline-körning. Befintliga processer fortsätter skriva mot den unlinkade inoden
