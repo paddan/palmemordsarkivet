@@ -8,7 +8,7 @@ Användning:
     python download.py [målmapp]
     python download.py --out files --sheet-id <ID>
 
-Skriver `manifest.csv` i målmappen som idempotency-key.
+Idempotens spåras via state.db (tabellen ``downloads``).
 """
 
 import argparse
@@ -29,6 +29,8 @@ from tenacity import (
     stop_after_attempt,
     wait_random_exponential,
 )
+
+import db as state_db
 
 try:  # valfri snyggare format-sniff
     import filetype as _filetype  # type: ignore
@@ -55,9 +57,6 @@ NAME_COLUMNS = [
 ]
 
 DRIVE_ID_RE = re.compile(r"/d/([a-zA-Z0-9_-]+)|[?&]id=([a-zA-Z0-9_-]+)")
-
-MANIFEST_NAME = "manifest.csv"
-MANIFEST_FIELDS = ["drive_id", "filename", "sha1", "downloaded_at", "bytes"]
 
 # Magic-bytes -> extension. Räcker för det mesta i arkivet (PDF dominerar).
 MAGIC = [
@@ -200,32 +199,6 @@ def sniff_extension(path: Path) -> str:
     return ""
 
 
-def load_manifest(path: Path) -> list[dict]:
-    if not path.exists():
-        return []
-    out: list[dict] = []
-    try:
-        with path.open("r", encoding="utf-8", newline="") as fp:
-            reader = csv.DictReader(fp)
-            for row in reader:
-                out.append(row)
-    except OSError:
-        return []
-    return out
-
-
-def append_manifest(path: Path, row: dict) -> None:
-    new = not path.exists()
-    try:
-        with path.open("a", encoding="utf-8", newline="") as fp:
-            w = csv.DictWriter(fp, fieldnames=MANIFEST_FIELDS, extrasaction="ignore")
-            if new:
-                w.writeheader()
-            w.writerow(row)
-    except OSError as e:
-        log_error("download", row.get("filename", ""), f"manifest write: {e}")
-
-
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -241,6 +214,10 @@ def main() -> int:
 
     out_dir = Path(args.out_flag or args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    conn = state_db.connect()
+    state_db.init_schema(conn)
+    source = "wpu" if out_dir.name == "wpu_files" else "files"
 
     csv_url = f"https://docs.google.com/spreadsheets/d/{args.sheet_id}/export?format=csv"
     print(f"Hämtar kalkylbladet från {csv_url}")
@@ -275,10 +252,18 @@ def main() -> int:
 
     print(f"Hittade {len(todo)} filer att ladda ner till {out_dir}/")
 
-    manifest_path = out_dir / MANIFEST_NAME
-    manifest = load_manifest(manifest_path)
-    manifest_ids = {m.get("drive_id") for m in manifest if m.get("drive_id")}
-    manifest_sha1s = {m.get("sha1"): m.get("filename") for m in manifest if m.get("sha1")}
+    manifest_ids = {
+        r["drive_id"] for r in conn.execute(
+            "SELECT drive_id FROM downloads WHERE source=? AND drive_id IS NOT NULL",
+            (source,),
+        )
+    }
+    manifest_sha1s = {
+        r["sha1"]: r["filename"] for r in conn.execute(
+            "SELECT sha1, filename FROM downloads WHERE source=? AND sha1 IS NOT NULL",
+            (source,),
+        )
+    }
 
     # Filnamns-stem-fallback för befintliga nedladdningar (pre-manifest)
     existing_stems = {p.with_suffix("").name for p in out_dir.iterdir() if p.is_file()}
@@ -346,14 +331,12 @@ def main() -> int:
                 print(f"  [dubblett] {prefix} == {other} (sha1={sha1[:10]})", flush=True)
                 log_error("download", prefix, f"duplicate sha1 of {other}")
                 tmp.unlink()
-                # Notera ändå i manifestet så vi inte kör om
-                append_manifest(manifest_path, {
-                    "drive_id": file_id,
-                    "filename": other,
-                    "sha1": sha1,
-                    "downloaded_at": datetime.now().isoformat(timespec="seconds"),
-                    "bytes": str(size),
-                })
+                # Notera ändå i state.db så vi inte kör om
+                state_db.record_download(
+                    conn, source=source, drive_id=file_id,
+                    filename=other, sha1=sha1, bytes_=size,
+                    note=f"dup-of:{other}",
+                )
                 manifest_ids.add(file_id)
                 n_dup += 1
             else:
@@ -365,13 +348,14 @@ def main() -> int:
                     i += 1
                 tmp.rename(dst)
                 existing_stems.add(dst.with_suffix("").name)
-                append_manifest(manifest_path, {
-                    "drive_id": file_id,
-                    "filename": dst.name,
-                    "sha1": sha1,
-                    "downloaded_at": datetime.now().isoformat(timespec="seconds"),
-                    "bytes": str(size),
-                })
+                state_db.record_download(
+                    conn, source=source, drive_id=file_id,
+                    filename=dst.name, sha1=sha1, bytes_=size,
+                )
+                state_db.upsert_pdf_file(
+                    conn, pdf_stem=dst.stem, source=source,
+                    pdf_path=str(dst),
+                )
                 manifest_ids.add(file_id)
                 manifest_sha1s[sha1] = dst.name
                 n_new += 1
