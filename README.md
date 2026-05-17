@@ -6,26 +6,30 @@ Skript för att ladda ner, OCR-tolka och söka i materialet på
 [palmemordsarkivet.se](https://palmemordsarkivet.se) — ett publikt Google Sheet
 med drygt 3 700 PDF-filer (~33 000 sidor) som länkas via "Länk till kopia".
 
+## Web-gränssnitt
+
 Efter nedladdning, ocr-scanning så finns det ett web-gränssnitt som man kan ställa frågor om Palme-mordet i.
 
-Webgränssnittet har två söklägen:
+### RAG (standard)
 
-**RAG (standard)** — *retrieval-augmented generation*. En fast pipeline: frågan
+En fast pipeline: frågan
 embedas och matchas mot vektorindexet, de bästa utdragen rerankas, och de
 6 mest relevanta skickas som kontext till AI som formulerar svaret med
 källhänvisningar. Snabbt och förutsägbart — passar enkla faktafrågor där ett
 söksteg räcker.
 
-![Web-gränssnitt — RAG-läge](web-ui-2.png)
+![Web-gränssnitt — RAG-läge](cross-encoder.png)
 
-**MCP (utredningsläge)** — AI söker *autonomt* via
+### MCP (utredningsläge) 
+
+AI söker *autonomt* via
 [Model Context Protocol](https://modelcontextprotocol.io). Istället för en
 fast pipeline får Claude tillgång till verktyg (`search_archive`, `get_page`)
 som den anropar hur många gånger den vill — provar olika söktermer, följer
 upp intressanta träffar och läser hela sidor för mer kontext. Bättre täckning
 på komplexa flerstegs-frågor, men långsammare (~1–3 min).
 
-![Web-gränssnitt — MCP-läge](web-ui.png)
+![Web-gränssnitt — MCP-läge](utredningsläge.png)
 
 ## Kom igång
 
@@ -36,10 +40,19 @@ på komplexa flerstegs-frågor, men långsammare (~1–3 min).
 Sätt sedan en API-nyckel för den LLM du vill använda:
 
 ```bash
-export CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...   # Pro/Max-abonnemang (rekommenderas)
-# eller:
-export ANTHROPIC_API_KEY=sk-ant-...               # API-credits
+# Anthropic (Claude) — Pro/Max-abonnemang (rekommenderas):
+export CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...
+# eller API-credits:
+export ANTHROPIC_API_KEY=sk-ant-...
+
+# OpenAI (GPT-5 / GPT-4o):
+export OPENAI_API_KEY=sk-...
+
+# DeepSeek (V4 / Reasoner):
+export DEEPSEEK_API_KEY=sk-...
 ```
+
+Minst en nyckel krävs. Webgränssnittet sparar valt backend i `generated/llm_config.json` mellan sessioner — se avsnittet [LLM-konfiguration](#llm-konfiguration-generatedllm_configjson) nedan.
 
 Kör sedan pipeline:
 
@@ -322,21 +335,7 @@ finns nya `page-NNN.txt` att slå in.
 ### 4. Ställ frågor
 
 ```bash
-# Pro/Max-abonnemang (räknas mot abonnemangets timgränser):
-export CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...
-# Eller API-credits:
-# export ANTHROPIC_API_KEY=sk-ant-...
-
-# Wrapper aktiverar venv, läser token, --rerank som default:
-./ask.sh "Vem är Stig Engström?"
-./ask.sh --no-rerank "snabbare"
-./ask.sh --hybrid "..."           # vector + BM25 sammanslaget med RRF
-./ask.sh --mcp "..."              # utredningsläge — Claude söker autonomt
-./ask.sh                          # interaktiv repl
-./ask.sh --help                   # alla flaggor
-
-# Webgränssnitt (Streamlit) — aktiverar venv, läser token, öppnar i webbläsaren:
-./web.sh
+./web.sh   # Starta Streamlit-webgränssnittet
 ```
 
 OAuth-token genereras med `claude setup-token` (engångsåtgärd).
@@ -413,6 +412,40 @@ ollama pull llama3.1:8b
 Citat i svaret renderas som små inline-knappar — klick öppnar original-PDF:en
 lokalt (via `open`) i en gömd iframe så huvudsidan inte laddas om.
 
+## LLM-konfiguration (`generated/llm_config.json`)
+
+Webgränssnittet sparar valt backend automatiskt i `generated/llm_config.json`
+när du byter provider i sidebaren. Filen laddas vid nästa start så du slipper
+välja om. Formatet:
+
+```json
+{
+  "backend_name": "Claude",
+  "provider": "claude",
+  "model": "claude-opus-4-7",
+  "base_url": ""
+}
+```
+
+| Fält | Möjliga värden |
+|---|---|
+| `provider` | `claude`, `openai`, `deepseek`, `openai_compatible` |
+| `model` | Modellnamn, t.ex. `claude-opus-4-7`, `gpt-4o`, `deepseek-chat`, `deepseek-reasoner` |
+| `base_url` | Tomt för molntjänster; URL för lokal endpoint (`http://localhost:11434/v1` för Ollama) |
+| `backend_name` | Visningsnamn i gränssnittet (valfritt) |
+
+Filen skapas automatiskt — det finns inget behov av att redigera den för hand.
+Ta bort den för att återgå till standardvalet (Claude Opus 4.7).
+
+API-nycklar läses alltid från miljövariabler och lagras **aldrig** i filen:
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...       # Claude
+export CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...  # Claude Pro/Max (räknas mot prenumeration)
+export OPENAI_API_KEY=sk-...              # OpenAI
+export DEEPSEEK_API_KEY=sk-...           # DeepSeek
+```
+
 ## Filer
 
 | Fil | Vad |
@@ -432,8 +465,9 @@ lokalt (via `open`) i en gömd iframe så huvudsidan inte laddas om.
 | `llm_correct.sh` → `src/llm_correct.py` | LLM-korrektion av dåliga OCR-sidor via Claude Haiku |
 | `detect_redactions.sh` → `src/ocr_pages.py` | Kör redaktionsdetektering på befintliga text/OCR-par |
 | `ingest.sh` → `src/rag/ingest.py` | Bygg vektorindex (LanceDB + BM25 FTS) |
-| `ask.sh` → `src/rag/ask.py` | Frågefronten — RAG-läge och `--mcp`-läge |
+| `src/rag/ask.py` | Frågefunktioner — RAG-läge och MCP-läge (importeras av webui och mcp_server) |
 | `src/rag/mcp_server.py` | MCP-server med `search_archive` och `get_page` (startas av ask.py/webui.py) |
+| `generated/llm_config.json` | Sparad LLM-konfiguration (backend, modell, URL) — se ovan |
 | `src/webui.py` | Streamlit-webgränssnitt för frågor (RAG + MCP-toggle) |
 | `web.sh` | Wrapper för Streamlit-servern |
 | `migrate_to_db.sh` → `src/migrate_to_db.py` | Engångsmigrering: legacy filmarkörer → `generated/db/state.db` |
