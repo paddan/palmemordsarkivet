@@ -62,13 +62,42 @@ source .venv/bin/activate
 PYBIN="$ROOT/.venv/bin/python"
 WPU_DIR="$ROOT/downloaded/wpu_files"
 
-already_checked_stems() {
+pending_stems() {
+  # Filer som ännu inte redaktionskontrollerats (redaction_checked_at IS NULL).
+  # Filtreras valfritt mot FILES_FROM om angett.
+  local files_from="${1:-}"
   "$ROOT/.venv/bin/python" -c "
 import sys; sys.path.insert(0, '$ROOT/src')
 import db
 conn = db.connect(); db.init_schema(conn)
-for r in conn.execute('SELECT pdf_stem FROM pdf_files WHERE redaction_checked_at IS NOT NULL'):
-    print(r['pdf_stem'])
+files_from = sys.argv[1] if len(sys.argv) > 1 else ''
+if files_from:
+    stems = set()
+    with open(files_from) as fh:
+        for line in fh:
+            s = line.strip().removesuffix('.txt')
+            if s:
+                stems.add(s)
+    rows = conn.execute(
+        'SELECT pdf_stem FROM pdf_files WHERE redaction_checked_at IS NULL'
+    )
+    for r in rows:
+        if r['pdf_stem'] in stems:
+            print(r['pdf_stem'])
+else:
+    for r in conn.execute(
+        'SELECT pdf_stem FROM pdf_files WHERE redaction_checked_at IS NULL'
+    ):
+        print(r['pdf_stem'])
+" 2>/dev/null "$files_from"
+}
+
+total_in_db() {
+  "$ROOT/.venv/bin/python" -c "
+import sys; sys.path.insert(0, '$ROOT/src')
+import db
+conn = db.connect(); db.init_schema(conn)
+print(conn.execute('SELECT COUNT(*) FROM pdf_files').fetchone()[0])
 " 2>/dev/null
 }
 
@@ -102,36 +131,16 @@ conn.commit()
   find "$TXT" -name '*.redact' -delete 2>/dev/null || true
 fi
 
-# Bygg en sorterad lista med redan-kontrollerade stems en gång (snabbare än
-# en query per fil).
-CHECKED_FILE=$(mktemp)
-already_checked_stems | sort -u > "$CHECKED_FILE"
+# Hämta väntande och totalt antal direkt från state.db — en enda query.
+ALL_TOTAL=$(total_in_db)
 
 PENDING=()
-if [ -n "$FILES_FROM" ]; then
-  ALL_TOTAL=0
-  while IFS= read -r line; do
-    stem="${line%.txt}"
-    [ -n "$stem" ] || continue
-    txt_file="$TXT/$stem.txt"
-    [ -f "$txt_file" ] || continue
-    ALL_TOTAL=$((ALL_TOTAL + 1))
-    # Snabb check via fil (grep -Fxq är ganska snabbt på sorterad fil)
-    if ! grep -Fxq "$stem" "$CHECKED_FILE"; then
-      PENDING+=("$txt_file")
-    fi
-  done < "$FILES_FROM"
-else
-  ALL_TOTAL=$(find "$TXT" -name '*.txt' | wc -l | tr -d ' ')
-  while IFS= read -r -d '' f; do
-    stem=$(basename "$f" .txt)
-    if ! grep -Fxq "$stem" "$CHECKED_FILE"; then
-      PENDING+=("$f")
-    fi
-  done < <(find "$TXT" -name '*.txt' -print0)
-fi
-
-rm -f "$CHECKED_FILE"
+while IFS= read -r stem; do
+  [ -n "$stem" ] || continue
+  txt_file="$TXT/$stem.txt"
+  [ -f "$txt_file" ] || continue
+  PENDING+=("$txt_file")
+done < <(pending_stems "$FILES_FROM")
 
 SKIPPED=$(( ALL_TOTAL - ${#PENDING[@]} ))
 TOTAL=${#PENDING[@]}
