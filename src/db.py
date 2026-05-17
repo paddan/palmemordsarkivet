@@ -9,6 +9,7 @@ ska aldrig skriva egen SQL.
 
 from __future__ import annotations
 
+import json as _json
 import os
 import sqlite3
 from datetime import datetime, timezone
@@ -277,3 +278,188 @@ def mark_normalized(
     if cur.rowcount == 0:
         raise KeyError(pdf_stem)
     conn.commit()
+
+
+# --- pdf_pages --------------------------------------------------------
+
+def record_page(
+    conn: sqlite3.Connection, *,
+    pdf_stem: str, page_num: int, engine: str,
+    text: str | None, score: float | None,
+) -> None:
+    """Skriv en OCR-sida (UPSERT på pdf_stem+page_num). Ersätter page-NNN.json."""
+    conn.execute(
+        """
+        INSERT INTO pdf_pages(pdf_stem, page_num, engine, text, score, processed_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(pdf_stem, page_num) DO UPDATE SET
+            engine       = excluded.engine,
+            text         = excluded.text,
+            score        = excluded.score,
+            processed_at = excluded.processed_at
+        """,
+        (pdf_stem, page_num, engine, text, score, now()),
+    )
+    conn.commit()
+
+
+def page_exists(conn: sqlite3.Connection, pdf_stem: str, page_num: int) -> bool:
+    """Sann om sidan redan finns i pdf_pages."""
+    return conn.execute(
+        "SELECT 1 FROM pdf_pages WHERE pdf_stem=? AND page_num=?",
+        (pdf_stem, page_num),
+    ).fetchone() is not None
+
+
+def get_pages_for_stem(
+    conn: sqlite3.Connection, pdf_stem: str
+) -> list[sqlite3.Row]:
+    """Alla sidor för en stem, sorterat på page_num."""
+    return list(conn.execute(
+        "SELECT * FROM pdf_pages WHERE pdf_stem=? ORDER BY page_num",
+        (pdf_stem,),
+    ))
+
+
+# --- quality ----------------------------------------------------------
+
+_QUALITY_COLS = (
+    "pct_swe", "junk_ratio", "short_word_ratio", "long_word_ratio",
+    "digit_in_word_ratio", "avg_word_len", "vowel_ratio", "source_type",
+)
+
+
+def record_quality(
+    conn: sqlite3.Connection, *,
+    pdf_stem: str, score: float, chars: int,
+    text_mtime: float, extras: dict | None = None,
+) -> None:
+    """UPSERT i quality. extras = dict med nycklar från _QUALITY_COLS."""
+    extras = extras or {}
+    cols = ["pdf_stem", "score", "chars", "text_mtime", "scored_at"]
+    vals = [pdf_stem, score, chars, text_mtime, now()]
+    for c in _QUALITY_COLS:
+        cols.append(c)
+        vals.append(extras.get(c))
+    placeholders = ",".join("?" * len(vals))
+    updates = ",".join(f"{c}=excluded.{c}" for c in cols if c != "pdf_stem")
+    conn.execute(
+        f"""INSERT INTO quality({','.join(cols)}) VALUES ({placeholders})
+            ON CONFLICT(pdf_stem) DO UPDATE SET {updates}""",
+        vals,
+    )
+    conn.commit()
+
+
+def record_quality_page(
+    conn: sqlite3.Connection, *,
+    pdf_stem: str, page_num: int, score: float,
+    chars: int | None = None, image_page: bool = False,
+    payload: dict | None = None,
+) -> None:
+    """UPSERT i quality_pages. payload sparas som JSON-text."""
+    conn.execute(
+        """
+        INSERT INTO quality_pages(pdf_stem, page_num, score, chars,
+                                  image_page, payload, scored_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(pdf_stem, page_num) DO UPDATE SET
+            score=excluded.score, chars=excluded.chars,
+            image_page=excluded.image_page,
+            payload=excluded.payload, scored_at=excluded.scored_at
+        """,
+        (pdf_stem, page_num, score, chars,
+         1 if image_page else 0,
+         _json.dumps(payload) if payload else None,
+         now()),
+    )
+    conn.commit()
+
+
+def get_bad_pages(
+    conn: sqlite3.Connection, *, threshold: float
+) -> list[sqlite3.Row]:
+    """Sidor med score under threshold, exklusive image_page-sidor."""
+    return list(conn.execute(
+        """SELECT pdf_stem, page_num, score, payload
+           FROM quality_pages
+           WHERE score < ? AND COALESCE(image_page, 0) = 0
+           ORDER BY score ASC""",
+        (threshold,),
+    ))
+
+
+# --- ingest -----------------------------------------------------------
+
+def record_ingest(
+    conn: sqlite3.Connection, *,
+    pdf_stem: str, text_mtime: float, chunks: int,
+) -> None:
+    """UPSERT i ingest — markera att en stem indexerats med given mtime."""
+    conn.execute(
+        """
+        INSERT INTO ingest(pdf_stem, text_mtime, chunks, indexed_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(pdf_stem) DO UPDATE SET
+            text_mtime=excluded.text_mtime,
+            chunks=excluded.chunks,
+            indexed_at=excluded.indexed_at
+        """,
+        (pdf_stem, text_mtime, chunks, now()),
+    )
+    conn.commit()
+
+
+def get_ingested_mtime(
+    conn: sqlite3.Connection, pdf_stem: str
+) -> float | None:
+    """Senast indexerade text_mtime för stem, eller None om ej indexerad."""
+    row = conn.execute(
+        "SELECT text_mtime FROM ingest WHERE pdf_stem=?", (pdf_stem,)
+    ).fetchone()
+    return row["text_mtime"] if row else None
+
+
+# --- delta-queries (inkrementell logik) -------------------------------
+
+def files_needing_normalize(conn: sqlite3.Connection) -> list[str]:
+    """pdf_stems vars text_mtime > normalized_at (eller aldrig normaliserade).
+
+    Filer utan text_mtime (inte mergade än) inkluderas inte.
+
+    Obs: ``strftime('%s', ...)`` returnerar TEXT — vi CAST:ar till INTEGER för
+    att jämförelsen mot ``text_mtime`` (REAL) ska bli numerisk. Vi jämför på
+    heltalssekunder eftersom ``normalized_at`` (ISO-timestamp via ``now()``) har
+    sekundprecision medan ``text_mtime`` har subsekund — annars skulle filer
+    alltid framstå som "nyare" direkt efter mark_normalized.
+    """
+    rows = conn.execute(
+        """SELECT pdf_stem FROM pdf_files
+           WHERE text_mtime IS NOT NULL
+             AND (normalized_at IS NULL
+                  OR CAST(text_mtime AS INTEGER)
+                     > CAST(strftime('%s', normalized_at) AS INTEGER))"""
+    )
+    return [r["pdf_stem"] for r in rows]
+
+
+def files_needing_quality(conn: sqlite3.Connection) -> list[str]:
+    """pdf_stems som saknar quality-rad eller vars text_mtime är nyare."""
+    rows = conn.execute(
+        """SELECT pf.pdf_stem FROM pdf_files pf
+           LEFT JOIN quality q USING (pdf_stem)
+           WHERE pf.text_mtime IS NOT NULL
+             AND (q.pdf_stem IS NULL OR pf.text_mtime > q.text_mtime)"""
+    )
+    return [r["pdf_stem"] for r in rows]
+
+
+def files_needing_ingest(conn: sqlite3.Connection) -> list[str]:
+    """pdf_stems som saknar ingest-rad eller vars text_mtime är nyare."""
+    rows = conn.execute(
+        """SELECT pf.pdf_stem FROM pdf_files pf
+           LEFT JOIN ingest i USING (pdf_stem)
+           WHERE pf.text_mtime IS NOT NULL
+             AND (i.pdf_stem IS NULL OR pf.text_mtime > i.text_mtime)"""
+    )
+    return [r["pdf_stem"] for r in rows]

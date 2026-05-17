@@ -1,4 +1,6 @@
 import sqlite3
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -8,6 +10,10 @@ from db import (
     record_download, is_downloaded, find_download_by_sha1,
     upsert_pdf_file, get_pdf_file, mark_redaction_checked,
     mark_merged, mark_normalized, redaction_checked,
+    record_page, page_exists, get_pages_for_stem,
+    record_quality, record_quality_page, get_bad_pages,
+    record_ingest, get_ingested_mtime,
+    files_needing_normalize, files_needing_quality, files_needing_ingest,
 )
 
 
@@ -123,3 +129,105 @@ def test_init_schema_is_idempotent(tmp_path):
                 "schema_version"}.issubset(tables)
     finally:
         conn.close()
+
+
+def test_pages_roundtrip(tmp_path):
+    conn = _fresh(tmp_path)
+    upsert_pdf_file(conn, pdf_stem="s1", source="files",
+                    pdf_path="downloaded/files/s1.pdf")
+    record_page(conn, pdf_stem="s1", page_num=1, engine="tesseract",
+                text="hej", score=80.0)
+    assert page_exists(conn, "s1", 1)
+    assert not page_exists(conn, "s1", 2)
+    pages = get_pages_for_stem(conn, "s1")
+    assert [p["page_num"] for p in pages] == [1]
+
+
+def test_record_page_is_upsert(tmp_path):
+    conn = _fresh(tmp_path)
+    upsert_pdf_file(conn, pdf_stem="s1", source="files", pdf_path="x")
+    record_page(conn, pdf_stem="s1", page_num=1, engine="tesseract",
+                text="a", score=50.0)
+    record_page(conn, pdf_stem="s1", page_num=1, engine="surya",
+                text="b", score=90.0)
+    pages = get_pages_for_stem(conn, "s1")
+    assert pages[0]["engine"] == "surya"
+    assert pages[0]["text"] == "b"
+
+
+def test_quality_and_delta(tmp_path):
+    conn = _fresh(tmp_path)
+    upsert_pdf_file(conn, pdf_stem="s1", source="files", pdf_path="x")
+    mark_merged(conn, "s1", text_mtime=100.0)
+    assert "s1" in files_needing_quality(conn)
+    record_quality(conn, pdf_stem="s1", score=70.0, chars=1000,
+                   text_mtime=100.0, extras={"pct_swe": 0.9})
+    assert "s1" not in files_needing_quality(conn)
+    mark_merged(conn, "s1", text_mtime=200.0)
+    assert "s1" in files_needing_quality(conn)
+
+
+def test_ingest_delta(tmp_path):
+    conn = _fresh(tmp_path)
+    upsert_pdf_file(conn, pdf_stem="s1", source="files", pdf_path="x")
+    mark_merged(conn, "s1", text_mtime=100.0)
+    assert "s1" in files_needing_ingest(conn)
+    record_ingest(conn, pdf_stem="s1", text_mtime=100.0, chunks=5)
+    assert "s1" not in files_needing_ingest(conn)
+    assert get_ingested_mtime(conn, "s1") == 100.0
+
+
+def test_files_needing_normalize(tmp_path):
+    conn = _fresh(tmp_path)
+    upsert_pdf_file(conn, pdf_stem="s1", source="files", pdf_path="x")
+    # Ingen text_mtime → ska INTE behöva normalize
+    assert "s1" not in files_needing_normalize(conn)
+    mark_merged(conn, "s1", text_mtime=time.time())
+    # Nu finns text_mtime men inget normalized_at → behöver normalize
+    assert "s1" in files_needing_normalize(conn)
+    mark_normalized(conn, "s1", text_mtime=time.time())
+    # Nu är normalized_at >= text_mtime → behöver inte
+    assert "s1" not in files_needing_normalize(conn)
+
+
+def test_bad_pages(tmp_path):
+    conn = _fresh(tmp_path)
+    upsert_pdf_file(conn, pdf_stem="s1", source="files", pdf_path="x")
+    record_quality_page(conn, pdf_stem="s1", page_num=1, score=20.0)
+    record_quality_page(conn, pdf_stem="s1", page_num=2, score=80.0)
+    record_quality_page(conn, pdf_stem="s1", page_num=3, score=10.0,
+                        image_page=True)
+    bad = get_bad_pages(conn, threshold=50.0)
+    # page 3 är image_page → filtreras bort
+    assert [(b["pdf_stem"], b["page_num"]) for b in bad] == [("s1", 1)]
+
+
+def test_parallel_page_writes(tmp_path):
+    """4 trådar skriver 25 sidor var — ska inte krascha eller tappa data."""
+    db_path = tmp_path / "state.db"
+    init_conn = connect(db_path)
+    init_schema(init_conn)
+    upsert_pdf_file(init_conn, pdf_stem="s1", source="files", pdf_path="x")
+    init_conn.close()
+
+    errors = []
+
+    def worker(page_range):
+        try:
+            c = connect(db_path)
+            for n in page_range:
+                record_page(c, pdf_stem="s1", page_num=n,
+                            engine="tesseract", text=f"p{n}", score=80.0)
+            c.close()
+        except Exception as e:  # pragma: no cover
+            errors.append(e)
+
+    threads = [threading.Thread(target=worker, args=(range(i*25+1, i*25+26),))
+               for i in range(4)]
+    for t in threads: t.start()
+    for t in threads: t.join()
+
+    assert not errors
+    c = connect(db_path)
+    n = c.execute("SELECT COUNT(*) FROM pdf_pages").fetchone()[0]
+    assert n == 100
