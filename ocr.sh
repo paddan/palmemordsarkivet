@@ -7,7 +7,7 @@
 #
 # --redo-läge: kör om OCR på filer/sidor som ligger under en kvalitetströskel.
 #   --mode files  — ocrmypdf --redo-ocr på hela filer från quality.csv
-#   --mode pages  — Surya på enstaka sidor från quality_pages.jsonl (default)
+#   --mode pages  — Surya på enstaka sidor från quality_pages-tabellen (default)
 #
 # Användning:
 #   ./ocr.sh                                # full pipeline (default)
@@ -31,7 +31,7 @@ Default-läge (full pipeline):
                                               # förloraren (om files_wpu/ finns)
   3. ./detect_redactions.sh                   # infoga [MASKAD] i text
   4. ./normalize.sh                           # regelbaserad textnormalisering
-  5. ./quality.sh --per-page                  # quality.csv + quality_pages.jsonl
+  5. ./quality.sh --per-page                  # quality + quality_pages (db)
   6. ./ocr.sh --redo --mode pages             # Surya på sidor under tröskeln
                                               # (palme + kvarvarande wpu)
   7. ./quality.sh                             # uppdaterad quality.csv
@@ -47,7 +47,7 @@ Flaggor (default visas inom parentes):
                             files = ocrmypdf --redo-ocr på hela filer från
                                     quality.csv
                             pages = Surya på enstaka sidor från
-                                    quality_pages.jsonl
+                                    quality_pages-tabellen i db
   --threshold N           score-tröskel för om-OCR (50)
   --source S              text-layer | ocr | any — bara med --redo --mode files (any)
   --jobs N                antal filer parallellt (4)
@@ -56,7 +56,7 @@ Flaggor (default visas inom parentes):
   --ocr DIR               output-katalog för OCR-PDF:er (\$ROOT/generated/ocr)
   --txt DIR               output-katalog för .txt (\$ROOT/generated/text)
   --csv FILE              quality.csv (\$ROOT/generated/quality.csv)
-  --pages-jsonl FILE      quality_pages.jsonl (\$ROOT/generated/quality_pages.jsonl)
+  --pages-jsonl FILE      DEPRECATED — bad pages läses nu från db.quality_pages
   --pages-out DIR         output-katalog för per-sida (\$ROOT/generated/text_pages)
   --from-list FILE        --redo --mode files: läs filnamn från textfil (en per
                           rad) istället för att filtrera quality.csv. Användbart
@@ -189,7 +189,18 @@ fi
 # --redo-läge: kör om OCR på filer/sidor under tröskeln
 # --------------------------------------------------------------------
 if [ "$MODE" = "pages" ]; then
-  [ -f "$PAGES_JSONL" ] || { echo "Saknar $PAGES_JSONL — kör './quality.sh --per-page' först."; exit 1; }
+  PYBIN="$ROOT/.venv/bin/python"
+  [ -x "$PYBIN" ] || PYBIN="python3"
+  n=$("$PYBIN" -c "
+import sys; sys.path.insert(0, '$ROOT/src')
+import db
+conn = db.connect(); db.init_schema(conn)
+print(conn.execute('SELECT COUNT(*) FROM quality_pages').fetchone()[0])
+" 2>/dev/null || echo 0)
+  if [ "${n:-0}" = "0" ]; then
+    echo "Inga rader i quality_pages-tabellen — kör './quality.sh --per-page' först."
+    exit 1
+  fi
 elif [ -z "${FROM_LIST:-}" ]; then
   command -v ocrmypdf >/dev/null || { echo "saknar ocrmypdf"; exit 1; }
   command -v pdftotext >/dev/null || { echo "saknar pdftotext"; exit 1; }
@@ -197,16 +208,16 @@ fi
 
 if [ "$MODE" = "pages" ]; then
   # Per-sida läge: kör ocr_pages.py --engine surya på dåliga sidor.
-  echo "MODE=pages — använder $PAGES_JSONL (THRESHOLD=$THRESHOLD)..."
+  echo "MODE=pages — läser quality_pages från db (THRESHOLD=$THRESHOLD)..."
   PYBIN="$ROOT/.venv/bin/python"
   [ -x "$PYBIN" ] || PYBIN="python3"
 
-  "$PYBIN" - "$PAGES_JSONL" "$THRESHOLD" "$IN" "$PAGES_OUT" "$ROOT" "$OCR" "$NO_UPDATE_PDF" "$TXT" <<'PYEOF'
-import json, subprocess, sys, time
+  "$PYBIN" - "$THRESHOLD" "$IN" "$PAGES_OUT" "$ROOT" "$OCR" "$NO_UPDATE_PDF" "$TXT" <<'PYEOF'
+import subprocess, sys, time
 from collections import defaultdict
 from pathlib import Path
 
-jsonl, thr, in_dir, out_dir, root, ocr_dir, no_update, txt_dir = sys.argv[1:9]
+thr, in_dir, out_dir, root, ocr_dir, no_update, txt_dir = sys.argv[1:8]
 thr = float(thr)
 in_dir = Path(in_dir); out_dir = Path(out_dir); root = Path(root)
 txt_dir = Path(txt_dir)
@@ -220,23 +231,22 @@ from merge_pages import merge_one  # noqa: E402
 from normalize_text import process_file as normalize_file  # noqa: E402
 import db as state_db  # noqa: E402
 
+conn = state_db.connect()
+state_db.init_schema(conn)
+
 raw = defaultdict(list)
-with open(jsonl, encoding="utf-8") as f:
-    for line in f:
-        try:
-            row = json.loads(line)
-        except Exception:
-            continue
-        score = float(row.get("score") or 0.0)
-        if score < thr:
-            raw[row["file"]].append(int(row["page"]))
+for row in conn.execute(
+    "SELECT pdf_stem, page_num FROM quality_pages "
+    "WHERE score < ? AND COALESCE(image_page, 0) = 0 "
+    "ORDER BY pdf_stem, page_num",
+    (thr,),
+):
+    raw[row["pdf_stem"] + ".txt"].append(int(row["page_num"]))
 
 # Filtrera bort sidor där Surya redan har försökt (enligt pdf_pages-tabellen).
 # Annars loopar vi över samma sidor varje körning utan att göra något.
 bad = defaultdict(list)
 skipped_already = 0
-conn = state_db.connect()
-state_db.init_schema(conn)
 for txt_name, pages in raw.items():
     stem = txt_name[:-4] if txt_name.endswith(".txt") else txt_name
     for p in pages:

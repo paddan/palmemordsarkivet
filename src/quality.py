@@ -1,21 +1,22 @@
 #!/usr/bin/env python3
 """
-Bedöm OCR-kvalitet per textfil. Skriver quality.csv sorterat värst först.
+Bedöm OCR-kvalitet per textfil. Skriver resultat till SQLite-state (tabellerna
+``quality`` och ``quality_pages``) via ``db.record_quality`` /
+``db.record_quality_page``.
 
 Tar hänsyn till om originalet hade textlager — sidor som extraherats
 direkt med pdftotext (utan OCR) markeras som 'text-layer' och får inte
 samma straff som Tesseract-skräp.
 
 Kör:
-    python quality.py            # alla filer → quality.csv
+    python quality.py            # alla filer som behöver bedömas
+    python quality.py --rebuild  # om-bedöm alla
     python quality.py --top 30   # visa även värsta 30 i terminalen
 """
 
 from __future__ import annotations
 
 import argparse
-import csv
-import json
 import os
 import re
 import shutil
@@ -29,6 +30,8 @@ try:
 except Exception:  # pragma: no cover
     def log_error(component: str, item: str, message: str) -> None:
         pass
+
+import db as state_db
 
 ROOT = Path(os.environ.get("ROOT") or Path(__file__).resolve().parents[1])
 TEXT_DIR = Path(os.environ.get("TEXT_DIR") or (ROOT / "generated" / "text"))
@@ -170,28 +173,21 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--top", type=int, help="visa även värsta N i terminalen")
-    ap.add_argument("--out", default=os.environ.get("OUT", "generated/quality.csv"),
-                    help="output-CSV (default: generated/quality.csv)")
     ap.add_argument("--limit", type=int, help="bara N första filerna (för testkörning)")
     ap.add_argument("--per-page", action="store_true",
-                    help="skriv quality_pages.jsonl med en rad per sida")
-    ap.add_argument("--pages-out",
-                    default=os.environ.get("PAGES_OUT", "generated/quality_pages.jsonl"),
-                    help="output-fil för --per-page")
+                    help="bedöm även per sida och skriv till quality_pages-tabellen")
     ap.add_argument("--text-dir", default=str(TEXT_DIR),
                     help=f"katalog med .txt-filer (default: {TEXT_DIR})")
     ap.add_argument("--files-dir", default=str(FILES_DIR),
                     help=f"katalog med original-PDF:er (default: {FILES_DIR})")
     ap.add_argument("--rebuild", action="store_true",
-                    help="ignorera stämpelfil och kör om alla filer")
+                    help="ignorera inkrementell delta och kör om alla filer")
     ap.add_argument("--files-from", default="",
                     help="bedöm bara filer listade i FILE (ett filnamn per rad)")
     args = ap.parse_args()
 
     text_dir = Path(args.text_dir)
     files_dir = Path(args.files_dir)
-    out_path = Path(args.out)
-    stamp_path = out_path.parent / ".quality_stamp"
 
     if not text_dir.exists():
         print(f"Saknar {text_dir}/", file=sys.stderr)
@@ -212,85 +208,44 @@ def main() -> int:
     if args.limit:
         files_all = files_all[: args.limit]
 
-    # Inkrementell logik: ladda befintliga poäng och filtrera till bara ändrade filer.
-    # Liknar stamp-fil-mekanismen i normalize_text.py. Inaktiveras av --rebuild eller --limit.
-    cached_rows: dict[str, dict] = {}           # filename → rad från befintlig CSV
-    cached_pages: dict[tuple, dict] = {}        # (filename, page) → rad från befintlig JSONL
-    stamp_mtime: float | None = None
+    conn = state_db.connect()
+    state_db.init_schema(conn)
 
-    if not args.rebuild and not args.limit and stamp_path.exists() and out_path.exists():
-        stamp_mtime = stamp_path.stat().st_mtime
-        try:
-            with out_path.open(encoding="utf-8", newline="") as fp:
-                for row in csv.DictReader(fp):
-                    cached_rows[row["file"]] = row
-        except Exception:
-            stamp_mtime = None
-
-        if args.per_page and stamp_mtime is not None:
-            pages_path = Path(args.pages_out)
-            if pages_path.exists():
-                try:
-                    with pages_path.open(encoding="utf-8") as fp:
-                        for line in fp:
-                            try:
-                                d = json.loads(line)
-                                cached_pages[(d["file"], d["page"])] = d
-                            except Exception:
-                                pass
-                except Exception:
-                    cached_pages.clear()
-
-    if args.files_from:
+    # Filurval: --rebuild = alla; --files-from = listan; annars db-delta.
+    if args.rebuild:
+        files_to_score = files_all
+    elif args.files_from:
         listed_names: set[str] = set()
         for line in Path(args.files_from).read_text(encoding="utf-8").splitlines():
             name = line.strip()
             if name:
                 listed_names.add(name if name.endswith(".txt") else name + ".txt")
         files_to_score = [f for f in files_all if f.name in listed_names]
-        # Ladda cachad data för merge om stämpellogiken inte redan gjort det
-        if not cached_rows and not args.rebuild and out_path.exists():
-            try:
-                with out_path.open(encoding="utf-8", newline="") as fp:
-                    for row in csv.DictReader(fp):
-                        cached_rows[row["file"]] = row
-            except Exception:
-                pass
-        if args.per_page and not cached_pages:
-            pages_path = Path(args.pages_out)
-            if pages_path.exists():
-                try:
-                    with pages_path.open(encoding="utf-8") as fp:
-                        for line in fp:
-                            try:
-                                d = json.loads(line)
-                                cached_pages[(d["file"], d["page"])] = d
-                            except Exception:
-                                pass
-                except Exception:
-                    pass
-    elif stamp_mtime is not None:
-        files_to_score = [f for f in files_all if f.stat().st_mtime > stamp_mtime]
     else:
-        files_to_score = files_all
+        needing = set(state_db.files_needing_quality(conn))
+        # Fallback: filer utan pdf_files-rad behöver också bedömas (legacy/tidigare körningar
+        # innan db-state existerade — eller filer som inte gått via mark_merged ännu).
+        files_to_score = []
+        for f in files_all:
+            row = state_db.get_pdf_file(conn, f.stem)
+            if row is None or f.stem in needing:
+                files_to_score.append(f)
 
     if not files_to_score:
         print(
-            f"Alla {len(files_all)} filer oförändrade sedan stämpeln — hoppar quality-bedömning.",
+            f"Alla {len(files_all)} filer aktuella i quality-tabellen — inget att göra.",
             file=sys.stderr,
         )
         return 0
 
-    if stamp_mtime is not None:
-        prefix = (f"Bedömer {len(files_to_score)} filer"
-                  f" ({len(files_all) - len(files_to_score)} oförändrade hoppas över)…")
-    else:
-        prefix = f"Bedömer {len(files_to_score)} filer…"
+    prefix = f"Bedömer {len(files_to_score)} filer"
+    if len(files_to_score) < len(files_all):
+        prefix += f" ({len(files_all) - len(files_to_score)} oförändrade hoppas över)"
+    prefix += "…"
     print(prefix, end=" ", file=sys.stderr, flush=True)
 
     t0 = time.monotonic()
-    new_rows: list[dict] = []
-    new_pages: list[dict] = []
+    new_rows: list[dict] = []  # för terminal-stats nedan
 
     for i, f in enumerate(files_to_score, 1):
         if i % 10 == 0 or i == len(files_to_score):
@@ -309,66 +264,59 @@ def main() -> int:
             log_error("quality", f.name, str(e))
             continue
         scored = score_text(text, use_hunspell)
-        scored["file"] = f.name
-        scored["source"] = "text-layer" if original_had_text(f.stem, files_dir) else "ocr"
-        new_rows.append(scored)
+        source_type = "text-layer" if original_had_text(f.stem, files_dir) else "ocr"
+        text_mtime = f.stat().st_mtime
+
+        # Defensiv: om pdf_files saknar raden (legacy) — skapa den så att
+        # foreign-relationen håller och files_needing_* fungerar framöver.
+        if state_db.get_pdf_file(conn, f.stem) is None:
+            source = "wpu" if "wpu" in str(f).lower() else "files"
+            state_db.upsert_pdf_file(
+                conn, pdf_stem=f.stem, source=source, pdf_path=str(f),
+            )
+
+        extras = {k: scored.get(k) for k in (
+            "pct_swe", "junk_ratio", "short_word_ratio", "long_word_ratio",
+            "digit_in_word_ratio", "avg_word_len", "vowel_ratio",
+        )}
+        extras["source_type"] = source_type
+
+        try:
+            state_db.record_quality(
+                conn, pdf_stem=f.stem,
+                score=scored["score"], chars=scored["chars"],
+                text_mtime=text_mtime, extras=extras,
+            )
+        except Exception as e:  # noqa: BLE001
+            print(f"  SKIP {f.name}: db: {e}", file=sys.stderr)
+            log_error("quality", f.name, f"db: {e}")
+            continue
 
         if args.per_page:
             pages = text.split("\f") if "\f" in text else [text]
             for p_idx, page_text in enumerate(pages, start=1):
                 p_scored = score_text(page_text, use_hunspell=False)
-                p_scored["file"] = f.name
-                p_scored["page"] = p_idx
                 alnum = sum(1 for c in page_text if c.isalnum())
-                if alnum < MIN_PAGE_ALNUM:
-                    # Bildsida eller tom sida — ingen text att förbättra
-                    p_scored["score"] = 100.0
-                    p_scored["image_page"] = True
-                new_pages.append(p_scored)
+                image_page = alnum < MIN_PAGE_ALNUM
+                state_db.record_quality_page(
+                    conn, pdf_stem=f.stem, page_num=p_idx,
+                    score=(100.0 if image_page else p_scored["score"]),
+                    chars=p_scored.get("chars"),
+                    image_page=image_page,
+                    payload=p_scored,
+                )
 
-    # Slå ihop gamla (oförändrade) och nya poäng.
-    rescored_names = {r["file"] for r in new_rows}
-    current_names = {f.name for f in files_all}
-    rows: list[dict] = [
-        row for fname, row in cached_rows.items()
-        if fname not in rescored_names and fname in current_names
-    ]
-    rows.extend(new_rows)
-    rows.sort(key=lambda r: float(r.get("score") or 0))
+        # Behåll för terminal-stats nedan.
+        scored["file"] = f.name
+        scored["source"] = source_type
+        new_rows.append(scored)
 
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    cols = ["file", "source", "score", "chars", "pct_swe", "junk_ratio",
-            "short_word_ratio", "long_word_ratio", "digit_in_word_ratio",
-            "avg_word_len", "vowel_ratio"]
-    with out_path.open("w", newline="", encoding="utf-8") as fp:
-        w = csv.DictWriter(fp, fieldnames=cols, extrasaction="ignore")
-        w.writeheader()
-        w.writerows(rows)
-    cached_count = len(rows) - len(new_rows)
-    if cached_count:
-        print(f"\nUppdaterade {out_path} — {len(new_rows)} nya + {cached_count} oförändrade = {len(rows)} rader totalt.")
-    else:
-        print(f"\nSkrev {out_path} — {len(rows)} rader, sorterat värst först.")
+    print(f"\nSkrev {len(new_rows)} rader till quality-tabellen.")
 
-    if args.per_page:
-        Path(args.pages_out).parent.mkdir(parents=True, exist_ok=True)
-        with Path(args.pages_out).open("w", encoding="utf-8") as fp:
-            for (fname, _page), d in cached_pages.items():
-                if fname not in rescored_names and fname in current_names:
-                    fp.write(json.dumps(d, ensure_ascii=False) + "\n")
-            for d in new_pages:
-                fp.write(json.dumps(d, ensure_ascii=False) + "\n")
-
-    if not args.limit and not args.files_from:
-        stamp_path.touch()
-
-    # Vid inkrementell körning: visa stats för de nyligen bedömda filerna.
-    # Vid fullständig körning (ingen cache): visa stats för alla.
-    display_rows = new_rows if cached_count else rows
-    stats_label = "Nya filer" if cached_count else "Alla filer"
-    ocr = [r for r in display_rows if r.get("source") == "ocr"]
-    txt = [r for r in display_rows if r.get("source") == "text-layer"]
-    print(f"\n{stats_label}:")
+    # Stats för de bedömda filerna.
+    ocr = [r for r in new_rows if r.get("source") == "ocr"]
+    txt = [r for r in new_rows if r.get("source") == "text-layer"]
+    print("\nNya/uppdaterade filer:")
     print(f"  text-layer (original hade text):  {len(txt)}")
     print(f"  ocr (Tesseract):                  {len(ocr)}")
     if ocr:
@@ -378,11 +326,25 @@ def main() -> int:
         print(f"  OCR sidor med score < 30: {sum(1 for x in s if x < 30)}")
 
     if args.top:
-        print(f"\nVärsta {args.top} (alla källor):")
-        for r in rows[:args.top]:
-            pct = r.get("pct_swe")
-            swe = f"swe={float(pct):.0%}" if pct not in (None, "") else "swe=?"
-            print(f"  {float(r['score']):5.1f}  [{r.get('source', '?'):10}] {swe:10}  {r['file'][:90]}")
+        # Visa värsta N — om vi har nya rader, ranka dem; annars kör fallback mot db.
+        if new_rows:
+            rows_to_display = sorted(new_rows, key=lambda r: float(r.get("score") or 0))
+            print(f"\nVärsta {args.top} (av nya/uppdaterade):")
+            for r in rows_to_display[: args.top]:
+                pct = r.get("pct_swe")
+                swe = f"swe={float(pct):.0%}" if pct not in (None, "") else "swe=?"
+                print(f"  {float(r['score']):5.1f}  [{r.get('source', '?'):10}] {swe:10}  {r['file'][:90]}")
+        else:
+            print(f"\nVärsta {args.top} (från quality-tabellen):")
+            for r in conn.execute(
+                "SELECT pdf_stem, source_type, score, pct_swe FROM quality "
+                "ORDER BY score ASC LIMIT ?",
+                (args.top,),
+            ):
+                pct = r["pct_swe"]
+                swe = f"swe={float(pct):.0%}" if pct is not None else "swe=?"
+                src = r["source_type"] or "?"
+                print(f"  {float(r['score']):5.1f}  [{src:10}] {swe:10}  {r['pdf_stem']}.txt"[:120])
 
     return 0
 
