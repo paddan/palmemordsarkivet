@@ -11,12 +11,12 @@ Tre utfall per wpu-fil:
   - förlorar mot matchande palme → wpus text/+ocr/ raderas  (``lost``)
   - inom margin / saknar match   → båda behålls               (``kept``/``new``)
 
-Idempotent via ``text_wpu/<stem>.done``-marker.
+Idempotent via ``wpu_decisions``-tabellen i ``state.db``.
 
 Kör:
     python merge_wpu.py            # standardkörning
     python merge_wpu.py --dry-run  # visa beslut utan att radera
-    python merge_wpu.py --rebuild  # ignorera .done-markers
+    python merge_wpu.py --rebuild  # ignorera wpu_decisions-tabellen
     python merge_wpu.py --jobs 8   # parallella processer
 """
 
@@ -33,9 +33,10 @@ ROOT = Path(__file__).resolve().parents[1]
 FILES_WPU = ROOT / "downloaded" / "wpu_files"
 TEXT_DIR = ROOT / "generated" / "text"
 OCR_DIR = ROOT / "generated" / "ocr"
-TEXT_WPU = ROOT / "generated" / "text_wpu"
 
 sys.path.insert(0, str(ROOT / "src"))
+sys.path.insert(0, str(ROOT))
+import db as state_db  # noqa: E402
 from download_wpu import palme_id_keys, wpu_id_keys  # noqa: E402
 from quality import has_hunspell_swe, score_text  # noqa: E402
 
@@ -82,7 +83,6 @@ def _process_one(
     pdf_path: str,
     text_dir_str: str,
     ocr_dir_str: str,
-    text_wpu_str: str,
     dry_run: bool,
     rebuild: bool,
     margin: float,
@@ -90,83 +90,88 @@ def _process_one(
     pdf = Path(pdf_path)
     text_dir = Path(text_dir_str)
     ocr_dir = Path(ocr_dir_str)
-    text_wpu = Path(text_wpu_str)
     palme_map = _PALME_MAP or {}
     use_hunspell = _USE_HUNSPELL
 
     stem = pdf.stem
-    marker = text_wpu / f"{stem}.done"
 
     result: dict = {"category": None, "lines": [], "errors": []}
 
-    if not rebuild and marker.exists():
-        result["category"] = "skip"
-        return result
+    # Egen connection per worker — ProcessPoolExecutor delar inte sqlite-objekt.
+    conn = state_db.connect()
+    state_db.init_schema(conn)
 
-    wpu_txt = text_dir / f"{stem}.txt"
-    if not wpu_txt.exists():
-        result["lines"].append(
-            f"[saknar text] {stem[:70]} — kör ocr_tesseract.sh på files_wpu/ först"
-        )
-        result["category"] = "skip"
-        return result
+    try:
+        if not rebuild and state_db.wpu_decided(conn, stem):
+            result["category"] = "skip"
+            return result
 
-    wpu_raw = wpu_txt.read_text(encoding="utf-8", errors="replace")
-    wpu_score = score_text(wpu_raw, use_hunspell=use_hunspell)["score"]
-
-    matched: list[Path] = []
-    for key in wpu_id_keys(pdf.name):
-        for p in palme_map.get(key, []):
-            if p != wpu_txt and p not in matched:
-                matched.append(p)
-
-    if not matched:
-        result["lines"].append(f"[ensam]    {stem[:60]:60s} score={wpu_score:.0f}")
-        result["category"] = "new"
-        if not dry_run:
-            marker.touch()
-        return result
-
-    wpu_alive = True
-    won_any = False
-    for palme_txt in matched:
-        if not palme_txt.exists():
-            continue  # raderad i tidigare iteration
-        palme_raw = palme_txt.read_text(encoding="utf-8", errors="replace")
-        palme_score = score_text(palme_raw, use_hunspell=use_hunspell)["score"]
-
-        outcome = decide(wpu_score, palme_score, margin)
-        if outcome == "wpu":
+        wpu_txt = text_dir / f"{stem}.txt"
+        if not wpu_txt.exists():
             result["lines"].append(
-                f"[wpu wins]  {stem[:30]:30s} ({wpu_score:.0f}) > "
-                f"palme={palme_txt.stem[:30]} ({palme_score:.0f}) — raderar palme"
+                f"[saknar text] {stem[:70]} — kör ocr_tesseract.sh på files_wpu/ först"
             )
-            _delete_pair(palme_txt, ocr_dir, dry_run)
-            won_any = True
-        elif outcome == "palme":
-            result["lines"].append(
-                f"[palme wins] {palme_txt.stem[:28]:28s} ({palme_score:.0f}) > "
-                f"wpu={stem[:30]} ({wpu_score:.0f}) — raderar wpu"
-            )
-            _delete_pair(wpu_txt, ocr_dir, dry_run)
-            wpu_alive = False
-            break
+            result["category"] = "skip"
+            return result
+
+        wpu_raw = wpu_txt.read_text(encoding="utf-8", errors="replace")
+        wpu_score = score_text(wpu_raw, use_hunspell=use_hunspell)["score"]
+
+        matched: list[Path] = []
+        for key in wpu_id_keys(pdf.name):
+            for p in palme_map.get(key, []):
+                if p != wpu_txt and p not in matched:
+                    matched.append(p)
+
+        if not matched:
+            result["lines"].append(f"[ensam]    {stem[:60]:60s} score={wpu_score:.0f}")
+            result["category"] = "new"
+            if not dry_run:
+                state_db.mark_wpu_decided(conn, stem)
+            return result
+
+        wpu_alive = True
+        won_any = False
+        for palme_txt in matched:
+            if not palme_txt.exists():
+                continue  # raderad i tidigare iteration
+            palme_raw = palme_txt.read_text(encoding="utf-8", errors="replace")
+            palme_score = score_text(palme_raw, use_hunspell=use_hunspell)["score"]
+
+            outcome = decide(wpu_score, palme_score, margin)
+            if outcome == "wpu":
+                result["lines"].append(
+                    f"[wpu wins]  {stem[:30]:30s} ({wpu_score:.0f}) > "
+                    f"palme={palme_txt.stem[:30]} ({palme_score:.0f}) — raderar palme"
+                )
+                _delete_pair(palme_txt, ocr_dir, dry_run)
+                won_any = True
+            elif outcome == "palme":
+                result["lines"].append(
+                    f"[palme wins] {palme_txt.stem[:28]:28s} ({palme_score:.0f}) > "
+                    f"wpu={stem[:30]} ({wpu_score:.0f}) — raderar wpu"
+                )
+                _delete_pair(wpu_txt, ocr_dir, dry_run)
+                wpu_alive = False
+                break
+            else:
+                result["lines"].append(
+                    f"[oavgjort]  {stem[:30]:30s} ({wpu_score:.0f}) ≈ "
+                    f"palme={palme_txt.stem[:30]} ({palme_score:.0f}) — behåller båda"
+                )
+
+        if won_any:
+            result["category"] = "better"
+        elif wpu_alive:
+            result["category"] = "kept"
         else:
-            result["lines"].append(
-                f"[oavgjort]  {stem[:30]:30s} ({wpu_score:.0f}) ≈ "
-                f"palme={palme_txt.stem[:30]} ({palme_score:.0f}) — behåller båda"
-            )
+            result["category"] = "lost"
 
-    if won_any:
-        result["category"] = "better"
-    elif wpu_alive:
-        result["category"] = "kept"
-    else:
-        result["category"] = "lost"
-
-    if not dry_run and not result["errors"]:
-        marker.touch()
-    return result
+        if not dry_run and not result["errors"]:
+            state_db.mark_wpu_decided(conn, stem)
+        return result
+    finally:
+        conn.close()
 
 
 def main() -> int:
@@ -176,7 +181,7 @@ def main() -> int:
     ap.add_argument("--dry-run", action="store_true",
                     help="visa beslut utan att radera")
     ap.add_argument("--rebuild", action="store_true",
-                    help="ignorera .done-markers")
+                    help="ignorera wpu_decisions-tabellen")
     ap.add_argument("--margin", type=float, default=DEFAULT_MARGIN,
                     help=f"min poängfördel för att vinna (default: {DEFAULT_MARGIN})")
     ap.add_argument("--files-wpu", default=str(FILES_WPU),
@@ -200,8 +205,13 @@ def main() -> int:
         print(f"Saknar {text_dir}/ — kör ocr_tesseract.sh först.", file=sys.stderr)
         return 1
 
-    if not args.dry_run:
-        TEXT_WPU.mkdir(exist_ok=True)
+    # Säkerställ att schemat finns innan workerprocesser försöker skriva.
+    init_conn = state_db.connect()
+    state_db.init_schema(init_conn)
+    if args.rebuild and not args.dry_run:
+        init_conn.execute("DELETE FROM wpu_decisions")
+        init_conn.commit()
+    init_conn.close()
 
     use_hunspell = has_hunspell_swe()
     if not use_hunspell:
@@ -228,7 +238,6 @@ def main() -> int:
                 str(pdf),
                 str(text_dir),
                 str(ocr_dir),
-                str(TEXT_WPU),
                 args.dry_run,
                 args.rebuild,
                 args.margin,

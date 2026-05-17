@@ -5,6 +5,9 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
+import db as state_db
 import merge_wpu
 from merge_wpu import _process_one, decide
 
@@ -28,14 +31,24 @@ def test_decide_just_above_margin() -> None:
 
 # --- _process_one ---
 
-def _setup(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
+@pytest.fixture
+def db_env(tmp_path, monkeypatch):
+    """Sätt STATE_DB till en tmp-fil så workers/state_db.connect() går dit."""
+    db_path = tmp_path / "state.db"
+    monkeypatch.setenv("STATE_DB", str(db_path))
+    conn = state_db.connect(db_path)
+    state_db.init_schema(conn)
+    conn.close()
+    return db_path
+
+
+def _setup(tmp_path: Path) -> tuple[Path, Path, Path]:
     text = tmp_path / "text"
     ocr = tmp_path / "ocr"
     files_wpu = tmp_path / "files_wpu"
-    text_wpu = tmp_path / "text_wpu"
-    for d in (text, ocr, files_wpu, text_wpu):
+    for d in (text, ocr, files_wpu):
         d.mkdir()
-    return text, ocr, files_wpu, text_wpu
+    return text, ocr, files_wpu
 
 
 def _fake_score(text: str, use_hunspell: bool = False) -> dict:
@@ -43,21 +56,21 @@ def _fake_score(text: str, use_hunspell: bool = False) -> dict:
     return {"score": int(text.splitlines()[0])}
 
 
-def test_skips_when_wpu_text_missing(tmp_path: Path) -> None:
-    text, ocr, files_wpu, text_wpu = _setup(tmp_path)
+def test_skips_when_wpu_text_missing(tmp_path: Path, db_env: Path) -> None:
+    text, ocr, files_wpu = _setup(tmp_path)
     pdf = files_wpu / "DA14259-00.pdf"
     pdf.write_bytes(b"x")
     merge_wpu._PALME_MAP = {}
     merge_wpu._USE_HUNSPELL = False
 
-    res = _process_one(str(pdf), str(text), str(ocr), str(text_wpu), False, False, 5)
+    res = _process_one(str(pdf), str(text), str(ocr), False, False, 5)
 
     assert res["category"] == "skip"
     assert "saknar text" in res["lines"][0]
 
 
-def test_unmatched_wpu_kept_as_new(tmp_path: Path) -> None:
-    text, ocr, files_wpu, text_wpu = _setup(tmp_path)
+def test_unmatched_wpu_kept_as_new(tmp_path: Path, db_env: Path) -> None:
+    text, ocr, files_wpu = _setup(tmp_path)
     pdf = files_wpu / "DA14259-00.pdf"
     pdf.write_bytes(b"x")
     wpu_txt = text / "DA14259-00.txt"
@@ -66,15 +79,17 @@ def test_unmatched_wpu_kept_as_new(tmp_path: Path) -> None:
     merge_wpu._USE_HUNSPELL = False
 
     with patch.object(merge_wpu, "score_text", _fake_score):
-        res = _process_one(str(pdf), str(text), str(ocr), str(text_wpu), False, False, 5)
+        res = _process_one(str(pdf), str(text), str(ocr), False, False, 5)
 
     assert res["category"] == "new"
     assert wpu_txt.exists()
-    assert (text_wpu / "DA14259-00.done").exists()
+    conn = state_db.connect(db_env)
+    assert state_db.wpu_decided(conn, "DA14259-00")
+    conn.close()
 
 
-def test_wpu_wins_deletes_palme(tmp_path: Path) -> None:
-    text, ocr, files_wpu, text_wpu = _setup(tmp_path)
+def test_wpu_wins_deletes_palme(tmp_path: Path, db_env: Path) -> None:
+    text, ocr, files_wpu = _setup(tmp_path)
     pdf = files_wpu / "DA14259-00.pdf"
     pdf.write_bytes(b"x")
     wpu_txt = text / "DA14259-00.txt"
@@ -88,7 +103,7 @@ def test_wpu_wins_deletes_palme(tmp_path: Path) -> None:
     merge_wpu._USE_HUNSPELL = False
 
     with patch.object(merge_wpu, "score_text", _fake_score):
-        res = _process_one(str(pdf), str(text), str(ocr), str(text_wpu), False, False, 5)
+        res = _process_one(str(pdf), str(text), str(ocr), False, False, 5)
 
     assert res["category"] == "better"
     assert wpu_txt.exists()
@@ -96,8 +111,8 @@ def test_wpu_wins_deletes_palme(tmp_path: Path) -> None:
     assert not palme_pdf.exists()
 
 
-def test_palme_wins_deletes_wpu(tmp_path: Path) -> None:
-    text, ocr, files_wpu, text_wpu = _setup(tmp_path)
+def test_palme_wins_deletes_wpu(tmp_path: Path, db_env: Path) -> None:
+    text, ocr, files_wpu = _setup(tmp_path)
     pdf = files_wpu / "DA14259-00.pdf"
     pdf.write_bytes(b"x")
     wpu_txt = text / "DA14259-00.txt"
@@ -111,7 +126,7 @@ def test_palme_wins_deletes_wpu(tmp_path: Path) -> None:
     merge_wpu._USE_HUNSPELL = False
 
     with patch.object(merge_wpu, "score_text", _fake_score):
-        res = _process_one(str(pdf), str(text), str(ocr), str(text_wpu), False, False, 5)
+        res = _process_one(str(pdf), str(text), str(ocr), False, False, 5)
 
     assert res["category"] == "lost"
     assert not wpu_txt.exists()
@@ -119,8 +134,8 @@ def test_palme_wins_deletes_wpu(tmp_path: Path) -> None:
     assert palme_txt.exists()
 
 
-def test_tie_keeps_both(tmp_path: Path) -> None:
-    text, ocr, files_wpu, text_wpu = _setup(tmp_path)
+def test_tie_keeps_both(tmp_path: Path, db_env: Path) -> None:
+    text, ocr, files_wpu = _setup(tmp_path)
     pdf = files_wpu / "DA14259-00.pdf"
     pdf.write_bytes(b"x")
     wpu_txt = text / "DA14259-00.txt"
@@ -132,15 +147,15 @@ def test_tie_keeps_both(tmp_path: Path) -> None:
     merge_wpu._USE_HUNSPELL = False
 
     with patch.object(merge_wpu, "score_text", _fake_score):
-        res = _process_one(str(pdf), str(text), str(ocr), str(text_wpu), False, False, 5)
+        res = _process_one(str(pdf), str(text), str(ocr), False, False, 5)
 
     assert res["category"] == "kept"
     assert wpu_txt.exists()
     assert palme_txt.exists()
 
 
-def test_dry_run_does_not_delete(tmp_path: Path) -> None:
-    text, ocr, files_wpu, text_wpu = _setup(tmp_path)
+def test_dry_run_does_not_delete(tmp_path: Path, db_env: Path) -> None:
+    text, ocr, files_wpu = _setup(tmp_path)
     pdf = files_wpu / "DA14259-00.pdf"
     pdf.write_bytes(b"x")
     wpu_txt = text / "DA14259-00.txt"
@@ -152,8 +167,10 @@ def test_dry_run_does_not_delete(tmp_path: Path) -> None:
     merge_wpu._USE_HUNSPELL = False
 
     with patch.object(merge_wpu, "score_text", _fake_score):
-        res = _process_one(str(pdf), str(text), str(ocr), str(text_wpu), True, False, 5)
+        res = _process_one(str(pdf), str(text), str(ocr), True, False, 5)
 
     assert res["category"] == "better"
     assert palme_txt.exists()  # ej raderad
-    assert not (text_wpu / "DA14259-00.done").exists()  # ingen marker
+    conn = state_db.connect(db_env)
+    assert not state_db.wpu_decided(conn, "DA14259-00")  # ingen marker
+    conn.close()
