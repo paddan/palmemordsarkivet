@@ -329,6 +329,15 @@ for txt_name, pages in bad.items():
                 normalize_file(txt_file)
             except Exception as e:  # noqa: BLE001
                 print(f"  [normalize] FEL {stem}: {e}", file=sys.stderr)
+            # Stämpla text_mtime i state.db så normalize-stegen ser filen som hanterad.
+            try:
+                import db as _db
+                _conn = _db.connect()
+                _db.init_schema(_conn)
+                _db.mark_normalized(_conn, stem, text_mtime=txt_file.stat().st_mtime)
+                _conn.close()
+            except Exception as e:  # noqa: BLE001
+                print(f"  [normalize-stamp] FEL {stem}: {e}", file=sys.stderr)
     else:
         print(f"  → FEL ({took:.0f}s)", file=sys.stderr)
 PYEOF

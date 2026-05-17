@@ -274,6 +274,8 @@ def main() -> int:
             state_db.upsert_pdf_file(
                 conn, pdf_stem=f.stem, source=source, pdf_path=str(f),
             )
+            # Stämpla text_mtime så normalize/merge inte ser filen som "obesvarad".
+            state_db.mark_merged(conn, f.stem, text_mtime=f.stat().st_mtime)
 
         extras = {k: scored.get(k) for k in (
             "pct_swe", "junk_ratio", "short_word_ratio", "long_word_ratio",
