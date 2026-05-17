@@ -315,6 +315,7 @@ def detect_redactions_file(
                 state_db.mark_redaction_checked(conn, pdf.stem, has_redactions=has_red)
         except Exception:
             pass
+        marker.unlink(missing_ok=True)
         return 0
     if not txt_file.exists():
         return 0
@@ -386,9 +387,7 @@ def detect_redactions_file(
     if updated:
         txt_file.write_text("\f".join(pages_text), encoding="utf-8")
 
-    marker.write_text("", encoding="utf-8")
-
-    # Skriv även till state.db — autoritativ källa efter Task 12.
+    # Skriv till state.db — autoritativ källa (inga .redact-filer skapas längre).
     try:
         conn = state_db.connect()
         state_db.init_schema(conn)
