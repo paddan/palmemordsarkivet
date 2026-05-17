@@ -97,6 +97,13 @@ CREATE TABLE IF NOT EXISTS ingest (
     chunks      INTEGER,
     indexed_at  TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS llm_corrections (
+    pdf_stem     TEXT NOT NULL,
+    page_num     INTEGER NOT NULL,
+    corrected_at TEXT NOT NULL,
+    PRIMARY KEY (pdf_stem, page_num)
+);
 """
 
 
@@ -431,6 +438,31 @@ def get_ingested_mtime(
         "SELECT text_mtime FROM ingest WHERE pdf_stem=?", (pdf_stem,)
     ).fetchone()
     return row["text_mtime"] if row else None
+
+
+# --- llm_corrections --------------------------------------------------
+
+def mark_llm_corrected(
+    conn: sqlite3.Connection, pdf_stem: str, page_num: int
+) -> None:
+    """Markera att en sida LLM-korrigerats. UPSERT — idempotent."""
+    conn.execute(
+        """INSERT INTO llm_corrections(pdf_stem, page_num, corrected_at)
+           VALUES (?, ?, ?)
+           ON CONFLICT(pdf_stem, page_num) DO UPDATE SET corrected_at=excluded.corrected_at""",
+        (pdf_stem, page_num, now()),
+    )
+    conn.commit()
+
+
+def llm_corrected(
+    conn: sqlite3.Connection, pdf_stem: str, page_num: int
+) -> bool:
+    """Sann om sidan redan LLM-korrigerats."""
+    return conn.execute(
+        "SELECT 1 FROM llm_corrections WHERE pdf_stem=? AND page_num=?",
+        (pdf_stem, page_num),
+    ).fetchone() is not None
 
 
 # --- delta-queries (inkrementell logik) -------------------------------

@@ -1,10 +1,12 @@
 """LLM-baserad post-korrektion av dåliga OCR-sidor.
 
-Läser quality_pages.jsonl, identifierar sidor under score-tröskeln,
+Hämtar dåliga sidor från ``quality_pages``-tabellen (db.get_bad_pages),
 skickar sidtexten till vald LLM (Claude eller OpenAI-kompatibel) för
-rättning och slår ihop resultatet via merge_pages.merge_one.
+rättning och skriver tillbaka via ``db.record_page(engine='llm', ...)``.
+Efter en fil är klar kör ``merge_pages.merge_one`` som läser senaste
+text per sida ur ``pdf_pages`` och uppdaterar ``text/<stem>.txt``.
 
-Idempotent: sidor med en .llm-markörfil i text_pages/<stem>/ hoppas över.
+Idempotent: sidor som finns i ``llm_corrections``-tabellen hoppas över.
 
 Kör:
     python llm_correct.py [--threshold 50] [--provider claude|openai]
@@ -12,7 +14,6 @@ Kör:
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import sys
 import time
@@ -30,6 +31,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from normalize_text import normalize  # noqa: E402
 import config as _llm_config  # noqa: E402
+import db as state_db  # noqa: E402
 
 HAIKU_MODEL = "claude-haiku-4-5-20251001"
 
@@ -160,7 +162,6 @@ async def _test_mode(txt_path: Path, provider_cfg: dict, threshold: float) -> No
 async def _correct_all(
     bad: dict[str, list[int]],
     txt_dir: Path,
-    pages_dir: Path,
     provider_cfg: dict,
     dry_run: bool,
 ) -> None:
@@ -169,6 +170,9 @@ async def _correct_all(
     total = sum(len(v) for v in bad.values())
     done = 0
     t0 = time.monotonic()
+
+    conn = state_db.connect()
+    state_db.init_schema(conn)
 
     for txt_name, pages in bad.items():
         stem = txt_name[:-4] if txt_name.endswith('.txt') else txt_name
@@ -179,11 +183,8 @@ async def _correct_all(
 
         full_text = txt_path.read_text(encoding='utf-8', errors='replace')
         page_texts = full_text.split('\f')
-        stem_dir = pages_dir / stem
-        stem_dir.mkdir(parents=True, exist_ok=True)
 
         file_changed = False
-        pending_markers: list[Path] = []
         for p in sorted(set(pages)):
             idx = p - 1
             if idx < 0 or idx >= len(page_texts):
@@ -199,28 +200,30 @@ async def _correct_all(
             eta_s = f'{eta // 60}m{eta % 60:02d}s'
             if not page_text.strip():
                 print(f'  [{done}/{total}] {stem} sida {p}: tom — hoppar  eta {eta_s}')
-                (stem_dir / f'page-{p:03d}.llm').touch()
+                state_db.mark_llm_corrected(conn, stem, p)
                 continue
 
             print(f'  [{done}/{total}] {stem} sida {p} ({len(page_text)} tecken)  eta {eta_s}')
             if dry_run:
                 continue
 
-            corrected = await _correct_text(page_text, provider_cfg)
-            (stem_dir / f'page-{p:03d}.txt').write_text(
-                normalize(corrected), encoding='utf-8'
+            corrected = normalize(await _correct_text(page_text, provider_cfg))
+            state_db.record_page(
+                conn,
+                pdf_stem=stem,
+                page_num=p,
+                engine='llm',
+                text=corrected,
+                score=None,
             )
-            pending_markers.append(stem_dir / f'page-{p:03d}.llm')
+            state_db.mark_llm_corrected(conn, stem, p)
             file_changed = True
 
         if file_changed and not dry_run:
             try:
-                merge_one(stem, txt_dir, pages_dir)
+                merge_one(stem, txt_dir)
             except Exception as e:  # noqa: BLE001
                 print(f'  [merge-fel] {stem}: {e}', file=sys.stderr)
-            finally:
-                for _m in pending_markers:
-                    _m.touch()
 
 
 def main() -> None:
@@ -238,12 +241,8 @@ def main() -> None:
                     help='override API-URL för OpenAI-kompatibla providers (Ollama, DeepSeek, ...)')
     ap.add_argument('--api-key', default='',
                     help='override API-nyckel (annars läses från env)')
-    ap.add_argument('--pages-jsonl', default='',
-                    help='quality_pages.jsonl (default: <root>/quality_pages.jsonl)')
     ap.add_argument('--txt', default='',
                     help='text-katalog (default: <root>/text)')
-    ap.add_argument('--pages-out', default='',
-                    help='text_pages-katalog (default: <root>/text_pages)')
     ap.add_argument('--root', default='', help='projektrot')
     ap.add_argument('--dry-run', action='store_true',
                     help='visa vad som skulle rättas utan att göra det')
@@ -252,9 +251,7 @@ def main() -> None:
     args = ap.parse_args()
 
     root = Path(args.root) if args.root else ROOT
-    jsonl = Path(args.pages_jsonl) if args.pages_jsonl else root / 'generated' / 'quality_pages.jsonl'
     txt_dir = Path(args.txt) if args.txt else root / 'generated' / 'text'
-    pages_dir = Path(args.pages_out) if args.pages_out else root / 'generated' / 'text_pages'
 
     saved_cfg = _llm_config.load()
     provider = args.provider or saved_cfg.get("provider", "claude")
@@ -281,30 +278,24 @@ def main() -> None:
         asyncio.run(_test_mode(txt_path, provider_cfg, args.threshold))
         return
 
-    if not jsonl.exists():
-        print(f'Saknar {jsonl} — kör ./quality.sh --per-page först.', file=sys.stderr)
-        sys.exit(1)
+    conn = state_db.connect()
+    state_db.init_schema(conn)
 
-    # Samla dåliga sidor ur JSONL
     raw: dict[str, list[int]] = defaultdict(list)
-    with open(jsonl, encoding='utf-8') as f:
-        for line in f:
-            try:
-                row = json.loads(line)
-            except Exception:
-                continue
-            score = float(row.get('score') or 0.0)
-            if score < args.threshold:
-                raw[row['file']].append(int(row['page']))
+    for row in state_db.get_bad_pages(conn, threshold=args.threshold):
+        raw[row["pdf_stem"] + ".txt"].append(row["page_num"])
+    if not raw:
+        print(f'Inga sidor under threshold {args.threshold} i quality_pages '
+              '— kör ./quality.sh --per-page först.')
+        return
 
-    # Filtrera bort sidor som redan är rättade (.llm-markör)
+    # Filtrera bort sidor som redan är rättade (llm_corrections-tabellen)
     bad: dict[str, list[int]] = defaultdict(list)
     skipped = 0
     for txt_name, pages in raw.items():
         stem = txt_name[:-4] if txt_name.endswith('.txt') else txt_name
-        stem_dir = pages_dir / stem
         for p in pages:
-            if (stem_dir / f'page-{p:03d}.llm').exists():
+            if state_db.llm_corrected(conn, stem, p):
                 skipped += 1
             else:
                 bad[txt_name].append(p)
@@ -320,7 +311,7 @@ def main() -> None:
     if args.dry_run:
         print('[dry-run — inga filer skrivs]')
 
-    asyncio.run(_correct_all(bad, txt_dir, pages_dir, provider_cfg, args.dry_run))
+    asyncio.run(_correct_all(bad, txt_dir, provider_cfg, args.dry_run))
 
     if not args.dry_run:
         print('\nKlart. Kör ./quality.sh för att se förbättringen.')

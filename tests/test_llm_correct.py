@@ -118,15 +118,13 @@ def test_openai_uses_local_as_fallback_api_key():
     assert captured_kwargs["base_url"] == "http://localhost:11434/v1"
 
 
-def test_correct_all_dispatches_to_claude(tmp_path):
+def test_correct_all_dispatches_to_claude(tmp_path, monkeypatch):
+    monkeypatch.setenv("STATE_DB", str(tmp_path / "state.db"))
     txt_dir = tmp_path / "text"
     txt_dir.mkdir()
-    pages_dir = tmp_path / "text_pages"
-    pages_dir.mkdir()
 
     stem = "testdok"
     (txt_dir / f"{stem}.txt").write_text("sida ett\fsida två", encoding="utf-8")
-    (pages_dir / stem).mkdir()
 
     provider_cfg = {
         "provider": "claude",
@@ -140,22 +138,19 @@ def test_correct_all_dispatches_to_claude(tmp_path):
         asyncio.run(_correct_all(
             bad={"testdok.txt": [1]},
             txt_dir=txt_dir,
-            pages_dir=pages_dir,
             provider_cfg=provider_cfg,
             dry_run=False,
         ))
     mock_claude.assert_called_once()
 
 
-def test_correct_all_dispatches_to_openai(tmp_path):
+def test_correct_all_dispatches_to_openai(tmp_path, monkeypatch):
+    monkeypatch.setenv("STATE_DB", str(tmp_path / "state.db"))
     txt_dir = tmp_path / "text"
     txt_dir.mkdir()
-    pages_dir = tmp_path / "text_pages"
-    pages_dir.mkdir()
 
     stem = "testdok"
     (txt_dir / f"{stem}.txt").write_text("sida ett\fsida två", encoding="utf-8")
-    (pages_dir / stem).mkdir()
 
     provider_cfg = {
         "provider": "openai",
@@ -169,7 +164,6 @@ def test_correct_all_dispatches_to_openai(tmp_path):
         asyncio.run(_correct_all(
             bad={"testdok.txt": [1]},
             txt_dir=txt_dir,
-            pages_dir=pages_dir,
             provider_cfg=provider_cfg,
             dry_run=False,
         ))

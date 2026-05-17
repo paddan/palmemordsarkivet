@@ -13,6 +13,7 @@ from db import (
     record_page, page_exists, get_pages_for_stem,
     record_quality, record_quality_page, get_bad_pages,
     record_ingest, get_ingested_mtime,
+    mark_llm_corrected, llm_corrected,
     files_needing_normalize, files_needing_quality, files_needing_ingest,
 )
 
@@ -200,6 +201,16 @@ def test_bad_pages(tmp_path):
     bad = get_bad_pages(conn, threshold=50.0)
     # page 3 är image_page → filtreras bort
     assert [(b["pdf_stem"], b["page_num"]) for b in bad] == [("s1", 1)]
+
+
+def test_llm_corrections(tmp_path):
+    conn = _fresh(tmp_path)
+    assert not llm_corrected(conn, "s1", 1)
+    mark_llm_corrected(conn, "s1", 1)
+    assert llm_corrected(conn, "s1", 1)
+    mark_llm_corrected(conn, "s1", 1)  # idempotent
+    n = conn.execute("SELECT COUNT(*) FROM llm_corrections").fetchone()[0]
+    assert n == 1
 
 
 def test_parallel_page_writes(tmp_path):
