@@ -17,7 +17,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-DEFAULT_DB: Path = Path(os.environ.get("STATE_DB", str(ROOT / "generated" / "state.db")))
+DEFAULT_DB: Path = Path(os.environ.get("STATE_DB", str(ROOT / "generated" / "db" / "state.db")))
 
 SCHEMA_VERSION: int = 1
 

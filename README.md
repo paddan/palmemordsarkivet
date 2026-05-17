@@ -60,10 +60,10 @@ Eller steg för steg:
 
 Varje steg är idempotent — avbryt och fortsätt när som helst.
 
-## State-databas (`generated/state.db`)
+## State-databas (`generated/db/state.db`)
 
-Alla pipeline-markörer och status lagras i SQLite (`generated/state.db`).
-Inspektera med t.ex. `sqlite3 generated/state.db`. Tabellerna:
+Alla pipeline-markörer och status lagras i SQLite (`generated/db/state.db`).
+Inspektera med t.ex. `sqlite3 generated/db/state.db`. Tabellerna:
 
 - `downloads` — Drive- och wpu-nedladdningar (drive_id, sha1, filename)
 - `pdf_files` — per-PDF-status (redaction_checked_at, merged_at, normalized_at, text_mtime)
@@ -78,7 +78,7 @@ idempotent. När pipelinen verifierats mot state.db i några körningar kan
 `cleanup_legacy_state.sh` köras för att ta bort gamla filmarkörer (manifest.csv,
 stamp-filer, .redact, page-*.json, quality.csv/jsonl, text_wpu/*.done).
 
-**Livscykel:** radera inte `generated/state.db` mitt under en pågående
+**Livscykel:** radera inte `generated/db/state.db` mitt under en pågående
 pipeline-körning. Befintliga processer fortsätter skriva mot den unlinkade inoden
 medan nya processer skapar en tom db — det ger inkonsekvent state. Om databasen
 har raderats, kör `./migrate_to_db.sh` innan nästa körning för att återskapa
@@ -436,7 +436,7 @@ lokalt (via `open`) i en gömd iframe så huvudsidan inte laddas om.
 | `src/rag/mcp_server.py` | MCP-server med `search_archive` och `get_page` (startas av ask.py/webui.py) |
 | `src/webui.py` | Streamlit-webgränssnitt för frågor (RAG + MCP-toggle) |
 | `web.sh` | Wrapper för Streamlit-servern |
-| `migrate_to_db.sh` → `src/migrate_to_db.py` | Engångsmigrering: legacy filmarkörer → `generated/state.db` |
+| `migrate_to_db.sh` → `src/migrate_to_db.py` | Engångsmigrering: legacy filmarkörer → `generated/db/state.db` |
 | `cleanup_legacy_state.sh` | Tar bort gamla filmarkörer efter migrering (manifest.csv, stamp-filer, .redact, page-*.json, quality.csv/jsonl) |
 | `src/db.py` | SQLite-state: schema + CRUD + delta-queries (importeras av övriga skript) |
 | `tessdata/swe.user-words` | Palme-specifika ord (committat) |
@@ -501,7 +501,7 @@ bash via `>> "$ROOT/generated/errors.log"`. Append-only, idempotent.
 
 ```
 downloaded/   — nedladdade PDF:er (files/, wpu_files/)
-generated/    — allt pipeline-genererat (text/, ocr/, lancedb/, state.db, errors.log, …)
+generated/    — allt pipeline-genererat (text/, ocr/, lancedb/, db/state.db, errors.log, …)
 tessdata/*.traineddata  — laddas av setup_tessdata.sh
 ```
 

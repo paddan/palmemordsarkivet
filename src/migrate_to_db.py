@@ -272,11 +272,11 @@ def main() -> int:
     )
     ap.add_argument("--root", default=str(ROOT), help="projektrot")
     ap.add_argument("--db", default=None,
-                    help="path till state.db (default: <root>/generated/state.db)")
+                    help="path till state.db (default: <root>/generated/db/state.db)")
     args = ap.parse_args()
 
     root = Path(args.root)
-    db_path = Path(args.db) if args.db else root / "generated" / "state.db"
+    db_path = Path(args.db) if args.db else root / "generated" / "db" / "state.db"
     conn = db.connect(db_path)
     db.init_schema(conn)
     stats = migrate(conn, root)

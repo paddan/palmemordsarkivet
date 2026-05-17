@@ -24,7 +24,7 @@ Pipeline: download → OCR (Tesseract + optional Surya) → detect redactions �
 ```
 src/
   db.py                # SQLite-state: schema + CRUD + delta-queries för hela pipelinen
-  migrate_to_db.py     # Engångsmigrering: legacy filstate → generated/state.db
+  migrate_to_db.py     # Engångsmigrering: legacy filstate → generated/db/state.db
   download.py          # Google Drive PDF downloader (state via db.py)
   quality.py           # OCR quality scoring (0–100 heuristics + optional hunspell)
   ocr_pages.py         # Per-page OCR pipeline (Tesseract/Surya) + redaktionsdetektering
@@ -46,7 +46,7 @@ Data-kataloger (gitignored):
 - `downloaded/files/`, `downloaded/wpu_files/` — PDF:er
 - `generated/text/` — OCR-text, `generated/text_pages/` — per-sida-artefakter
 - `generated/lancedb/` — vektorindex
-- `generated/state.db` — SQLite-databas med all pipeline-state (markörer, kvalitet, ingest-mtime)
+- `generated/db/state.db` — SQLite-databas med all pipeline-state (markörer, kvalitet, ingest-mtime). WAL-filer (`state.db-wal`, `state.db-shm`) ligger bredvid.
 - `generated/errors.log` — fellog
 
 ## Commands
@@ -79,7 +79,7 @@ Env-variabler: `CLAUDE_CODE_OAUTH_TOKEN` (Pro/Max, räknas mot prenumeration) el
 
 **MCP-läge (webui.py)**: Konversationskontinuitet uppnås genom att fånga `session_id` från `ResultMessage` och skicka tillbaka det som `ClaudeAgentOptions(resume=...)` på nästa fråga. "Ny konversation" nollställer `chat_history` + `mcp_session_id`.
 
-**SQLite-state (`generated/state.db`)**: all operativ pipeline-state lever här —
+**SQLite-state (`generated/db/state.db`)**: all operativ pipeline-state lever här —
 downloads, per-PDF-status (redaktion/merge/normalize), per-sida OCR-resultat,
 kvalitetspoäng, LLM-korrigeringar och ingest-tracking. Inkrementell logik
 bygger på att jämföra `pdf_files.text_mtime` mot `normalized_at`/`scored_at`/etc.
@@ -101,4 +101,4 @@ befintliga filer.
 3. **Surya-prestanda**: ~30–100 s/sida vs ~1 s/sida för Tesseract. Körs bara på sidor under threshold.
 4. **FTS kräver tantivy**: Saknas det faller hybrid-sökning tillbaka på vektor-only.
 5. **OAuth vs API**: `CLAUDE_CODE_OAUTH_TOKEN` räknas mot Pro/Max-prenumerationen; `ANTHROPIC_API_KEY` drar API-credits.
-6. **SQLite WAL-filer**: `generated/state.db-wal` och `-shm` är normala WAL-filer och syncas vid checkpoint. Säkerhetskopiera alla tre samtidigt.
+6. **SQLite WAL-filer**: `generated/db/state.db-wal` och `-shm` är normala WAL-filer och syncas vid checkpoint. Säkerhetskopiera alla tre samtidigt.
