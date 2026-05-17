@@ -104,11 +104,16 @@ def now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
-def connect(path: Path = DEFAULT_DB) -> sqlite3.Connection:
+def connect(path: Path | None = None) -> sqlite3.Connection:
     """Öppna SQLite-anslutning med WAL, foreign keys och rimliga defaults.
 
-    Skapar förälder-katalog vid behov.
+    Skapar förälder-katalog vid behov. Om ``path`` är ``None`` läses
+    ``STATE_DB`` från miljön vid anropstillfället (faller annars tillbaka
+    på ``DEFAULT_DB``) — det gör att tester kan monkeypatcha env-variabeln
+    efter att modulen importerats.
     """
+    if path is None:
+        path = Path(os.environ.get("STATE_DB") or DEFAULT_DB)
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(path), timeout=30.0)
@@ -125,5 +130,136 @@ def init_schema(conn: sqlite3.Connection) -> None:
     conn.execute(
         "INSERT OR IGNORE INTO schema_version(version, applied_at) VALUES (?, ?)",
         (SCHEMA_VERSION, now()),
+    )
+    conn.commit()
+
+
+# --- downloads --------------------------------------------------------
+
+def record_download(
+    conn: sqlite3.Connection,
+    *,
+    source: str,
+    filename: str,
+    drive_id: str | None = None,
+    url: str | None = None,
+    sha1: str | None = None,
+    bytes_: int | None = None,
+    note: str | None = None,
+) -> None:
+    """Skriv eller uppdatera en download-rad (UPSERT på source+drive_id/url)."""
+    if drive_id is None and url is None:
+        raise ValueError("record_download kräver antingen drive_id eller url")
+    conn.execute(
+        """
+        INSERT INTO downloads(source, drive_id, url, filename, sha1, bytes,
+                              downloaded_at, note)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(source, COALESCE(drive_id, url)) DO UPDATE SET
+            filename      = excluded.filename,
+            sha1          = excluded.sha1,
+            bytes         = excluded.bytes,
+            downloaded_at = excluded.downloaded_at,
+            note          = excluded.note
+        """,
+        (source, drive_id, url, filename, sha1, bytes_, now(), note),
+    )
+    conn.commit()
+
+
+def is_downloaded(
+    conn: sqlite3.Connection,
+    *,
+    source: str,
+    drive_id: str | None = None,
+    url: str | None = None,
+) -> bool:
+    if drive_id is not None:
+        row = conn.execute(
+            "SELECT 1 FROM downloads WHERE source=? AND drive_id=?",
+            (source, drive_id),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT 1 FROM downloads WHERE source=? AND url=?",
+            (source, url),
+        ).fetchone()
+    return row is not None
+
+
+def find_download_by_sha1(
+    conn: sqlite3.Connection, sha1: str
+) -> sqlite3.Row | None:
+    return conn.execute(
+        "SELECT * FROM downloads WHERE sha1=? LIMIT 1", (sha1,)
+    ).fetchone()
+
+
+# --- pdf_files --------------------------------------------------------
+
+def upsert_pdf_file(
+    conn: sqlite3.Connection,
+    *,
+    pdf_stem: str,
+    source: str,
+    pdf_path: str,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO pdf_files(pdf_stem, source, pdf_path)
+        VALUES (?, ?, ?)
+        ON CONFLICT(pdf_stem) DO UPDATE SET
+            source   = excluded.source,
+            pdf_path = excluded.pdf_path
+        """,
+        (pdf_stem, source, pdf_path),
+    )
+    conn.commit()
+
+
+def get_pdf_file(
+    conn: sqlite3.Connection, pdf_stem: str
+) -> sqlite3.Row | None:
+    return conn.execute(
+        "SELECT * FROM pdf_files WHERE pdf_stem=?", (pdf_stem,)
+    ).fetchone()
+
+
+def mark_redaction_checked(
+    conn: sqlite3.Connection, pdf_stem: str, *, has_redactions: bool
+) -> None:
+    conn.execute(
+        """UPDATE pdf_files
+           SET redaction_checked_at=?, has_redactions=?
+           WHERE pdf_stem=?""",
+        (now(), 1 if has_redactions else 0, pdf_stem),
+    )
+    conn.commit()
+
+
+def redaction_checked(conn: sqlite3.Connection, pdf_stem: str) -> bool:
+    row = conn.execute(
+        "SELECT redaction_checked_at FROM pdf_files WHERE pdf_stem=?",
+        (pdf_stem,),
+    ).fetchone()
+    return bool(row and row["redaction_checked_at"])
+
+
+def mark_merged(
+    conn: sqlite3.Connection, pdf_stem: str, *, text_mtime: float
+) -> None:
+    conn.execute(
+        "UPDATE pdf_files SET merged_at=?, text_mtime=? WHERE pdf_stem=?",
+        (now(), text_mtime, pdf_stem),
+    )
+    conn.commit()
+
+
+def mark_normalized(
+    conn: sqlite3.Connection, pdf_stem: str, *, text_mtime: float
+) -> None:
+    conn.execute(
+        "UPDATE pdf_files SET normalized_at=?, text_mtime=? WHERE pdf_stem=?",
+        (now(), text_mtime, pdf_stem),
     )
     conn.commit()
