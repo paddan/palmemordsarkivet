@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
+import db as state_db
 from merge_pages import merge_one, merge_text
 
 
@@ -58,105 +58,105 @@ def test_empty_pages_preserved() -> None:
     assert merge_text("A.\f\fC.", {1: "X"}) == "X\f\fC."
 
 
-# --- merge_one (med cleanup) ---
+# --- merge_one (db-baserad) ---
 
 
-def _setup(tmp_path: Path, original: str = "A.\fB.\fC.") -> tuple[Path, Path, Path]:
+def _setup(
+    tmp_path: Path, monkeypatch, original: str = "A.\fB.\fC.",
+    stem: str = "doc",
+) -> Path:
+    """Sätt upp tmp text-katalog och tom STATE_DB. Returnerar txt_dir."""
     txt_dir = tmp_path / "text"
-    pages_dir = tmp_path / "text_pages"
     txt_dir.mkdir()
-    pages_dir.mkdir()
-    (txt_dir / "doc.txt").write_text(original, encoding="utf-8")
-    stem_dir = pages_dir / "doc"
-    stem_dir.mkdir()
-    return txt_dir, pages_dir, stem_dir
+    (txt_dir / f"{stem}.txt").write_text(original, encoding="utf-8")
+
+    db_path = tmp_path / "state.db"
+    monkeypatch.setenv("STATE_DB", str(db_path))
+    conn = state_db.connect(db_path)
+    state_db.init_schema(conn)
+    state_db.upsert_pdf_file(
+        conn, pdf_stem=stem, source="files",
+        pdf_path=f"downloaded/files/{stem}.pdf",
+    )
+    conn.close()
+    return txt_dir
 
 
-def test_merge_one_writes_merged_text(tmp_path: Path) -> None:
-    txt_dir, pages_dir, stem_dir = _setup(tmp_path)
-    (stem_dir / "page-002.txt").write_text("NY", encoding="utf-8")
-    (stem_dir / "page-002.json").write_text('{"score": 90}', encoding="utf-8")
+def _add_page(stem: str, page_num: int, text: str) -> None:
+    conn = state_db.connect()
+    state_db.init_schema(conn)
+    state_db.record_page(
+        conn, pdf_stem=stem, page_num=page_num,
+        engine="tesseract", text=text, score=90.0,
+    )
+    conn.close()
 
-    assert merge_one("doc", txt_dir, pages_dir) is True
+
+def test_merge_one_writes_merged_text(tmp_path: Path, monkeypatch) -> None:
+    txt_dir = _setup(tmp_path, monkeypatch)
+    _add_page("doc", 2, "NY")
+
+    assert merge_one("doc", txt_dir) is True
     assert (txt_dir / "doc.txt").read_text(encoding="utf-8") == "A.\fNY\fC."
 
 
-def test_merge_one_removes_page_txt_but_keeps_json(tmp_path: Path) -> None:
-    # .json är idempotens-markör för ocr_pages.py och ska INTE raderas.
-    txt_dir, pages_dir, stem_dir = _setup(tmp_path)
-    (stem_dir / "page-002.txt").write_text("NY", encoding="utf-8")
-    (stem_dir / "page-002.json").write_text('{"score": 90}', encoding="utf-8")
+def test_merge_one_marks_merged_at(tmp_path: Path, monkeypatch) -> None:
+    txt_dir = _setup(tmp_path, monkeypatch)
+    _add_page("doc", 2, "NY")
 
-    merge_one("doc", txt_dir, pages_dir)
+    assert merge_one("doc", txt_dir) is True
 
-    assert not (stem_dir / "page-002.txt").exists()
-    assert (stem_dir / "page-002.json").exists()
-
-
-def test_merge_one_removes_page_png(tmp_path: Path) -> None:
-    txt_dir, pages_dir, stem_dir = _setup(tmp_path)
-    (stem_dir / "page-002.txt").write_text("NY", encoding="utf-8")
-    (stem_dir / "page-002.png").write_bytes(b"\x89PNG\r\n")
-
-    merge_one("doc", txt_dir, pages_dir)
-
-    assert not (stem_dir / "page-002.png").exists()
+    conn = state_db.connect()
+    row = state_db.get_pdf_file(conn, "doc")
+    conn.close()
+    assert row is not None
+    assert row["merged_at"] is not None
+    assert row["text_mtime"] is not None
+    assert row["text_mtime"] == (txt_dir / "doc.txt").stat().st_mtime
 
 
-def test_merge_one_removes_combined_txt(tmp_path: Path) -> None:
-    # Legacy: ocr_pages.py kunde tidigare skapa text_pages/<stem>.txt.
-    txt_dir, pages_dir, stem_dir = _setup(tmp_path)
-    (stem_dir / "page-002.txt").write_text("NY", encoding="utf-8")
-    combined = pages_dir / "doc.txt"
-    combined.write_text("ofullständig combined", encoding="utf-8")
+def test_merge_one_pads_for_pages_beyond_original(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    # Originalet har 3 sidor men pdf_pages har en sida 5 — merge_one ska
+    # expandera text/ med tomma sidor så texten hamnar rätt.
+    txt_dir = _setup(tmp_path, monkeypatch)
+    _add_page("doc", 2, "NY")
+    _add_page("doc", 5, "UTANFÖR")
 
-    merge_one("doc", txt_dir, pages_dir)
-
-    assert not combined.exists()
-
-
-def test_merge_one_pads_for_pages_beyond_original(tmp_path: Path) -> None:
-    # Originalet har 3 sidor men text_pages har page-005 — merge_one ska
-    # expandera text/ med tomma sidor så Surya-texten hamnar rätt.
-    txt_dir, pages_dir, stem_dir = _setup(tmp_path)
-    (stem_dir / "page-002.txt").write_text("NY", encoding="utf-8")
-    (stem_dir / "page-005.txt").write_text("UTANFÖR", encoding="utf-8")
-
-    merge_one("doc", txt_dir, pages_dir)
-
+    assert merge_one("doc", txt_dir) is True
     assert (txt_dir / "doc.txt").read_text(encoding="utf-8") == "A.\fNY\fC.\f\fUTANFÖR"
-    assert not (stem_dir / "page-002.txt").exists()
-    assert not (stem_dir / "page-005.txt").exists()
 
 
-def test_merge_one_idempotent(tmp_path: Path) -> None:
-    # Andra körningen ska inte göra något (alla per-sida-txt är redan borta).
-    txt_dir, pages_dir, stem_dir = _setup(tmp_path)
-    (stem_dir / "page-002.txt").write_text("NY", encoding="utf-8")
-    (stem_dir / "page-002.json").write_text('{"score": 90}', encoding="utf-8")
+def test_merge_one_idempotent(tmp_path: Path, monkeypatch) -> None:
+    # Andra körningen ger samma resultat → text_changed=False → returnerar False.
+    txt_dir = _setup(tmp_path, monkeypatch)
+    _add_page("doc", 2, "NY")
 
-    assert merge_one("doc", txt_dir, pages_dir) is True
+    assert merge_one("doc", txt_dir) is True
     text_after_first = (txt_dir / "doc.txt").read_text(encoding="utf-8")
 
-    assert merge_one("doc", txt_dir, pages_dir) is False
+    assert merge_one("doc", txt_dir) is False
     assert (txt_dir / "doc.txt").read_text(encoding="utf-8") == text_after_first
 
 
-def test_merge_one_no_updates_returns_false(tmp_path: Path) -> None:
-    # Mappen finns men inga page-NNN.txt → inget att göra.
-    txt_dir, pages_dir, _ = _setup(tmp_path)
-    assert merge_one("doc", txt_dir, pages_dir) is False
+def test_merge_one_no_pages_returns_false(tmp_path: Path, monkeypatch) -> None:
+    # Inga rader i pdf_pages → inget att göra.
+    txt_dir = _setup(tmp_path, monkeypatch)
+    assert merge_one("doc", txt_dir) is False
 
 
-def test_merge_one_cleans_up_when_text_already_merged(tmp_path: Path) -> None:
-    # Vanligt vid retroaktiv städning: texten i text/ är redan korrekt
-    # (mergad i en tidigare körning) men page-NNN.txt ligger kvar.
-    # merge_one ska radera artefakterna ändå.
-    txt_dir, pages_dir, stem_dir = _setup(tmp_path, original="A.\fNY\fC.")
-    (stem_dir / "page-002.txt").write_text("NY", encoding="utf-8")
-    (stem_dir / "page-002.png").write_bytes(b"\x89PNG\r\n")
+def test_merge_one_missing_txt_returns_false(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    # Saknad text/<stem>.txt — kan inte mergas mot något.
+    txt_dir = tmp_path / "text"
+    txt_dir.mkdir()
+    db_path = tmp_path / "state.db"
+    monkeypatch.setenv("STATE_DB", str(db_path))
+    conn = state_db.connect(db_path)
+    state_db.init_schema(conn)
+    conn.close()
+    _add_page("doc", 1, "NY")
 
-    assert merge_one("doc", txt_dir, pages_dir) is True
-    assert (txt_dir / "doc.txt").read_text(encoding="utf-8") == "A.\fNY\fC."
-    assert not (stem_dir / "page-002.txt").exists()
-    assert not (stem_dir / "page-002.png").exists()
+    assert merge_one("doc", txt_dir) is False

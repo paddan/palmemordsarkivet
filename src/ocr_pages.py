@@ -471,13 +471,12 @@ def main() -> int:
         if only_pages is not None and page_num not in only_pages:
             continue
 
-        txt_path = stem_dir / f"page-{page_num:03d}.txt"
         png_path = stem_dir / f"page-{page_num:03d}.png"
 
         # Idempotens-markör: db.pdf_pages-raden. Skapas alltid sist efter
         # lyckad OCR (rad nedan), så om raden finns vet vi att sidan redan körts.
-        # Per-sida-text mergas direkt in i text/<stem>.txt av merge_pages och
-        # raderas där — vi bygger ingen combined-fil längre.
+        # Per-sida-text lagras i pdf_pages-tabellen och mergas in i
+        # text/<stem>.txt av merge_pages — vi skriver inte page-NNN.txt längre.
         if state_db.page_exists(conn, pdf.stem, page_num):
             n_skipped += 1
             continue
@@ -523,7 +522,6 @@ def main() -> int:
         except Exception:
             scored = {"chars": len(text), "score": 0.0}
 
-        txt_path.write_text(text, encoding="utf-8")
         redact_suffix = f" [{len(redaction_blocks)} mask]" if redaction_blocks else ""
         state_db.record_page(
             conn, pdf_stem=pdf.stem, page_num=page_num,

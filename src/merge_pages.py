@@ -1,29 +1,29 @@
 #!/usr/bin/env python3
-"""Slå ihop per-sida-text från text_pages/<stem>/ in i text/<stem>.txt.
+"""Slå ihop per-sida-OCR-text från ``pdf_pages``-tabellen in i text/<stem>.txt.
 
-text_pages/<stem>/page-NNN.txt skapas av ocr_pages.py för enskilda sidor (oftast
-de som flaggats som dåliga). text/<stem>.txt har hela dokumentet med sidor
-separerade av ``\\f``. Denna modul ersätter sidor i text/-versionen med
-text_pages-versionen, en sida i taget.
+OCR-pipelinen skriver varje sida till SQLite-tabellen ``pdf_pages``
+(``ocr_pages.py``). Denna modul plockar ut sidorna för en stem och ersätter
+motsvarande sidor i ``text/<stem>.txt`` (sidor separerade med ``\\f``), en
+sida i taget. Efter lyckad merge stämplas ``pdf_files.merged_at`` +
+``text_mtime`` via ``db.mark_merged``.
 
 CLI:
-    python merge_pages.py --stem <namn>                # default-kataloger
-    python merge_pages.py --stem <namn> --txt-dir text --pages-dir text_pages
+    python merge_pages.py --stem <namn>
+    python merge_pages.py --all
 """
 
 from __future__ import annotations
 
 import argparse
-import re
+import sqlite3
 import sys
 import time
 from pathlib import Path
 
+import db as state_db
+
 ROOT = Path(__file__).resolve().parent.parent
 TEXT_DIR = ROOT / "generated" / "text"
-PAGES_DIR = ROOT / "generated" / "text_pages"
-
-PAGE_FILE_RE = re.compile(r"^page-(\d+)\.txt$")
 
 
 def merge_text(original: str, page_updates: dict[int, str]) -> str:
@@ -51,40 +51,36 @@ def merge_text(original: str, page_updates: dict[int, str]) -> str:
     return "\f".join(pages)
 
 
-def find_updates(stem_dir: Path) -> dict[int, str]:
-    """Hitta alla ``page-NNN.txt`` i ``stem_dir`` och returnera dict {sidnr: text}."""
+def find_updates(conn: sqlite3.Connection, pdf_stem: str) -> dict[int, str]:
+    """Hämta alla OCR-sidor för stem från pdf_pages-tabellen som dict {sidnr: text}."""
     out: dict[int, str] = {}
-    if not stem_dir.exists():
-        return out
-    for p in sorted(stem_dir.iterdir()):
-        m = PAGE_FILE_RE.match(p.name)
-        if not m:
-            continue
-        try:
-            out[int(m.group(1))] = p.read_text(encoding="utf-8", errors="replace")
-        except OSError as e:
-            print(f"[merge_pages] kan inte läsa {p}: {e}", file=sys.stderr)
+    for row in conn.execute(
+        "SELECT page_num, text FROM pdf_pages WHERE pdf_stem=? AND text IS NOT NULL "
+        "ORDER BY page_num",
+        (pdf_stem,),
+    ):
+        out[row["page_num"]] = row["text"]
     return out
 
 
-def merge_one(stem: str, txt_dir: Path, pages_dir: Path) -> bool:
-    """Slå ihop för en fil. Returnerar True om filen uppdaterades.
+def merge_one(stem: str, txt_dir: Path) -> bool:
+    """Slå ihop pdf_pages-sidor för ``stem`` in i ``text/<stem>.txt``.
 
-    Efter lyckad merge raderas per-sida-artefakter som inte längre behövs:
-    ``page-NNN.txt`` (innehållet finns i text/) och ``page-NNN.png`` (kan
-    re-renderas från PDF). ``page-NNN.json`` behålls som idempotens-markör
-    för ``ocr_pages.py`` och som spårbarhet. Eventuell legacy-combined
-    ``text_pages/<stem>.txt`` raderas också.
+    Returnerar True om filen uppdaterades på disk. Stämplar
+    ``pdf_files.merged_at`` + ``text_mtime`` via ``db.mark_merged`` när
+    texten faktiskt skrivs om.
     """
     txt_path = txt_dir / f"{stem}.txt"
-    stem_dir = pages_dir / stem
 
     if not txt_path.exists():
         print(f"[merge_pages] {stem}: saknar {txt_path}, hoppar över",
               file=sys.stderr)
         return False
 
-    updates = find_updates(stem_dir)
+    conn = state_db.connect()
+    state_db.init_schema(conn)
+
+    updates = find_updates(conn, stem)
     if not updates:
         return False
 
@@ -99,29 +95,16 @@ def merge_one(stem: str, txt_dir: Path, pages_dir: Path) -> bool:
     text_changed = merged != original
     if text_changed:
         txt_path.write_text(merged, encoding="utf-8")
-
-    # Cleanup körs även om texten redan var identisk — page-NNN.txt-filerna
-    # är då redan mergade (sannolikt från en tidigare körning) och kan rensas.
-    removed = 0
-    for n in merged_pages:
-        for suffix in (".txt", ".png"):
-            p = stem_dir / f"page-{n:03d}{suffix}"
-            if p.exists():
-                p.unlink()
-                if suffix == ".txt":
-                    removed += 1
-    legacy_combined = pages_dir / f"{stem}.txt"
-    if legacy_combined.exists():
-        legacy_combined.unlink()
-        removed += 1
-
-    if text_changed or removed:
-        action = "uppdaterade" if text_changed else "rensade redan-mergade"
-        msg = f"[merge_pages] {stem}: {action} {len(merged_pages)} av {n_pages} sidor"
+        try:
+            state_db.mark_merged(conn, stem, text_mtime=txt_path.stat().st_mtime)
+        except KeyError:
+            print(f"[merge_pages] {stem}: saknar pdf_files-rad — "
+                  "merged_at sätts inte", file=sys.stderr)
+        msg = f"[merge_pages] {stem}: uppdaterade {len(merged_pages)} av {n_pages} sidor"
         if invalid:
             msg += f" (ignorerade ogiltiga sidnr: {invalid})"
         print(msg)
-    return text_changed or removed > 0
+    return text_changed
 
 
 def main() -> int:
@@ -130,29 +113,26 @@ def main() -> int:
     grp = ap.add_mutually_exclusive_group(required=True)
     grp.add_argument("--stem", help="filnamn utan .txt/.pdf-extension")
     grp.add_argument("--all", action="store_true",
-                     help="kör för alla text_pages/<stem>/-mappar")
+                     help="kör för alla stems som har sidor i pdf_pages")
     ap.add_argument("--txt-dir", default=str(TEXT_DIR),
                     help=f"katalog med text/<stem>.txt (default: {TEXT_DIR})")
-    ap.add_argument("--pages-dir", default=str(PAGES_DIR),
-                    help=f"katalog med text_pages/<stem>/page-*.txt "
-                         f"(default: {PAGES_DIR})")
     args = ap.parse_args()
 
     txt_dir = Path(args.txt_dir)
-    pages_dir = Path(args.pages_dir)
 
     if args.all:
-        if not pages_dir.exists():
-            print(f"Saknar {pages_dir}/", file=sys.stderr)
-            return 1
-        stems = sorted(p.name for p in pages_dir.iterdir() if p.is_dir())
+        conn = state_db.connect()
+        state_db.init_schema(conn)
+        stems = sorted({r["pdf_stem"] for r in conn.execute(
+            "SELECT DISTINCT pdf_stem FROM pdf_pages"
+        )})
         updated = 0
         total = len(stems)
         t0 = time.monotonic()
         label = f"Slår ihop {total} dokument…"
         print(label, end=" ", flush=True)
         for i, stem in enumerate(stems, 1):
-            if merge_one(stem, txt_dir, pages_dir):
+            if merge_one(stem, txt_dir):
                 updated += 1
             elapsed = time.monotonic() - t0
             rate = i / elapsed if elapsed else 0
@@ -162,7 +142,7 @@ def main() -> int:
         print()
         print(f"Klart. {updated} av {total} filer uppdaterades.")
     else:
-        merge_one(args.stem, txt_dir, pages_dir)
+        merge_one(args.stem, txt_dir)
     return 0
 
 
