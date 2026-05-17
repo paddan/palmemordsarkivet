@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+import db as state_db
 from ingest import _source_predicate, _table_exists, find_orphans, should_reingest
 
 
@@ -135,3 +136,72 @@ def test_source_predicate_rejects_control_characters() -> None:
 def test_source_predicate_rejects_newline() -> None:
     with pytest.raises(ValueError, match="kontrolltecken"):
         _source_predicate("fil\nhack.txt")
+
+
+# ---------------------------------------------------------------------------
+# `already`-dict byggs från state.db.ingest (Task 11) — speglar SQL:en i main().
+# ---------------------------------------------------------------------------
+
+def test_already_dict_built_from_ingest_table(tmp_path, monkeypatch) -> None:
+    """Den dict-comprehension som main() använder ska mappa stem→mtime
+    med ``.txt``-suffix på nyckeln (källan i LanceDB är filnamn, men
+    ingest-tabellen lagrar bara pdf_stem)."""
+    monkeypatch.setenv("STATE_DB", str(tmp_path / "state.db"))
+    conn = state_db.connect()
+    state_db.init_schema(conn)
+    state_db.record_ingest(conn, pdf_stem="123 — Titel", text_mtime=100.0, chunks=5)
+    state_db.record_ingest(conn, pdf_stem="456 — Annan", text_mtime=200.0, chunks=8)
+
+    already: dict[str, float] = {
+        row["pdf_stem"] + ".txt": row["text_mtime"]
+        for row in conn.execute("SELECT pdf_stem, text_mtime FROM ingest")
+    }
+
+    assert already == {
+        "123 — Titel.txt": 100.0,
+        "456 — Annan.txt": 200.0,
+    }
+
+
+def test_already_dict_empty_when_ingest_empty(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("STATE_DB", str(tmp_path / "state.db"))
+    conn = state_db.connect()
+    state_db.init_schema(conn)
+
+    already: dict[str, float] = {
+        row["pdf_stem"] + ".txt": row["text_mtime"]
+        for row in conn.execute("SELECT pdf_stem, text_mtime FROM ingest")
+    }
+    assert already == {}
+
+
+def test_record_ingest_updates_mtime_on_reingest(tmp_path, monkeypatch) -> None:
+    """record_ingest UPSERTar — re-index uppdaterar mtime+chunks."""
+    monkeypatch.setenv("STATE_DB", str(tmp_path / "state.db"))
+    conn = state_db.connect()
+    state_db.init_schema(conn)
+    state_db.record_ingest(conn, pdf_stem="stem1", text_mtime=100.0, chunks=3)
+    state_db.record_ingest(conn, pdf_stem="stem1", text_mtime=200.0, chunks=7)
+
+    assert state_db.get_ingested_mtime(conn, "stem1") == 200.0
+    rows = list(conn.execute("SELECT * FROM ingest WHERE pdf_stem=?", ("stem1",)))
+    assert len(rows) == 1
+    assert rows[0]["chunks"] == 7
+
+
+def test_orphan_cleanup_deletes_from_ingest(tmp_path, monkeypatch) -> None:
+    """Speglar orphan-rensningen i main(): DELETE FROM ingest WHERE pdf_stem=?."""
+    monkeypatch.setenv("STATE_DB", str(tmp_path / "state.db"))
+    conn = state_db.connect()
+    state_db.init_schema(conn)
+    state_db.record_ingest(conn, pdf_stem="alive", text_mtime=100.0, chunks=1)
+    state_db.record_ingest(conn, pdf_stem="orphan", text_mtime=100.0, chunks=1)
+
+    # Simulera samma cleanup-logik
+    s = "orphan.txt"
+    stem = s[:-4] if s.endswith(".txt") else s
+    conn.execute("DELETE FROM ingest WHERE pdf_stem=?", (stem,))
+    conn.commit()
+
+    assert state_db.get_ingested_mtime(conn, "orphan") is None
+    assert state_db.get_ingested_mtime(conn, "alive") == 100.0

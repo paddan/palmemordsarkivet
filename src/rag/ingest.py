@@ -23,6 +23,9 @@ import lancedb
 import pyarrow as pa
 from sentence_transformers import SentenceTransformer
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import db as state_db  # noqa: E402
+
 try:
     from errors_log import log_error  # type: ignore
 except Exception:  # pragma: no cover
@@ -231,26 +234,27 @@ def main() -> int:
     if _table_exists(db, TABLE):
         table = db.open_table(TABLE)
         # Migration: lägg till mtime-kolumn om den saknas (legacy-tabell).
+        # mtime-kolumnen behålls för bakåtkompat men läses inte längre — källa
+        # till sanning för delta-frågor är numera state.db `ingest`-tabellen.
         if "mtime" not in table.schema.names:
             print("Migrerar tabell: lägger till mtime-kolumn (default 0.0).")
             table.add_columns({"mtime": "cast(0.0 as double)"})
-        try:
-            # Effektivt: lance-scanner laddar bara source+mtime utan att läsa vektorer.
-            arrow_tbl = table.to_lance().to_table(columns=["source", "mtime"])
-            sources = arrow_tbl.column("source").to_pylist()
-            mtimes = arrow_tbl.column("mtime").to_pylist()
-        except ImportError:
-            df = table.to_pandas()
-            sources = df["source"].tolist()
-            mtimes = df["mtime"].tolist()
-        # En fil har samma mtime för alla sina chunks; max() är defensivt mot blandning.
-        already: dict[str, float] = {}
-        for s, m in zip(sources, mtimes):
-            if s not in already or m > already[s]:
-                already[s] = m
     else:
         table = db.create_table(TABLE, schema=schema)
-        already = {}
+
+    state_conn = state_db.connect()
+    state_db.init_schema(state_conn)
+    # Källa till sanning för "vad har indexerats sedan när": ingest-tabellen.
+    # LanceDB-mtime behålls för bakåtkompat men läses inte längre.
+    # OBS: efter migreringen byggs `already` från `ingest`-tabellen. Om någon
+    # raderar state.db utan att köra migrate_to_db.py kommer LanceDB-tabellen
+    # att re-indexeras helt vid nästa körning (säkert, men slösigt).
+    already: dict[str, float] = {
+        row["pdf_stem"] + ".txt": row["text_mtime"]
+        for row in state_conn.execute(
+            "SELECT pdf_stem, text_mtime FROM ingest"
+        )
+    }
 
     # Läs in oanvändbara filers mtime så de hoppas över tills de ändras på disk.
     unusable_mtimes_file = Path(args.unusable_list).with_name("unusable_mtimes.json")
@@ -280,7 +284,13 @@ def main() -> int:
             for s in orphans:
                 table.delete(_source_predicate(s))
                 del already[s]
+                # rensa även från state.db.ingest
+                stem = s[:-4] if s.endswith(".txt") else s
+                state_conn.execute(
+                    "DELETE FROM ingest WHERE pdf_stem=?", (stem,)
+                )
                 print(f"  - {s}")
+            state_conn.commit()
 
     if args.limit:
         files = files[: args.limit]
@@ -365,6 +375,16 @@ def main() -> int:
             table.delete(_source_predicate(f.name))
         table.add(rows)
         total_chunks += len(rows)
+
+        # Spegla i state.db för delta-frågor.
+        try:
+            state_db.record_ingest(
+                state_conn, pdf_stem=f.stem,
+                text_mtime=disk_mtime, chunks=len(rows),
+            )
+        except Exception as e:  # noqa: BLE001
+            print(f"  [{i}/{len(todo)}] varning: state_db.record_ingest failed: {e}",
+                  file=sys.stderr)
 
         elapsed = time.monotonic() - t0
         rate = i / elapsed if elapsed else 0
