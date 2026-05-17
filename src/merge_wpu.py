@@ -112,6 +112,8 @@ def _process_one(
                 f"[saknar text] {stem[:70]} — kör ocr_tesseract.sh på files_wpu/ först"
             )
             result["category"] = "skip"
+            if not dry_run:
+                state_db.mark_wpu_decided(conn, stem)
             return result
 
         wpu_raw = wpu_txt.read_text(encoding="utf-8", errors="replace")

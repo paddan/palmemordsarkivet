@@ -67,6 +67,9 @@ def test_skips_when_wpu_text_missing(tmp_path: Path, db_env: Path) -> None:
 
     assert res["category"] == "skip"
     assert "saknar text" in res["lines"][0]
+    conn = state_db.connect(db_env)
+    assert state_db.wpu_decided(conn, "DA14259-00")
+    conn.close()
 
 
 def test_unmatched_wpu_kept_as_new(tmp_path: Path, db_env: Path) -> None:

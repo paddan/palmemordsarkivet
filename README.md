@@ -450,7 +450,7 @@ export DEEPSEEK_API_KEY=sk-...           # DeepSeek
 
 | Fil | Vad |
 |---|---|
-| `run_pipeline.sh` | Kör hela pipelinen i ett kommando: download → OCR → ingest (flaggor: `--skip-wpu`, `--skip-redo`, `--with-llm`, `--rebuild-index`, `--jobs N`) |
+| `run_pipeline.sh` | Kör hela pipelinen i ett kommando: download → OCR → ingest (flaggor: `--skip-wpu`, `--skip-redo`, `--with-llm`, `--rebuild-index`, `--jobs N`, `--test N`) |
 | `download.sh` → `src/download.py` | Hämta PDF:er från Drive |
 | `download_wpu.sh` → `src/download_wpu.py` | Ladda ner alla PDF:er från wpu.nu → `downloaded/wpu_files/` |
 | `merge_wpu.sh` → `src/merge_wpu.py` | Jämför wpu- och palme-text per fil, behåll bäst kvalitet |

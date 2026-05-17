@@ -26,6 +26,7 @@ Användning: $(basename "$0") [flaggor]
   --skip-redo         hoppa Surya-steget i OCR (snabbare, skickas till ocr.sh)
   --with-llm          kör llm_correct.sh efter OCR (betald, kräver API-nyckel)
   --jobs N            parallella processer i OCR (standard: 4)
+  --test N            testläge: ladda bara ner N filer från palme och wpu
   -h, --help          visa denna hjälp
 EOF
 }
@@ -35,6 +36,7 @@ SKIP_WPU=0
 SKIP_REDO=0
 WITH_LLM=0
 JOBS=${JOBS:-4}
+TEST_LIMIT=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -42,6 +44,7 @@ while [ $# -gt 0 ]; do
     --skip-redo)     SKIP_REDO=1; shift ;;
     --with-llm)      WITH_LLM=1; shift ;;
     --jobs)          JOBS="$2"; shift 2 ;;
+    --test)          TEST_LIMIT="$2"; shift 2 ;;
     -h|--help)       usage; exit 0 ;;
     *) echo "okänd flagga: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -60,16 +63,19 @@ count_pdfs() {
 
 t0=$(date +%s)
 
+limit_flags=()
+[ "$TEST_LIMIT" -gt 0 ] && limit_flags+=(--limit "$TEST_LIMIT")
+
 palme_before=$(count_pdfs "$ROOT/downloaded/files")
 step "1/5  Ladda ner PDF:er (./download.sh)"
-./download.sh || { rc=$?; [ "$rc" -eq 2 ] || exit "$rc"; }
+./download.sh ${limit_flags[@]+"${limit_flags[@]}"} || { rc=$?; [ "$rc" -eq 2 ] || exit "$rc"; }
 palme_after=$(count_pdfs "$ROOT/downloaded/files")
 new_files=$(( palme_after - palme_before ))
 
 if [ "$SKIP_WPU" = "0" ]; then
   wpu_before=$(count_pdfs "$ROOT/downloaded/wpu_files")
   step "2/5  Ladda ner wpu.nu-PDF:er (./download_wpu.sh)"
-  ./download_wpu.sh || { rc=$?; [ "$rc" -eq 2 ] || exit "$rc"; }
+  ./download_wpu.sh ${limit_flags[@]+"${limit_flags[@]}"} || { rc=$?; [ "$rc" -eq 2 ] || exit "$rc"; }
   wpu_after=$(count_pdfs "$ROOT/downloaded/wpu_files")
   new_files=$(( new_files + wpu_after - wpu_before ))
 else
@@ -77,13 +83,15 @@ else
   echo "━━━━━ Hoppar steg 2 (--skip-wpu) ━━━━━"
 fi
 
-if [ "$new_files" -le 0 ]; then
+if [ "$new_files" -le 0 ] && [ "$TEST_LIMIT" -eq 0 ]; then
   t1=$(date +%s); elapsed=$((t1 - t0)); m=$((elapsed / 60)); s=$((elapsed % 60))
   echo
   echo "━━━━━ Inga nya filer — hoppar steg 3–5 (${m}m${s}s) ━━━━━"
   exit 0
 fi
-echo "  ${new_files} nya filer — fortsätter med OCR och ingest."
+if [ "$new_files" -gt 0 ]; then
+  echo "  ${new_files} nya filer — fortsätter med OCR och ingest."
+fi
 
 step "3/5  OCR + normalisering + kvalitetsbedömning (./ocr.sh)"
 ocr_flags=()

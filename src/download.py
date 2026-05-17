@@ -210,6 +210,8 @@ def main() -> int:
     ap.add_argument("--sheet-id",
                     default=os.environ.get("SHEET_ID", SHEET_ID),
                     help=f"Google Sheets-ID (default: {SHEET_ID[:12]}…)")
+    ap.add_argument("--limit", type=int, default=0,
+                    help="begränsa till N filer (0 = alla, används för testkörningar)")
     args = ap.parse_args()
 
     out_dir = Path(args.out_flag or args.out)
@@ -252,6 +254,9 @@ def main() -> int:
         todo.append((build_filename(values), file_id))
 
     print(f"Hittade {len(todo)} filer")
+    if args.limit:
+        todo = todo[:args.limit]
+        print(f"Test-läge: begränsar till {args.limit} filer")
 
     manifest_ids = {
         r["drive_id"] for r in conn.execute(

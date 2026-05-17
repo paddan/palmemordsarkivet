@@ -294,6 +294,27 @@ def detect_redactions_file(
     Idempotent via marker-fil. Returnerar antal infogade block.
     """
     if marker.exists():
+        # Markörfilen finns — synka DB om redaction_checked_at saknas (t.ex. efter
+        # migrering eller om DB-uppdateringen missades vid föregående körning).
+        try:
+            conn = state_db.connect()
+            state_db.init_schema(conn)
+            row = conn.execute(
+                "SELECT redaction_checked_at FROM pdf_files WHERE pdf_stem=?",
+                (pdf.stem,),
+            ).fetchone()
+            if row is None or row["redaction_checked_at"] is None:
+                source = state_db.source_for_path(pdf)
+                state_db.upsert_pdf_file(
+                    conn, pdf_stem=pdf.stem, source=source, pdf_path=str(pdf),
+                )
+                has_red = (
+                    txt_file.exists()
+                    and "[MASKAD]" in txt_file.read_text(encoding="utf-8", errors="replace")
+                )
+                state_db.mark_redaction_checked(conn, pdf.stem, has_redactions=has_red)
+        except Exception:
+            pass
         return 0
     if not txt_file.exists():
         return 0
@@ -535,6 +556,20 @@ def main() -> int:
     # mergas direkt in i text/<stem>.txt av merge_pages (anropas från ocr.sh).
     print(f"Klart {pdf.stem}: {n_done} OCR:ade, {n_skipped} hoppade, "
           f"{n_total} sidor totalt.")
+
+    # Om specifika sidor begärdes men ingen matchade (sidan finns inte i PDF:en)
+    # skapar vi tomma pdf_pages-poster så att de inte hämtas igen nästa körning.
+    if only_pages and n_done == 0 and n_skipped == 0:
+        missing = only_pages - set(range(1, n_total + 1))
+        for p in missing:
+            if not state_db.page_exists(conn, pdf.stem, p):
+                state_db.record_page(
+                    conn, pdf_stem=pdf.stem, page_num=p,
+                    engine=args.engine, text="", score=0.0,
+                )
+        if missing:
+            print(f"  [varning] {len(missing)} begärda sidor saknas i PDF:en "
+                  f"({min(missing)}–{max(missing)}), markerade som försökta.")
 
     if want_pdf_patch and page_lines:
         ocr_pdf = Path(args.ocr_dir) / f"{pdf.stem}.pdf"

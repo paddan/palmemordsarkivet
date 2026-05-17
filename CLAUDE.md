@@ -57,6 +57,7 @@ Data-kataloger (gitignored):
 
 # Workflow
 ./run_pipeline.sh                    # Hela pipelinen i ett: download → OCR → ingest
+./run_pipeline.sh --test 5           # Testläge: bara 5 filer från palme + 5 från wpu
 ./download.sh                        # Hämta PDF:er från Google Sheet
 ./ocr.sh                             # Tesseract → normalize → quality → Surya på dåliga sidor
 ./ocr.sh --skip-redo                 # Bara Tesseract + normalize + quality

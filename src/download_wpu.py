@@ -160,6 +160,10 @@ def main() -> int:
         "--out", default=str(OUT_DIR),
         help=f"utdatakatalog (default: {OUT_DIR})",
     )
+    ap.add_argument(
+        "--limit", type=int, default=0,
+        help="begränsa till N filer (0 = alla, används för testkörningar)",
+    )
     args = ap.parse_args()
 
     out_dir = Path(args.out)
@@ -171,6 +175,9 @@ def main() -> int:
     all_wpu = fetch_all_wpu_files()
     pdfs = [f for f in all_wpu if f["name"].lower().endswith(".pdf")]
     print(f"Hittade {len(pdfs)} PDF-filer")
+    if args.limit:
+        pdfs = pdfs[:args.limit]
+        print(f"Test-läge: begränsar till {args.limit} filer")
 
     already_local = (
         {f.name.lower() for f in out_dir.iterdir() if f.is_file() and f.suffix.lower() == ".pdf"}
