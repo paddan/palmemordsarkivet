@@ -55,7 +55,7 @@ Flaggor (default visas inom parentes):
   --in DIR                ingångskatalog med PDF:er (\$ROOT/downloaded/files)
   --ocr DIR               output-katalog för OCR-PDF:er (\$ROOT/generated/ocr)
   --txt DIR               output-katalog för .txt (\$ROOT/generated/text)
-  --csv FILE              quality.csv (\$ROOT/generated/quality.csv)
+  --csv FILE              DEPRECATED — quality läses nu från db.quality-tabellen
   --pages-jsonl FILE      DEPRECATED — bad pages läses nu från db.quality_pages
   --pages-out DIR         output-katalog för per-sida (\$ROOT/generated/text_pages)
   --from-list FILE        --redo --mode files: läs filnamn från textfil (en per
@@ -396,32 +396,25 @@ conn.commit()
   exit 0
 fi
 
-# Utan --from-list: plocka filnamnen ur CSV — awk förstår inte CSV-kvotering
-# (filnamn kan innehålla komman och blir då dubbelkvoterade).
-[ -f "$CSV" ] || { echo "Saknar $CSV — kör quality.py först."; exit 1; }
-
+# Utan --from-list: plocka filnamnen ur quality-tabellen i db.
 TARGETS=()
 while IFS= read -r line; do
   [ -n "$line" ] && TARGETS+=("$line")
 done < <(
   "$PYBIN" -c "
-import csv, sys
-csv_path, thr, src = sys.argv[1], float(sys.argv[2]), sys.argv[3]
-with open(csv_path, encoding='utf-8', newline='') as f:
-    for row in csv.DictReader(f):
-        try:
-            score = float(row.get('score') or 0)
-        except ValueError:
-            continue
-        if score >= thr:
-            continue
-        if src != 'any' and row.get('source') != src:
-            continue
-        name = row['file']
-        if name.endswith('.txt'):
-            name = name[:-4]
-        print(name)
-" "$CSV" "$THRESHOLD" "$SOURCE"
+import sys
+sys.path.insert(0, sys.argv[1])
+import db as state_db
+thr = float(sys.argv[2]); src = sys.argv[3]
+conn = state_db.connect(); state_db.init_schema(conn)
+if src == 'any':
+    rows = conn.execute('SELECT pdf_stem FROM quality WHERE score < ? ORDER BY score', (thr,))
+else:
+    rows = conn.execute('SELECT pdf_stem FROM quality WHERE score < ? AND source_type = ? ORDER BY score',
+                        (thr, src))
+for r in rows:
+    print(r['pdf_stem'])
+" "$ROOT/src" "$THRESHOLD" "$SOURCE"
 )
 
 if [ ${#TARGETS[@]} -eq 0 ]; then
