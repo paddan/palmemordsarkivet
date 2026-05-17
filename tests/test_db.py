@@ -71,6 +71,16 @@ def test_pdf_file_status_transitions(tmp_path):
     assert row["text_mtime"] == 124.0
 
 
+def test_mark_functions_raise_on_missing_stem(tmp_path):
+    conn = _fresh(tmp_path)
+    with pytest.raises(KeyError):
+        mark_redaction_checked(conn, "nonexistent", has_redactions=True)
+    with pytest.raises(KeyError):
+        mark_merged(conn, "nonexistent", text_mtime=1.0)
+    with pytest.raises(KeyError):
+        mark_normalized(conn, "nonexistent", text_mtime=1.0)
+
+
 def test_state_db_env_override(tmp_path, monkeypatch):
     """connect() utan path ska respektera STATE_DB."""
     db_path = tmp_path / "env_state.db"

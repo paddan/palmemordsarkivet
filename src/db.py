@@ -174,6 +174,7 @@ def is_downloaded(
     drive_id: str | None = None,
     url: str | None = None,
 ) -> bool:
+    """Returnera True om filen redan finns i downloads (matchar source+drive_id/url)."""
     if drive_id is not None:
         row = conn.execute(
             "SELECT 1 FROM downloads WHERE source=? AND drive_id=?",
@@ -190,6 +191,7 @@ def is_downloaded(
 def find_download_by_sha1(
     conn: sqlite3.Connection, sha1: str
 ) -> sqlite3.Row | None:
+    """Slå upp första download-raden med matchande sha1, eller None."""
     return conn.execute(
         "SELECT * FROM downloads WHERE sha1=? LIMIT 1", (sha1,)
     ).fetchone()
@@ -204,6 +206,7 @@ def upsert_pdf_file(
     source: str,
     pdf_path: str,
 ) -> None:
+    """Skriv eller uppdatera pdf_files-raden för pdf_stem (UPSERT)."""
     conn.execute(
         """
         INSERT INTO pdf_files(pdf_stem, source, pdf_path)
@@ -220,6 +223,7 @@ def upsert_pdf_file(
 def get_pdf_file(
     conn: sqlite3.Connection, pdf_stem: str
 ) -> sqlite3.Row | None:
+    """Hämta pdf_files-raden för pdf_stem, eller None om den saknas."""
     return conn.execute(
         "SELECT * FROM pdf_files WHERE pdf_stem=?", (pdf_stem,)
     ).fetchone()
@@ -228,16 +232,20 @@ def get_pdf_file(
 def mark_redaction_checked(
     conn: sqlite3.Connection, pdf_stem: str, *, has_redactions: bool
 ) -> None:
-    conn.execute(
+    """Markera att redaktionsdetektering körts. Kastar KeyError om pdf_stem saknas."""
+    cur = conn.execute(
         """UPDATE pdf_files
            SET redaction_checked_at=?, has_redactions=?
            WHERE pdf_stem=?""",
         (now(), 1 if has_redactions else 0, pdf_stem),
     )
+    if cur.rowcount == 0:
+        raise KeyError(pdf_stem)
     conn.commit()
 
 
 def redaction_checked(conn: sqlite3.Connection, pdf_stem: str) -> bool:
+    """Returnera True om redaktionsdetektering körts för pdf_stem."""
     row = conn.execute(
         "SELECT redaction_checked_at FROM pdf_files WHERE pdf_stem=?",
         (pdf_stem,),
@@ -248,18 +256,24 @@ def redaction_checked(conn: sqlite3.Connection, pdf_stem: str) -> bool:
 def mark_merged(
     conn: sqlite3.Connection, pdf_stem: str, *, text_mtime: float
 ) -> None:
-    conn.execute(
+    """Markera fil som mergad. text_mtime speglar senaste mutation av .txt-filen — skrivs över igen vid normalize. Kastar KeyError om pdf_stem saknas."""
+    cur = conn.execute(
         "UPDATE pdf_files SET merged_at=?, text_mtime=? WHERE pdf_stem=?",
         (now(), text_mtime, pdf_stem),
     )
+    if cur.rowcount == 0:
+        raise KeyError(pdf_stem)
     conn.commit()
 
 
 def mark_normalized(
     conn: sqlite3.Connection, pdf_stem: str, *, text_mtime: float
 ) -> None:
-    conn.execute(
+    """Markera fil som normaliserad och uppdatera text_mtime. Kastar KeyError om pdf_stem saknas."""
+    cur = conn.execute(
         "UPDATE pdf_files SET normalized_at=?, text_mtime=? WHERE pdf_stem=?",
         (now(), text_mtime, pdf_stem),
     )
+    if cur.rowcount == 0:
+        raise KeyError(pdf_stem)
     conn.commit()
