@@ -9,7 +9,7 @@ ska aldrig skriva egen SQL.
 
 from __future__ import annotations
 
-import json as _json
+import json
 import os
 import sqlite3
 from datetime import datetime, timezone
@@ -323,30 +323,43 @@ def get_pages_for_stem(
 
 # --- quality ----------------------------------------------------------
 
-_QUALITY_COLS = (
-    "pct_swe", "junk_ratio", "short_word_ratio", "long_word_ratio",
-    "digit_in_word_ratio", "avg_word_len", "vowel_ratio", "source_type",
-)
-
-
 def record_quality(
     conn: sqlite3.Connection, *,
     pdf_stem: str, score: float, chars: int,
     text_mtime: float, extras: dict | None = None,
 ) -> None:
-    """UPSERT i quality. extras = dict med nycklar från _QUALITY_COLS."""
+    """UPSERT i quality. extras = dict med valfria heuristik-fält
+    (pct_swe, junk_ratio, short_word_ratio, long_word_ratio,
+     digit_in_word_ratio, avg_word_len, vowel_ratio, source_type)."""
     extras = extras or {}
-    cols = ["pdf_stem", "score", "chars", "text_mtime", "scored_at"]
-    vals = [pdf_stem, score, chars, text_mtime, now()]
-    for c in _QUALITY_COLS:
-        cols.append(c)
-        vals.append(extras.get(c))
-    placeholders = ",".join("?" * len(vals))
-    updates = ",".join(f"{c}=excluded.{c}" for c in cols if c != "pdf_stem")
     conn.execute(
-        f"""INSERT INTO quality({','.join(cols)}) VALUES ({placeholders})
-            ON CONFLICT(pdf_stem) DO UPDATE SET {updates}""",
-        vals,
+        """
+        INSERT INTO quality(
+            pdf_stem, score, chars, text_mtime, scored_at,
+            pct_swe, junk_ratio, short_word_ratio, long_word_ratio,
+            digit_in_word_ratio, avg_word_len, vowel_ratio, source_type
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(pdf_stem) DO UPDATE SET
+            score=excluded.score,
+            chars=excluded.chars,
+            text_mtime=excluded.text_mtime,
+            scored_at=excluded.scored_at,
+            pct_swe=excluded.pct_swe,
+            junk_ratio=excluded.junk_ratio,
+            short_word_ratio=excluded.short_word_ratio,
+            long_word_ratio=excluded.long_word_ratio,
+            digit_in_word_ratio=excluded.digit_in_word_ratio,
+            avg_word_len=excluded.avg_word_len,
+            vowel_ratio=excluded.vowel_ratio,
+            source_type=excluded.source_type
+        """,
+        (
+            pdf_stem, score, chars, text_mtime, now(),
+            extras.get("pct_swe"), extras.get("junk_ratio"),
+            extras.get("short_word_ratio"), extras.get("long_word_ratio"),
+            extras.get("digit_in_word_ratio"), extras.get("avg_word_len"),
+            extras.get("vowel_ratio"), extras.get("source_type"),
+        ),
     )
     conn.commit()
 
@@ -370,7 +383,7 @@ def record_quality_page(
         """,
         (pdf_stem, page_num, score, chars,
          1 if image_page else 0,
-         _json.dumps(payload) if payload else None,
+         json.dumps(payload) if payload else None,
          now()),
     )
     conn.commit()
