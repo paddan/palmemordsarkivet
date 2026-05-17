@@ -74,7 +74,14 @@ def build_nr_to_pdf() -> dict[str, Path]:
             nr = pdf.stem.split(" — ")[0].strip()
             if nr:
                 mapping[nr] = pdf
+                # WPU-filer kan ha "_-_"-separerade suffix (t.ex. "_-_total_version_nr_0").
+                # Registrera prefixet som alternativ nyckel för att matcha äldre index-poster.
+                if "_-_" in nr:
+                    prefix = nr.split("_-_")[0]
+                    if prefix and prefix not in mapping:
+                        mapping[prefix] = pdf
     return mapping
+
 
 
 def find_pdf(source_txt: str) -> Path | None:
@@ -122,7 +129,9 @@ def find_txt(source_txt: str) -> Path | None:
 
 
 # Nr kan vara digitalt med valfritt antal led av "." eller "," (t.ex. 281,10 eller 1322.7).
-CITE_RE = re.compile(r"Nr ([\w\-]+(?:[.,][\w\-]+)*),\s*sida (\d+)")
+# Valfria hakparenteser runt citatet konsumeras av regexen så hela [Nr X, sida Y]
+# ersätts av <a>-taggen — undviker att Markdown-parsern manglar [<a>...</a>].
+CITE_RE = re.compile(r"\[?Nr ([\w\-]+(?:[.,][\w\-]+)*),\s*sida (\d+)\]?")
 
 
 def extract_cited_sources(answer: str) -> list[dict]:
@@ -131,15 +140,17 @@ def extract_cited_sources(answer: str) -> list[dict]:
     seen: dict[str, dict] = {}
     for m in CITE_RE.finditer(answer):
         nr = m.group(1)
-        if nr in seen or nr not in nr_to_pdf:
+        if nr in seen:
             continue
-        pdf = nr_to_pdf[nr]
-        parts = [p.strip() for p in pdf.stem.split(" — ")]
+        if nr not in nr_to_pdf:
+            continue
+        stem = nr_to_pdf[nr].stem
+        parts = [p.strip() for p in stem.split(" — ")]
         seen[nr] = {
-            "source": pdf.stem + ".txt",
+            "source": stem + ".txt",
             "page": None,
             "nr": nr,
-            "titel": parts[1] if len(parts) > 1 else pdf.stem,
+            "titel": parts[1] if len(parts) > 1 else stem,
         }
     return list(seen.values())
 

@@ -244,6 +244,47 @@ def _migrate_wpu_decisions(conn, root: Path) -> int:
     return n
 
 
+def _migrate_ocr_markers(conn, root: Path) -> int:
+    """Migrera generated/ocr/<stem>.ocr-done/.ocr-failed → pdf_files och radera filerna."""
+    ocr_dir = root / "generated" / "ocr"
+    if not ocr_dir.exists():
+        return 0
+    in_dir = root / "downloaded" / "files"
+    ts = db.now()
+    n = 0
+    for marker in ocr_dir.glob("*.ocr-done"):
+        stem = marker.stem
+        pdf_path = str((in_dir / f"{stem}.pdf").relative_to(root))
+        source = db.source_for_path(pdf_path)
+        conn.execute(
+            """
+            INSERT INTO pdf_files(pdf_stem, source, pdf_path, tesseract_done_at, tesseract_failed)
+            VALUES (?, ?, ?, ?, 0)
+            ON CONFLICT(pdf_stem) DO UPDATE SET
+                tesseract_done_at = COALESCE(tesseract_done_at, excluded.tesseract_done_at)
+            """,
+            (stem, source, pdf_path, ts),
+        )
+        marker.unlink()
+        n += 1
+    for marker in ocr_dir.glob("*.ocr-failed"):
+        stem = marker.stem
+        pdf_path = str((in_dir / f"{stem}.pdf").relative_to(root))
+        source = db.source_for_path(pdf_path)
+        conn.execute(
+            """
+            INSERT INTO pdf_files(pdf_stem, source, pdf_path, tesseract_failed)
+            VALUES (?, ?, ?, 1)
+            ON CONFLICT(pdf_stem) DO UPDATE SET tesseract_failed = 1
+            """,
+            (stem, source, pdf_path),
+        )
+        marker.unlink()
+        n += 1
+    conn.commit()
+    return n
+
+
 def migrate(conn, root: Path) -> dict[str, int]:
     """Kör alla migreringssteg i rätt ordning."""
     n_downloads = _migrate_downloads(conn, root)
@@ -254,6 +295,7 @@ def migrate(conn, root: Path) -> dict[str, int]:
     n_quality_pages = _migrate_quality_pages(conn, root)
     n_ingest = _migrate_ingest(conn, root)
     n_wpu = _migrate_wpu_decisions(conn, root)
+    n_ocr_markers = _migrate_ocr_markers(conn, root)
     return {
         "downloads": n_downloads,
         "pdf_files": n_pdf_files,
@@ -262,6 +304,7 @@ def migrate(conn, root: Path) -> dict[str, int]:
         "quality_pages": n_quality_pages,
         "ingest": n_ingest,
         "wpu_decisions": n_wpu,
+        "ocr_markers": n_ocr_markers,
     }
 
 

@@ -4,8 +4,7 @@
 # - Kvalitetscheck på existerande textlager — vid skräp triggas --redo-ocr
 # - OCR med svenska + deskew/clean/rotate för scannade sidor
 # - Parallelliserar över filer med xargs -P
-# - Idempotent: hoppar över filer där .ocr-done-markör finns i generated/ocr/
-#   (.txt ensam räcker inte — merge_wpu kan radera den)
+# - Idempotent: hoppar över filer markerade som klara i state.db (tesseract_done_at)
 #
 # Krav: brew install ocrmypdf tesseract-lang poppler unpaper
 
@@ -37,12 +36,14 @@ motsvarande env-var (versaler, understreck) — flagga vinner över env-var.
   --errors-log FILE       logg-fil för fel (\$ROOT/generated/errors.log)
   --files-from FILE       lista med filstammar att bearbeta (en per rad, .txt trimmas);
                           om utelämnad bearbetas alla PDF:er i --in
-  --retry-failed          ta bort .ocr-failed-markörer så att misslyckade filer körs om
+  --retry-failed          nollställ tesseract_failed-flaggor i state.db så att misslyckade filer körs om
   -h, --help              visa denna hjälp och avsluta
 EOF
 }
 
 ROOT=${ROOT:-$(cd "$(dirname "$0")" && pwd)}
+PYBIN=${PYBIN:-}
+DB_HELPER=${DB_HELPER:-}
 IN=${IN:-}
 OCR=${OCR:-}
 TXT=${TXT:-}
@@ -84,6 +85,8 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+PYBIN=${PYBIN:-$ROOT/.venv/bin/python}
+DB_HELPER=${DB_HELPER:-$ROOT/src/ocr_db_helper.py}
 IN=${IN:-$ROOT/downloaded/files}
 OCR=${OCR:-$ROOT/generated/ocr}
 TXT=${TXT:-$ROOT/generated/text}
@@ -232,26 +235,28 @@ run_ocr() {
 }
 
 process_one() {
-  local f="$1" base out_pdf out_txt existing has_text _STATUS _OCR_RETRIES="" marker failed_marker
+  local f="$1" base out_pdf out_txt existing has_text _STATUS _OCR_RETRIES=""
   base=$(basename "$f" .pdf)
   out_pdf="$OCR/$base.pdf"
   out_txt="$TXT/$base.txt"
-  marker="$OCR/$base.ocr-done"
-  failed_marker="$OCR/$base.ocr-failed"
 
-  # Idempotens via markörfil — txt kan ha raderats av merge_wpu (som bara
-  # raderar .txt och .pdf, inte markören). Lazy migration: skapa markör om
-  # txt finns sedan innan markören introducerades.
-  if [ -s "$out_txt" ] && [ ! -f "$marker" ]; then
-    touch "$marker"
+  # Idempotens via state.db — txt kan ha raderats av merge_wpu (som bara
+  # raderar .txt och .pdf). Lazy migration: markera som klar om txt finns men
+  # DB saknar post (filer OCR:ade innan DB-migreringen).
+  _done=0
+  if "$PYBIN" "$DB_HELPER" check-done "$base"; then
+    _done=1
+  elif [ -s "$out_txt" ]; then
+    "$PYBIN" "$DB_HELPER" mark-done "$base" "$f"
+    _done=1
   fi
-  if [ -f "$marker" ]; then
+  if [ "$_done" = "1" ]; then
     printf 'hoppar' > "$PROGRESS_DIR/${base}.status"
     return 0
   fi
 
-  # Hoppa över filer som tidigare misslyckats — radera .ocr-failed för att försöka igen.
-  if [ -f "$failed_marker" ]; then
+  # Hoppa över filer som tidigare misslyckats — använd --retry-failed för att köra om.
+  if "$PYBIN" "$DB_HELPER" check-failed "$base"; then
     printf 'fel-skip' > "$PROGRESS_DIR/${base}.status"
     return 0
   fi
@@ -286,7 +291,7 @@ process_one() {
         _STATUS="${_STATUS}${_OCR_RETRIES}"
         pdftotext -layout "$out_pdf" "$out_txt"
       else
-        touch "$failed_marker"
+        "$PYBIN" "$DB_HELPER" mark-failed "$base" "$f"
         printf 'fel' > "$PROGRESS_DIR/${base}.status"
         return 1
       fi
@@ -297,26 +302,26 @@ process_one() {
       _STATUS="${_STATUS}${_OCR_RETRIES}"
       pdftotext -layout "$out_pdf" "$out_txt"
     else
-      touch "$failed_marker"
+      "$PYBIN" "$DB_HELPER" mark-failed "$base" "$f"
       printf 'fel' > "$PROGRESS_DIR/${base}.status"
       return 1
     fi
   fi
 
   printf '%s' "$_STATUS" > "$PROGRESS_DIR/${base}.status"
-  touch "$marker"
+  "$PYBIN" "$DB_HELPER" mark-done "$base" "$f"
 }
 export -f process_one run_ocr _run_ocrmypdf log_err
 export IN OCR TXT PER_FILE_JOBS MIN_TEXT_CHARS LANGS PSM \
-       USER_WORDS USER_WORDS_AUTO TESS_CONFIG TESSDATA_PREFIX IMAGE_DPI ERRORS_LOG
+       USER_WORDS USER_WORDS_AUTO TESS_CONFIG TESSDATA_PREFIX IMAGE_DPI ERRORS_LOG \
+       PYBIN DB_HELPER
 
 if [ "$RETRY_FAILED" = "1" ]; then
-  count=$(find "$OCR" -name '*.ocr-failed' 2>/dev/null | wc -l | tr -d ' ')
-  if [ "$count" -gt 0 ]; then
-    echo "Tar bort $count .ocr-failed-markörer..."
-    find "$OCR" -name '*.ocr-failed' -delete
+  count=$("$PYBIN" "$DB_HELPER" clear-failed)
+  if [ "${count:-0}" -gt 0 ]; then
+    echo "Nollställde $count tesseract_failed-flaggor i state.db."
   else
-    echo "Inga .ocr-failed-markörer att ta bort."
+    echo "Inga misslyckade OCR-jobb i state.db."
   fi
 fi
 
@@ -331,15 +336,16 @@ if [ -n "$FILES_FROM" ]; then
     [ -f "$pdf" ] && echo "$pdf" >> "$PDFLIST"
   done < "$FILES_FROM"
 else
-  # Förfiltrera: hoppa PDF:er med .ocr-done- eller .ocr-failed-markör så att
-  # TOTAL speglar faktiskt arbete och onödiga subprocesser undviks.
+  # Förfiltrera via state.db — hoppa stems som redan markerats klara eller misslyckade.
+  # En enda DB-query ersätter N filsystemskontroller.
   ALL_TOTAL=$(find "$IN" -name '*.pdf' | wc -l | tr -d ' ')
+  _SKIP_FILE=$(mktemp)
+  { "$PYBIN" "$DB_HELPER" list-done; "$PYBIN" "$DB_HELPER" list-failed; } | sort -u > "$_SKIP_FILE"
   while IFS= read -r -d '' pdf; do
     base="${pdf##*/}"; base="${base%.pdf}"
-    if [ ! -f "$OCR/$base.ocr-done" ] && [ ! -f "$OCR/$base.ocr-failed" ]; then
-      echo "$pdf" >> "$PDFLIST"
-    fi
+    grep -qxF "$base" "$_SKIP_FILE" || echo "$pdf" >> "$PDFLIST"
   done < <(find "$IN" -name '*.pdf' -print0)
+  rm -f "$_SKIP_FILE"
 fi
 
 TOTAL=$(wc -l < "$PDFLIST" | tr -d ' ')
@@ -386,12 +392,16 @@ if [ -z "$FILES_FROM" ]; then
   missing=0
   known_failed=0
   merged_away=0
+  _DONE_FILE=$(mktemp)
+  _FAILED_FILE=$(mktemp)
+  "$PYBIN" "$DB_HELPER" list-done  | sort > "$_DONE_FILE"
+  "$PYBIN" "$DB_HELPER" list-failed | sort > "$_FAILED_FILE"
   while IFS= read -r -d '' f; do
     base=$(basename "$f" .pdf)
     if [ ! -s "$OCR/$base.pdf" ]; then
-      if [ -f "$OCR/$base.ocr-failed" ]; then
+      if grep -qxF "$base" "$_FAILED_FILE"; then
         known_failed=$((known_failed + 1))
-      elif [ -f "$OCR/$base.ocr-done" ]; then
+      elif grep -qxF "$base" "$_DONE_FILE"; then
         merged_away=$((merged_away + 1))
       else
         echo "  SAKNAS: $base.pdf"
@@ -399,6 +409,7 @@ if [ -z "$FILES_FROM" ]; then
       fi
     fi
   done < <(find "$IN" -name '*.pdf' -print0)
+  rm -f "$_DONE_FILE" "$_FAILED_FILE"
   total=$(find "$IN" -name '*.pdf' | wc -l | tr -d ' ')
   if [ "$missing" -eq 0 ]; then
     msg="  OK — $total PDF:er bearbetade"

@@ -51,7 +51,9 @@ CREATE TABLE IF NOT EXISTS pdf_files (
     has_redactions       INTEGER,
     merged_at            TEXT,
     normalized_at        TEXT,
-    text_mtime           REAL
+    text_mtime           REAL,
+    tesseract_done_at    TEXT,
+    tesseract_failed     INTEGER DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS pdf_pages (
@@ -146,6 +148,15 @@ def init_schema(conn: sqlite3.Connection) -> None:
         "INSERT OR IGNORE INTO schema_version(version, applied_at) VALUES (?, ?)",
         (SCHEMA_VERSION, now()),
     )
+    # Lägg till kolumner som tillkommit efter första driftsättning.
+    for col, typedef in [
+        ("tesseract_done_at", "TEXT"),
+        ("tesseract_failed", "INTEGER DEFAULT 0"),
+    ]:
+        try:
+            conn.execute(f"ALTER TABLE pdf_files ADD COLUMN {col} {typedef}")
+        except sqlite3.OperationalError:
+            pass  # kolumnen finns redan
     conn.commit()
 
 
@@ -292,6 +303,50 @@ def redaction_checked(conn: sqlite3.Connection, pdf_stem: str) -> bool:
         (pdf_stem,),
     ).fetchone()
     return bool(row and row["redaction_checked_at"])
+
+
+def mark_tesseract_done(
+    conn: sqlite3.Connection, pdf_stem: str, *, pdf_path: str, source: str
+) -> None:
+    """Markera att Tesseract-OCR lyckades (UPSERT — skapar rad om den saknas)."""
+    conn.execute(
+        """
+        INSERT INTO pdf_files(pdf_stem, source, pdf_path, tesseract_done_at, tesseract_failed)
+        VALUES (?, ?, ?, ?, 0)
+        ON CONFLICT(pdf_stem) DO UPDATE SET
+            tesseract_done_at = excluded.tesseract_done_at,
+            tesseract_failed  = 0
+        """,
+        (pdf_stem, source, pdf_path, now()),
+    )
+    conn.commit()
+
+
+def mark_tesseract_failed(
+    conn: sqlite3.Connection, pdf_stem: str, *, pdf_path: str, source: str
+) -> None:
+    """Markera att Tesseract-OCR misslyckades (UPSERT — skapar rad om den saknas)."""
+    conn.execute(
+        """
+        INSERT INTO pdf_files(pdf_stem, source, pdf_path, tesseract_failed)
+        VALUES (?, ?, ?, 1)
+        ON CONFLICT(pdf_stem) DO UPDATE SET
+            tesseract_failed  = 1,
+            tesseract_done_at = NULL
+        """,
+        (pdf_stem, source, pdf_path),
+    )
+    conn.commit()
+
+
+def clear_tesseract_failed(conn: sqlite3.Connection) -> int:
+    """Nollställ tesseract_failed för alla filer. Returnerar antal påverkade rader."""
+    cur = conn.execute(
+        "UPDATE pdf_files SET tesseract_failed=0 WHERE tesseract_failed=1"
+    )
+    conn.commit()
+    return cur.rowcount
+
 
 
 def mark_merged(
