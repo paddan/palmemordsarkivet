@@ -63,12 +63,15 @@ def find_updates(conn: sqlite3.Connection, pdf_stem: str) -> dict[int, str]:
     return out
 
 
-def merge_one(stem: str, txt_dir: Path) -> bool:
+def merge_one(stem: str, txt_dir: Path, conn: sqlite3.Connection | None = None) -> bool:
     """Slå ihop pdf_pages-sidor för ``stem`` in i ``text/<stem>.txt``.
 
     Returnerar True om filen uppdaterades på disk. Stämplar
     ``pdf_files.merged_at`` + ``text_mtime`` via ``db.mark_merged`` när
     texten faktiskt skrivs om.
+
+    Om ``conn`` anges återanvänds den; annars öppnas en egen connection
+    som stängs när funktionen returnerar (undviker fd-läck i stora loopar).
     """
     txt_path = txt_dir / f"{stem}.txt"
 
@@ -77,34 +80,40 @@ def merge_one(stem: str, txt_dir: Path) -> bool:
               file=sys.stderr)
         return False
 
-    conn = state_db.connect()
-    state_db.init_schema(conn)
+    own_conn = conn is None
+    if own_conn:
+        conn = state_db.connect()
+        state_db.init_schema(conn)
 
-    updates = find_updates(conn, stem)
-    if not updates:
-        return False
+    try:
+        updates = find_updates(conn, stem)
+        if not updates:
+            return False
 
-    original = txt_path.read_text(encoding="utf-8", errors="replace")
-    merged = merge_text(original, updates)
+        original = txt_path.read_text(encoding="utf-8", errors="replace")
+        merged = merge_text(original, updates)
 
-    orig_n_pages = original.count("\f") + 1 if original else 0
-    invalid = sorted(n for n in updates if n < 1)
-    merged_pages = sorted(n for n in updates if n >= 1)
-    n_pages = max(orig_n_pages, max(merged_pages) if merged_pages else 0)
+        orig_n_pages = original.count("\f") + 1 if original else 0
+        invalid = sorted(n for n in updates if n < 1)
+        merged_pages = sorted(n for n in updates if n >= 1)
+        n_pages = max(orig_n_pages, max(merged_pages) if merged_pages else 0)
 
-    text_changed = merged != original
-    if text_changed:
-        txt_path.write_text(merged, encoding="utf-8")
-        try:
-            state_db.mark_merged(conn, stem, text_mtime=txt_path.stat().st_mtime)
-        except KeyError:
-            print(f"[merge_pages] {stem}: saknar pdf_files-rad — "
-                  "merged_at sätts inte", file=sys.stderr)
-        msg = f"[merge_pages] {stem}: uppdaterade {len(merged_pages)} av {n_pages} sidor"
-        if invalid:
-            msg += f" (ignorerade ogiltiga sidnr: {invalid})"
-        print(msg)
-    return text_changed
+        text_changed = merged != original
+        if text_changed:
+            txt_path.write_text(merged, encoding="utf-8")
+            try:
+                state_db.mark_merged(conn, stem, text_mtime=txt_path.stat().st_mtime)
+            except KeyError:
+                print(f"[merge_pages] {stem}: saknar pdf_files-rad — "
+                      "merged_at sätts inte", file=sys.stderr)
+            msg = f"[merge_pages] {stem}: uppdaterade {len(merged_pages)} av {n_pages} sidor"
+            if invalid:
+                msg += f" (ignorerade ogiltiga sidnr: {invalid})"
+            print(msg)
+        return text_changed
+    finally:
+        if own_conn:
+            conn.close()
 
 
 def main() -> int:
@@ -132,7 +141,7 @@ def main() -> int:
         label = f"Slår ihop {total} dokument…"
         print(label, end=" ", flush=True)
         for i, stem in enumerate(stems, 1):
-            if merge_one(stem, txt_dir):
+            if merge_one(stem, txt_dir, conn=conn):
                 updated += 1
             elapsed = time.monotonic() - t0
             rate = i / elapsed if elapsed else 0
@@ -140,6 +149,7 @@ def main() -> int:
             eta_s = f"{eta // 60}m{eta % 60:02d}s"
             print(f"\r{label} {i}/{total} eta {eta_s}", end="", flush=True)
         print()
+        conn.close()
         print(f"Klart. {updated} av {total} filer uppdaterades.")
     else:
         merge_one(args.stem, txt_dir)
