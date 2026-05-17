@@ -15,7 +15,7 @@ När du gör förändringar i projektet ska du **alltid** uppdatera både `CLAUD
 
 ## Project Overview
 
-**palmemordsarkivet** laddar ner, OCR-processar och gör ~3 700 PDF-dokument (~33 000 sidor) från palmemordsarkivet.se sökbara via RAG + Claude Opus 4.7. Alla kommentarer och docstrings är på svenska.
+**palmemordsarkivet** laddar ner, OCR-processar och gör 3 762 palme-PDF:er + 7 155 wpu-PDF:er (~47 000 sidor, 8 665 sökbara dokument efter merge) från palmemordsarkivet.se och wpu.nu sökbara via RAG + Claude Opus 4.7. Alla kommentarer och docstrings är på svenska.
 
 Pipeline: download → OCR (Tesseract + optional Surya) → detect redactions → normalize → quality scoring → LanceDB ingest → RAG query → Streamlit UI.
 

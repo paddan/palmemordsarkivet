@@ -62,7 +62,7 @@ def search_archive(
 ) -> str:
     """Sök i Palmemordsarkivet och returnera relevanta textutdrag med källhänvisningar.
 
-    Använd detta verktyg för att hitta information i arkivets ~33 000 sidor.
+    Använd detta verktyg för att hitta information i Palmemordsarkivet.
     Anropa flera gånger med olika söktermer för att täcka ett ämne från flera vinklar.
     """
     _init()

@@ -4,7 +4,7 @@
 
 Skript för att ladda ner, OCR-tolka och söka i materialet på
 [palmemordsarkivet.se](https://palmemordsarkivet.se) — ett publikt Google Sheet
-med drygt 3 700 PDF-filer (~33 000 sidor) som länkas via "Länk till kopia".
+med 3 762 PDF-filer (~35 000 sidor) som länkas via "Länk till kopia".
 
 ## Web-gränssnitt
 
@@ -64,8 +64,8 @@ Kör sedan pipeline:
 Eller steg för steg:
 
 ```bash
-./download.sh          # 1. Ladda ner alla PDF:er (~3 700 st, tar några timmar)
-./download_wpu.sh      # 1b. (valfritt) Ladda ner WPU PDF:er (~7100 st)
+./download.sh          # 1. Ladda ner alla PDF:er (3 762 st, tar några timmar)
+./download_wpu.sh      # 1b. (valfritt) Ladda ner WPU PDF:er (7 155 st)
 ./ocr.sh               # 2. OCR → text (Tesseract + Surya på svåra sidor, tar flera timmar)
 ./ingest.sh            # 3. Bygg vektorindex i LanceDB (kan ta flera timmar)
 ./web.sh               # 4. Starta webgränssnittet och ställ frågor
@@ -283,7 +283,7 @@ Idempotent: sidor som redan korrigerats spåras via `llm_corrections`-tabellen o
 ```
 
 Kostnad: Claude Haiku är billig (~$0,25/M tokens). En typisk OCR-sida
-är ~600–1 000 tokens — om 5 % av ~33 000 sidor är dåliga är totalkostnaden
+är ~600–1 000 tokens — om 5 % av ~47 000 sidor är dåliga är totalkostnaden
 ~$25–40 för hela arkivet.
 
 Kör sedan `./ingest.sh` för att re-indexera ändrade filer (mtime-detektering

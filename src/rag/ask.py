@@ -57,7 +57,7 @@ Regler:
 - Citera ordagrant när det är klargörande, men håll citaten korta.
 - OCR-fel kan förekomma. Säg till om en passage verkar vara skadad eller obegriplig."""
 
-MCP_SYSTEM_PROMPT = """Du är en utredningsassistent med tillgång till Palmemordsarkivets ~33 000 sidor via verktyg.
+MCP_SYSTEM_PROMPT = """Du är en utredningsassistent med tillgång till Palmemordsarkivet via verktyg.
 
 Regler:
 - Svara på svenska.
