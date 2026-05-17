@@ -166,10 +166,11 @@ def main() -> int:
     if not args.dry_run:
         out_dir.mkdir(exist_ok=True)
 
+    print(f"Laddar ned wpu.nu-PDF:er → {out_dir.relative_to(ROOT)}/")
     print("Hämtar fillista från wpu.nu…")
     all_wpu = fetch_all_wpu_files()
     pdfs = [f for f in all_wpu if f["name"].lower().endswith(".pdf")]
-    print(f"  {len(pdfs)} PDF-filer på wpu.nu (av {len(all_wpu)} totalt)")
+    print(f"Hittade {len(pdfs)} PDF-filer")
 
     already_local = (
         {f.name.lower() for f in out_dir.iterdir() if f.is_file() and f.suffix.lower() == ".pdf"}
@@ -182,12 +183,8 @@ def main() -> int:
     ]
     n_skip = len(pdfs) - len(to_download)
 
-    if n_skip:
-        print(f"  {n_skip} redan nedladdade (hoppar över)")
-    print(f"  {len(to_download)} att ladda ner")
-
     if not to_download:
-        print("Inget att göra.")
+        print(f"Klart. {n_skip} redan hämtade." if n_skip else "Klart.")
         return 0
 
     if args.dry_run:
@@ -225,7 +222,11 @@ def main() -> int:
             errors += 1
             print(f"  FEL: {e}")
 
-    print(f"\nKlart: {done} nedladdade, {errors} fel → {out_dir}")
+    summary_parts = []
+    if done:    summary_parts.append(f"{done} nya")
+    if n_skip:  summary_parts.append(f"{n_skip} redan hämtade")
+    if errors:  summary_parts.append(f"{errors} fel")
+    print(f"\nKlart. {', '.join(summary_parts)}." if summary_parts else "\nKlart.")
     return 0 if not errors else 1
 
 

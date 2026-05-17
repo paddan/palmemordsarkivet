@@ -220,7 +220,8 @@ def main() -> int:
     source = "wpu" if out_dir.name == "wpu_files" else "files"
 
     csv_url = f"https://docs.google.com/spreadsheets/d/{args.sheet_id}/export?format=csv"
-    print(f"Hämtar kalkylbladet från {csv_url}")
+    print(f"Laddar ned palmemordsarkivet-PDF:er → {out_dir}/")
+    print("Hämtar kalkylbladet…")
     r = requests.get(csv_url, timeout=60)
     r.raise_for_status()
     r.encoding = "utf-8"
@@ -250,11 +251,18 @@ def main() -> int:
         }
         todo.append((build_filename(values), file_id))
 
-    print(f"Hittade {len(todo)} filer att ladda ner till {out_dir}/")
+    print(f"Hittade {len(todo)} filer")
 
     manifest_ids = {
         r["drive_id"] for r in conn.execute(
             "SELECT drive_id FROM downloads WHERE source=? AND drive_id IS NOT NULL",
+            (source,),
+        )
+    }
+    perm_failed_ids = {
+        r["drive_id"] for r in conn.execute(
+            "SELECT drive_id FROM downloads"
+            " WHERE source=? AND note LIKE 'failed:%' AND drive_id IS NOT NULL",
             (source,),
         )
     }
@@ -391,12 +399,23 @@ def main() -> int:
         # Liten paus för att undvika throttling
         time.sleep(0.1)
 
+    n_perm_skip = sum(1 for _, fid in todo if fid in perm_failed_ids)
+    n_already = n_done - n_perm_skip
+
+    summary_parts = []
+    if n_new:        summary_parts.append(f"{n_new} nya")
+    if n_dup:        summary_parts.append(f"{n_dup} dubbletter")
+    if n_already:    summary_parts.append(f"{n_already} redan hämtade")
+    if n_perm_skip:  summary_parts.append(f"{n_perm_skip} permanent misslyckade (skippas)")
+
     if failed:
         print(f"\n{len(failed)} filer misslyckades:")
         for prefix, fid, err in failed:
             print(f"  {fid}  {prefix}: {err}")
+        if summary_parts:
+            print(f"Övrigt: {', '.join(summary_parts)}.")
         return 2
-    print("Klart.")
+    print(f"Klart. {', '.join(summary_parts)}." if summary_parts else "Klart.")
     return 0
 
 
