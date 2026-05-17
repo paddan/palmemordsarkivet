@@ -361,14 +361,33 @@ def main() -> int:
                 n_new += 1
         except Exception as e:
             n_fail += 1
-            print(f"  FEL: {e}", file=sys.stderr, flush=True)
-            log_error("download", prefix, str(e))
-            failed.append((prefix, file_id, str(e)))
+            err_str = str(e)
+            print(f"  FEL: {err_str}", file=sys.stderr, flush=True)
+            log_error("download", prefix, err_str)
+            failed.append((prefix, file_id, err_str))
             if tmp.exists():
                 try:
                     tmp.unlink()
                 except OSError:
                     pass
+            # Permanenta fel registreras i state.db så att filen hoppas över
+            # vid nästa körning. Två fall:
+            # 1. HTTP-fel som inte är transienta (t.ex. 404).
+            # 2. RuntimeError från drive_download när Drive svarar med HTML
+            #    (borttagen fil eller oväntat svar).
+            if isinstance(e, requests.HTTPError) and not _is_transient(e):
+                status = getattr(getattr(e, "response", None), "status_code", "?")
+                note = f"failed:{status}"
+            elif isinstance(e, RuntimeError):
+                note = "failed:html-response"
+            else:
+                note = None
+            if note:
+                state_db.record_download(
+                    conn, source=source, drive_id=file_id,
+                    filename=prefix, note=note,
+                )
+                manifest_ids.add(file_id)
         # Liten paus för att undvika throttling
         time.sleep(0.1)
 
