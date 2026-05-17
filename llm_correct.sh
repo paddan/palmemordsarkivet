@@ -1,9 +1,9 @@
 #!/bin/bash
 # LLM-baserad post-korrektion av dåliga OCR-sidor med Claude Haiku.
-# Läser quality_pages.jsonl och rättar sidor under score-tröskeln.
+# Läser dåliga sidor från quality_pages-tabellen i state.db.
 #
 # Kräver CLAUDE_CODE_OAUTH_TOKEN eller ANTHROPIC_API_KEY i miljön.
-# Kör ./quality.sh --per-page innan om quality_pages.jsonl saknas.
+# Kör ./quality.sh --per-page innan om quality_pages-tabellen är tom.
 #
 # Användning:
 #   ./llm_correct.sh                    # rätta sidor med score < 50
@@ -28,9 +28,7 @@ Skickas vidare till src/llm_correct.py (alla okända flaggor passerar igenom):
   --base-url URL          override API-URL, t.ex. https://api.deepseek.com/v1
                           eller http://localhost:11434/v1 för Ollama
   --api-key KEY           override API-nyckel (annars läses från env)
-  --pages-jsonl FILE      quality_pages.jsonl (default: <root>/generated/quality_pages.jsonl)
   --txt DIR               text-katalog (default: <root>/generated/text)
-  --pages-out DIR         text_pages-katalog (default: <root>/generated/text_pages)
   --dry-run               visa vad som skulle rättas utan att göra det
 
 Exempel:
