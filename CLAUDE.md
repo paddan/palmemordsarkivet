@@ -23,10 +23,12 @@ Pipeline: download → OCR (Tesseract + optional Surya) → detect redactions �
 
 ```
 src/
-  download.py          # Google Drive PDF downloader, manifest tracking
+  db.py                # SQLite-state: schema + CRUD + delta-queries för hela pipelinen
+  migrate_to_db.py     # Engångsmigrering: legacy filstate → generated/state.db
+  download.py          # Google Drive PDF downloader (state via db.py)
   quality.py           # OCR quality scoring (0–100 heuristics + optional hunspell)
   ocr_pages.py         # Per-page OCR pipeline (Tesseract/Surya) + redaktionsdetektering
-  normalize_text.py    # Rule-based OCR normalization (ligatures, whitespace). Inkrementellt idempotent via stamp-fil.
+  normalize_text.py    # Rule-based OCR normalization (ligatures, whitespace). Inkrementellt via state.db.
   llm_correct.py       # LLM post-correction av dåliga OCR-sidor via Claude Haiku
   merge_pages.py       # Slå ihop text_pages/<stem>/page-*.txt → text/<stem>.txt
   build_user_words.py  # Generera Tesseract user-words från OCR-text
@@ -43,7 +45,8 @@ tessdata/              # swe_best.traineddata, swe.user-words, tesseract.config
 Data-kataloger (gitignored):
 - `downloaded/files/`, `downloaded/wpu_files/` — PDF:er
 - `generated/text/` — OCR-text, `generated/text_pages/` — per-sida-artefakter
-- `generated/lancedb/` — vektorindex, `generated/quality.csv` — kvalitetsrapport
+- `generated/lancedb/` — vektorindex
+- `generated/state.db` — SQLite-databas med all pipeline-state (markörer, kvalitet, ingest-mtime)
 - `generated/errors.log` — fellog
 
 ## Commands
@@ -64,6 +67,7 @@ Data-kataloger (gitignored):
 ./ingest.sh [--rebuild] [--reindex-since 2026-05-01]
 ./ask.sh "fråga" [--hybrid] [--no-rerank]
 ./web.sh                             # Starta Streamlit
+./migrate_to_db.sh                   # engångsmigrering av legacy state-filer → state.db
 
 # wpu.nu (valfritt)
 ./download_wpu.sh && ./merge_wpu.sh
@@ -75,15 +79,20 @@ Env-variabler: `CLAUDE_CODE_OAUTH_TOKEN` (Pro/Max, räknas mot prenumeration) el
 
 **MCP-läge (webui.py)**: Konversationskontinuitet uppnås genom att fånga `session_id` från `ResultMessage` och skicka tillbaka det som `ClaudeAgentOptions(resume=...)` på nästa fråga. "Ny konversation" nollställer `chat_history` + `mcp_session_id`.
 
-**mtime-tracking (ingest.py)**: Varje `.txt`-fil jämförs mot lagrad mtime; nyare fil → re-ingest. Legacy-rader har `mtime=0.0` och re-indexeras inte automatiskt — använd `--reindex-since`.
+**SQLite-state (`generated/state.db`)**: all operativ pipeline-state lever här —
+downloads, per-PDF-status (redaktion/merge/normalize), per-sida OCR-resultat,
+kvalitetspoäng, LLM-korrigeringar och ingest-tracking. Inkrementell logik
+bygger på att jämföra `pdf_files.text_mtime` mot `normalized_at`/`scored_at`/etc.
+`--rebuild` tvingar omkörning. Modulen `src/db.py` exponerar alla CRUD- och
+delta-queries; konsumenter skriver aldrig egen SQL. Efter `git pull` av denna
+ändring: kör `./migrate_to_db.sh` engångsvis för att fylla databasen från
+befintliga filer.
 
-**Redaktionsdetektering (ocr_pages.py)**: Hittar svarta maskeringsblock i bilder och infogar `[MASKAD]` i texten. På som standard; `--no-detect-redactions` stänger av. `detect_redactions.sh` skriver alltid en `.redact`-markörfil per PDF och förfiltrerar listan innan `xargs` — filer med markör spawnar inga subprocesser alls.
+**mtime-tracking (ingest.py)**: Varje `.txt`-fil jämförs mot mtime som lagras i `ingest`-tabellen i state.db (auktoritativt); nyare fil → re-ingest. LanceDB-tabellen har fortfarande en `mtime`-kolumn men den läses inte längre för delta-beslut. Legacy-rader (där `ingest`-tabellen saknar mtime) re-indexeras inte automatiskt — använd `--reindex-since`.
 
-**Per-dokument-cleanup (ocr.sh + Surya)**: Efter att `ocr_pages.py` är klar kör `ocr.sh` automatiskt `merge_pages.merge_one` + `normalize_text.process_file`, raderar `page-NNN.txt`/`.png` men behåller `page-NNN.json` som idempotens-markör.
+**Redaktionsdetektering (ocr_pages.py)**: Hittar svarta maskeringsblock i bilder och infogar `[MASKAD]` i texten. På som standard; `--no-detect-redactions` stänger av. Idempotens spåras via `pdf_files.redaction_checked_at` i state.db — `.redact`-markörfilerna är borttagna. `detect_redactions.sh` förfiltrerar listan baserat på databasen så filer som redan kollats spawnar inga subprocesser alls.
 
-**Stamp-filbaserad normalisering (normalize_text.py)**: `normalize.sh` skapar `generated/text/.normalize_stamp` efter en lyckad körning. Nästa körning filtrerar bort `.txt`-filer vars mtime ≤ stampens mtime — bara nya/ändrade filer normaliseras. `--rebuild` ignorerar stämpeln. Stämpeln skapas inte vid `--dry-run` eller om det finns fel. Ta bort `.normalize_stamp` manuellt för att tvinga om-normalisering av alla filer.
-
-**Stamp-filbaserad quality-bedömning (quality.py)**: `quality.sh` skapar `generated/.quality_stamp` efter en lyckad körning. Nästa körning laddar befintlig `quality.csv` (och `quality_pages.jsonl` om `--per-page`) och bedömer bara `.txt`-filer med mtime > stampens mtime. Oförändrade filer behåller sina gamla poäng i den sammanslagna outputen. `--rebuild` kör om alla filer. `--limit` skapar ingen stämpel (testläge).
+**Per-dokument-cleanup (ocr.sh + Surya)**: Efter att `ocr_pages.py` är klar kör `ocr.sh` automatiskt `merge_pages.merge_one` + `normalize_text.process_file`, raderar `page-NNN.txt`/`.png`/`.json`. Idempotens för per-sida-OCR spåras i `pdf_pages`-tabellen i state.db — `page-NNN.json`-markörerna existerar inte längre.
 
 ## Common Gotchas
 
@@ -92,3 +101,4 @@ Env-variabler: `CLAUDE_CODE_OAUTH_TOKEN` (Pro/Max, räknas mot prenumeration) el
 3. **Surya-prestanda**: ~30–100 s/sida vs ~1 s/sida för Tesseract. Körs bara på sidor under threshold.
 4. **FTS kräver tantivy**: Saknas det faller hybrid-sökning tillbaka på vektor-only.
 5. **OAuth vs API**: `CLAUDE_CODE_OAUTH_TOKEN` räknas mot Pro/Max-prenumerationen; `ANTHROPIC_API_KEY` drar API-credits.
+6. **SQLite WAL-filer**: `generated/state.db-wal` och `-shm` är normala WAL-filer och syncas vid checkpoint. Säkerhetskopiera alla tre samtidigt.

@@ -60,6 +60,23 @@ Eller steg för steg:
 
 Varje steg är idempotent — avbryt och fortsätt när som helst.
 
+## State-databas (`generated/state.db`)
+
+Alla pipeline-markörer och status lagras i SQLite (`generated/state.db`).
+Inspektera med t.ex. `sqlite3 generated/state.db`. Tabellerna:
+
+- `downloads` — Drive- och wpu-nedladdningar (drive_id, sha1, filename)
+- `pdf_files` — per-PDF-status (redaction_checked_at, merged_at, normalized_at, text_mtime)
+- `pdf_pages` — per-sida OCR-resultat (text, engine, score)
+- `quality` / `quality_pages` — kvalitetspoäng per fil och sida
+- `ingest` — vad som indexerats i LanceDB och med vilken text_mtime
+- `llm_corrections` — vilka sidor som LLM-korrigerats
+
+**Migrering från äldre versioner:** kör `./migrate_to_db.sh` en gång. Skriptet är
+idempotent. När pipelinen verifierats mot state.db i några körningar kan
+`cleanup_legacy_state.sh` köras för att ta bort gamla filmarkörer (manifest.csv,
+stamp-filer, .redact, page-*.json, quality.csv/jsonl).
+
 ## Krav
 
 - macOS (testat på Darwin 25), Python 3.11+
@@ -154,7 +171,7 @@ du delarna direkt:
 
 ```bash
 ./ocr_tesseract.sh               # Tesseract på alla nya filer
-./quality.sh --per-page          # bygg generated/quality.csv + generated/quality_pages.jsonl
+./quality.sh --per-page          # bedöm + skriv per-sida-poäng till state.db (tabellerna quality/quality_pages)
 ./ocr.sh --redo --mode pages     # Surya på sidor under tröskeln
 ./quality.sh                     # uppdaterad bedömning
 ```
@@ -235,8 +252,8 @@ OCR-fel (fellästa tecken, trasiga ord, skräptecken) med svenska
 språkets kontext. Kör automatiskt `normalize.sh`:s logik på varje
 sida före och efter rättningen.
 
-Förutsätter att `generated/quality_pages.jsonl` finns (byggs av `./quality.sh --per-page`).
-Idempotent: sidor med `.llm`-markörfil i `generated/text_pages/<stem>/` hoppas över.
+Förutsätter att per-sida-poäng finns i state.db (byggs av `./quality.sh --per-page`).
+Idempotent: sidor som redan korrigerats spåras via `llm_corrections`-tabellen och hoppas över.
 
 ```bash
 ./llm_correct.sh                     # rätta sidor med score < 50
@@ -412,6 +429,9 @@ lokalt (via `open`) i en gömd iframe så huvudsidan inte laddas om.
 | `src/rag/mcp_server.py` | MCP-server med `search_archive` och `get_page` (startas av ask.py/webui.py) |
 | `src/webui.py` | Streamlit-webgränssnitt för frågor (RAG + MCP-toggle) |
 | `web.sh` | Wrapper för Streamlit-servern |
+| `migrate_to_db.sh` → `src/migrate_to_db.py` | Engångsmigrering: legacy filmarkörer → `generated/state.db` |
+| `cleanup_legacy_state.sh` | Tar bort gamla filmarkörer efter migrering (manifest.csv, stamp-filer, .redact, page-*.json, quality.csv/jsonl) |
+| `src/db.py` | SQLite-state: schema + CRUD + delta-queries (importeras av övriga skript) |
 | `tessdata/swe.user-words` | Palme-specifika ord (committat) |
 | `tessdata/tesseract.config` | `preserve_interword_spaces 1` (committat) |
 
@@ -419,14 +439,14 @@ lokalt (via `open`) i en gömd iframe så huvudsidan inte laddas om.
 
 ```bash
 ./quality.sh --top 30      # bedöm och visa värsta 30
-./quality.sh --rebuild     # ignorera stämpelfil, kör om alla filer
+./quality.sh --rebuild     # tvinga om-bedömning av alla filer
 ```
 
-Körs inkrementellt — bara filer som ändrats sedan förra körningen bedöms om;
-`generated/.quality_stamp` styr vad som är nytt. Ta bort stämpeln (eller kör
-`--rebuild`) för att tvinga om-bedömning av allt.
+Körs inkrementellt — bara filer vars `text_mtime` är nyare än `scored_at` i
+`pdf_files`-tabellen bedöms om. `--rebuild` ignorerar tidsstämplarna och kör om
+allt.
 
-Skriver `generated/quality.csv` (sorterat värst först) med poäng 0–100 per fil baserat på
+Skriver poäng 0–100 per fil till `quality`-tabellen i state.db (sorterat värst först) baserat på
 junk-tecken-andel, andel 1–2-tecken-ord, ihopklistrade ord, siffror inuti ord
 och vokal/konsonant-balans. Markerar källa `text-layer` (originalet hade text)
 vs `ocr` (Tesseract).
@@ -474,7 +494,7 @@ bash via `>> "$ROOT/generated/errors.log"`. Append-only, idempotent.
 
 ```
 downloaded/   — nedladdade PDF:er (files/, wpu_files/)
-generated/    — allt pipeline-genererat (text/, ocr/, lancedb/, quality.csv, errors.log, …)
+generated/    — allt pipeline-genererat (text/, ocr/, lancedb/, state.db, errors.log, …)
 tessdata/*.traineddata  — laddas av setup_tessdata.sh
 ```
 
