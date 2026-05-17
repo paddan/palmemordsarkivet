@@ -142,6 +142,32 @@ def init_schema(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+# --- helpers ----------------------------------------------------------
+
+def source_for_path(path: Path | str, root: Path | None = None) -> str:
+    """Bestäm 'files'/'wpu' baserat på var motsvarande artifact ligger.
+
+    - Om path innehåller komponenten ``wpu_files`` → ``'wpu'``.
+    - Om path är en ``.txt``-fil och ``root`` anges, leta efter motsvarande PDF i
+      ``root/downloaded/wpu_files/<stem>.pdf``; om den finns → ``'wpu'``.
+    - Default: ``'files'``.
+
+    Detta är mer robust än ``"wpu" in str(path)`` som matchar t.ex. ``Wpunkt.pdf``.
+    """
+    p = Path(path)
+    try:
+        parts = p.resolve().parts
+    except OSError:
+        parts = p.parts
+    if "wpu_files" in parts:
+        return "wpu"
+    if p.suffix == ".txt" and root is not None:
+        wpu_pdf = Path(root) / "downloaded" / "wpu_files" / f"{p.stem}.pdf"
+        if wpu_pdf.exists():
+            return "wpu"
+    return "files"
+
+
 # --- downloads --------------------------------------------------------
 
 def record_download(

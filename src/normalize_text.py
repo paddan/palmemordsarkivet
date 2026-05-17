@@ -190,7 +190,7 @@ def main() -> None:
                 except KeyError:
                     # pdf_files-rad saknas (legacy / direktskriven fil).
                     # Skapa raden defensivt och markera normaliserad.
-                    source = "wpu" if "wpu" in str(f).lower() else "files"
+                    source = state_db.source_for_path(f, root=ROOT)
                     state_db.upsert_pdf_file(
                         conn, pdf_stem=f.stem, source=source, pdf_path=str(f)
                     )

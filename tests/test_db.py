@@ -242,3 +242,29 @@ def test_parallel_page_writes(tmp_path):
     c = connect(db_path)
     n = c.execute("SELECT COUNT(*) FROM pdf_pages").fetchone()[0]
     assert n == 100
+
+
+def test_source_for_path(tmp_path):
+    from db import source_for_path
+    # Path-komponent 'wpu_files' → wpu
+    assert source_for_path("/x/downloaded/wpu_files/a.pdf") == "wpu"
+    assert source_for_path("/x/downloaded/files/a.pdf") == "files"
+    # Filnamn som råkar innehålla "wpu" men ligger i files/ → "files"
+    assert source_for_path("/x/downloaded/files/wpu-data.pdf") == "files"
+    assert source_for_path("/x/Wpunkt.pdf") == "files"
+
+    # .txt-fallback: leta efter matchande PDF under root
+    root = tmp_path
+    (root / "downloaded" / "wpu_files").mkdir(parents=True)
+    (root / "downloaded" / "files").mkdir(parents=True)
+    (root / "downloaded" / "wpu_files" / "doc1.pdf").write_bytes(b"")
+    (root / "generated" / "text").mkdir(parents=True)
+    txt1 = root / "generated" / "text" / "doc1.txt"
+    txt1.write_text("x")
+    assert source_for_path(txt1, root=root) == "wpu"
+    # Saknar wpu-PDF → default 'files'
+    txt2 = root / "generated" / "text" / "doc2.txt"
+    txt2.write_text("x")
+    assert source_for_path(txt2, root=root) == "files"
+    # Utan root → 'files'
+    assert source_for_path(txt1) == "files"

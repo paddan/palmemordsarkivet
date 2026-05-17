@@ -270,7 +270,7 @@ def main() -> int:
         # Defensiv: om pdf_files saknar raden (legacy) — skapa den så att
         # foreign-relationen håller och files_needing_* fungerar framöver.
         if state_db.get_pdf_file(conn, f.stem) is None:
-            source = "wpu" if "wpu" in str(f).lower() else "files"
+            source = state_db.source_for_path(f, root=ROOT)
             state_db.upsert_pdf_file(
                 conn, pdf_stem=f.stem, source=source, pdf_path=str(f),
             )
