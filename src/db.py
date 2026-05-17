@@ -129,6 +129,8 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA busy_timeout=30000")
+    # NORMAL är säkert under WAL och ~10x snabbare än FULL vid många commits.
+    conn.execute("PRAGMA synchronous=NORMAL")
     return conn
 
 

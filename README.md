@@ -77,6 +77,12 @@ idempotent. När pipelinen verifierats mot state.db i några körningar kan
 `cleanup_legacy_state.sh` köras för att ta bort gamla filmarkörer (manifest.csv,
 stamp-filer, .redact, page-*.json, quality.csv/jsonl).
 
+**Livscykel:** radera inte `generated/state.db` mitt under en pågående
+pipeline-körning. Befintliga processer fortsätter skriva mot den unlinkade inoden
+medan nya processer skapar en tom db — det ger inkonsekvent state. Om databasen
+har raderats, kör `./migrate_to_db.sh` innan nästa körning för att återskapa
+state från eventuella kvarvarande legacy-filer.
+
 ## Krav
 
 - macOS (testat på Darwin 25), Python 3.11+

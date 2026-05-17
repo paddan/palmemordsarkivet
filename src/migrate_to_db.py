@@ -207,7 +207,7 @@ def _migrate_ingest(conn, root: Path) -> int:
             mtimes = df["mtime"].tolist()
     except Exception as e:
         print(f"  [_migrate_ingest] LanceDB-läsning misslyckades: {e}",
-              file=__import__("sys").stderr)
+              file=sys.stderr)
         return 0
 
     per_stem: dict[str, tuple[float, int]] = {}
