@@ -1,12 +1,12 @@
 #!/bin/bash
 # Detekterar maskeringsblock i PDF:er och infogar [MASKAD] i OCR-text.
 # Renderar sidor vid låg DPI (72) — tillräckligt för stora svarta block.
-# Inkrementellt: hoppar över filer med befintlig .redact-markör i generated/text/.
+# Inkrementellt: hoppar över filer som redan markerats i state.db (pdf_files.redaction_checked_at).
 # Filer med markör filtreras bort innan xargs — inga onödiga subprocesser.
 #
 # Användning:
 #   ./detect_redactions.sh               # alla filer
-#   ./detect_redactions.sh --rebuild     # ignorera .redact-markörer
+#   ./detect_redactions.sh --rebuild     # nollställ redaction-flaggor i state.db
 
 set -eu
 
@@ -19,7 +19,7 @@ Användning: $(basename "$0") [flaggor]
   --txt DIR               text-katalog (\$ROOT/generated/text)
   --jobs N                parallella processer (4)
   --dpi N                 render-DPI (72)
-  --rebuild               kör om alla filer (ignorera .redact-markörer)
+  --rebuild               kör om alla filer (nollställ redaction-flaggor i state.db)
   --rebuild-text          regenerera .txt från generated/ocr/*.pdf innan körning,
                           tar även bort .redact-markörer (innebär --rebuild).
                           Kör ./normalize.sh efteråt för att normalisera om.
@@ -62,6 +62,16 @@ source .venv/bin/activate
 PYBIN="$ROOT/.venv/bin/python"
 WPU_DIR="$ROOT/downloaded/wpu_files"
 
+already_checked_stems() {
+  "$ROOT/.venv/bin/python" -c "
+import sys; sys.path.insert(0, '$ROOT/src')
+import db
+conn = db.connect(); db.init_schema(conn)
+for r in conn.execute('SELECT pdf_stem FROM pdf_files WHERE redaction_checked_at IS NOT NULL'):
+    print(r['pdf_stem'])
+" 2>/dev/null
+}
+
 if [ "$REBUILD_TEXT" = "1" ]; then
   OCR_DIR="$ROOT/generated/ocr"
   echo "Regenererar .txt-filer från $OCR_DIR/*.pdf ..."
@@ -80,9 +90,22 @@ if [ "$REBUILD_TEXT" = "1" ]; then
 fi
 
 if [ "$REBUILD" = "1" ]; then
-  echo "Tar bort .redact-markörer..."
-  find "$TXT" -name '*.redact' -delete
+  echo "Nollställer redaction-flaggor i state.db..."
+  "$ROOT/.venv/bin/python" -c "
+import sys; sys.path.insert(0, '$ROOT/src')
+import db
+conn = db.connect(); db.init_schema(conn)
+conn.execute('UPDATE pdf_files SET redaction_checked_at=NULL, has_redactions=NULL')
+conn.commit()
+"
+  # Rensa även gamla .redact-markörfiler (kvar från tidigare versioner)
+  find "$TXT" -name '*.redact' -delete 2>/dev/null || true
 fi
+
+# Bygg en sorterad lista med redan-kontrollerade stems en gång (snabbare än
+# en query per fil).
+CHECKED_FILE=$(mktemp)
+already_checked_stems | sort -u > "$CHECKED_FILE"
 
 PENDING=()
 if [ -n "$FILES_FROM" ]; then
@@ -93,14 +116,22 @@ if [ -n "$FILES_FROM" ]; then
     txt_file="$TXT/$stem.txt"
     [ -f "$txt_file" ] || continue
     ALL_TOTAL=$((ALL_TOTAL + 1))
-    [ -f "$TXT/$stem.redact" ] || PENDING+=("$txt_file")
+    # Snabb check via fil (grep -Fxq är ganska snabbt på sorterad fil)
+    if ! grep -Fxq "$stem" "$CHECKED_FILE"; then
+      PENDING+=("$txt_file")
+    fi
   done < "$FILES_FROM"
 else
   ALL_TOTAL=$(find "$TXT" -name '*.txt' | wc -l | tr -d ' ')
   while IFS= read -r -d '' f; do
-    [ -f "${f%.txt}.redact" ] || PENDING+=("$f")
+    stem=$(basename "$f" .txt)
+    if ! grep -Fxq "$stem" "$CHECKED_FILE"; then
+      PENDING+=("$f")
+    fi
   done < <(find "$TXT" -name '*.txt' -print0)
 fi
+
+rm -f "$CHECKED_FILE"
 
 SKIPPED=$(( ALL_TOTAL - ${#PENDING[@]} ))
 TOTAL=${#PENDING[@]}
