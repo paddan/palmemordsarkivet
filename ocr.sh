@@ -218,6 +218,7 @@ wpu_dir = root / "downloaded" / "wpu_files"
 sys.path.insert(0, str(root / "src"))
 from merge_pages import merge_one  # noqa: E402
 from normalize_text import process_file as normalize_file  # noqa: E402
+import db as state_db  # noqa: E402
 
 raw = defaultdict(list)
 with open(jsonl, encoding="utf-8") as f:
@@ -230,16 +231,20 @@ with open(jsonl, encoding="utf-8") as f:
         if score < thr:
             raw[row["file"]].append(int(row["page"]))
 
-# Filtrera bort sidor som redan har en .json-markör (= Surya har försökt
-# tidigare, även om resultatet var lika dåligt). Annars loopar vi över samma
-# sidor varje körning utan att göra något.
+# Filtrera bort sidor där Surya redan har försökt (enligt pdf_pages-tabellen).
+# Annars loopar vi över samma sidor varje körning utan att göra något.
 bad = defaultdict(list)
 skipped_already = 0
+conn = state_db.connect()
+state_db.init_schema(conn)
 for txt_name, pages in raw.items():
     stem = txt_name[:-4] if txt_name.endswith(".txt") else txt_name
-    stem_dir = out_dir / stem
     for p in pages:
-        if (stem_dir / f"page-{p:03d}.json").exists():
+        row = conn.execute(
+            "SELECT engine FROM pdf_pages WHERE pdf_stem=? AND page_num=?",
+            (stem, p),
+        ).fetchone()
+        if row and row["engine"] == "surya":
             skipped_already += 1
         else:
             bad[txt_name].append(p)
@@ -305,7 +310,7 @@ for txt_name, pages in bad.items():
     if r.returncode == 0:
         print(f"  → ok ({took:.0f}s)")
         try:
-            merge_one(stem, txt_dir, out_dir)
+            merge_one(stem, txt_dir)
         except Exception as e:  # noqa: BLE001
             print(f"  [merge_pages] FEL {stem}: {e}", file=sys.stderr)
         txt_file = txt_dir / f"{stem}.txt"
@@ -338,8 +343,13 @@ if [ -n "${FROM_LIST:-}" ]; then
     [ -n "$stem" ] || continue
     rm -f "$OCR_DIR/$stem.ocr-done" "$OCR_DIR/$stem.ocr-failed"
     rm -f "$TXT_DIR/$stem.txt" "$TXT_DIR/$stem.redact"
-    # Surya-markörer tas bort så att dåliga sidor kan köras om.
-    find "$PAGES_DIR/$stem" -name 'page-*.json' -delete 2>/dev/null || true
+    # Rensa pdf_pages-rader för stem så att Surya kan köras om för dåliga sidor.
+    "$PYBIN" -c "
+import sys; sys.path.insert(0, '$ROOT/src')
+import db; conn = db.connect(); db.init_schema(conn)
+conn.execute('DELETE FROM pdf_pages WHERE pdf_stem=?', ('$stem',))
+conn.commit()
+" 2>/dev/null || true
     count=$((count + 1))
   done < "$FROM_LIST"
 
