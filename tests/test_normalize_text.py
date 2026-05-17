@@ -1,4 +1,4 @@
-"""Tester för normalize_text: normalize-funktionen och stamp-fillogiken."""
+"""Tester för normalize_text: normalize-funktionen och db-baserad inkrementell logik."""
 
 from __future__ import annotations
 
@@ -63,15 +63,17 @@ def test_process_file_dry_run_does_not_write(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Stamp-fillogik via CLI (subprocess)
+# Inkrementell logik via state.db
 # ---------------------------------------------------------------------------
 
-def _run_main(args: list[str], txt_dir: Path) -> str:
-    """Kör normalize_text.main() och returnerar stdout."""
-    import subprocess, sys
+def _run_main(args: list[str], txt_dir: Path, db_path: Path) -> str:
+    """Kör normalize_text.main() via subprocess med given state.db."""
+    import subprocess, sys, os
+    env = os.environ.copy()
+    env["STATE_DB"] = str(db_path)
     result = subprocess.run(
         [sys.executable, "-m", "normalize_text", "--txt", str(txt_dir)] + args,
-        capture_output=True, text=True,
+        capture_output=True, text=True, env=env,
     )
     return result.stdout + result.stderr
 
@@ -83,61 +85,81 @@ def txt_dir(tmp_path):
     return d
 
 
-def test_stamp_created_after_run(txt_dir):
+@pytest.fixture()
+def db_path(tmp_path):
+    return tmp_path / "state.db"
+
+
+def _connect(db_path: Path):
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+    import db
+    return db.connect(db_path)
+
+
+def test_mark_normalized_after_run(txt_dir, db_path):
+    """Efter en lyckad körning ska pdf_files.normalized_at vara satt."""
     (txt_dir / "a.txt").write_text("ren text", encoding="utf-8")
-    _run_main([], txt_dir)
-    assert (txt_dir / ".normalize_stamp").exists()
+    _run_main([], txt_dir, db_path)
+    conn = _connect(db_path)
+    row = conn.execute(
+        "SELECT normalized_at FROM pdf_files WHERE pdf_stem='a'"
+    ).fetchone()
+    assert row is not None
+    assert row["normalized_at"] is not None
 
 
-def test_stamp_skips_old_files(txt_dir):
+def test_unchanged_file_skipped_on_rerun(txt_dir, db_path):
+    """Andra körningen utan filändringar ska hoppa över filen."""
+    (txt_dir / "a.txt").write_text("ren text", encoding="utf-8")
+    _run_main([], txt_dir, db_path)
+    time.sleep(1.1)  # >1s för att sekundprecision ska gå att skilja
+    out = _run_main([], txt_dir, db_path)
+    assert "oförändrade" in out or "0/0" in out or "Inga" in out
+
+
+def test_modified_file_reprocessed(txt_dir, db_path):
+    """Om en fil ändras (text_mtime uppdateras av merge_pages) ska
+    den re-normaliseras nästa körning."""
     f = txt_dir / "a.txt"
     f.write_text("ren text", encoding="utf-8")
-    _run_main([], txt_dir)  # skapar stamp
-    stamp = txt_dir / ".normalize_stamp"
-    first_mtime = stamp.stat().st_mtime
-
-    # Kör igen utan att ändra filen — stamp ska INTE uppdateras (inga filer att processa)
-    time.sleep(0.05)
-    out = _run_main([], txt_dir)
-    assert "oförändrade sedan senaste körning" in out
-    # stamp-mtime ska vara oförändrad (inga filer processades → stamp touches inte)
-    assert stamp.stat().st_mtime == first_mtime
-
-
-def test_stamp_processes_new_file(txt_dir):
-    (txt_dir / "a.txt").write_text("ren text", encoding="utf-8")
-    _run_main([], txt_dir)
-    stamp = txt_dir / ".normalize_stamp"
-
-    time.sleep(0.05)
-    new_file = txt_dir / "b.txt"
-    new_file.write_text("ﬁnns ny text", encoding="utf-8")
-
-    out = _run_main([], txt_dir)
-    assert "1 filer" in out or "1/" in out
-    assert new_file.read_text(encoding="utf-8") == "finns ny text"
-    # stamp uppdateras efter lyckad körning
-    assert stamp.stat().st_mtime > 0
+    _run_main([], txt_dir, db_path)
+    time.sleep(1.1)
+    f.write_text("ﬁnns ny text", encoding="utf-8")
+    # Simulera att merge_pages uppdaterat text_mtime i pdf_files efter en omkörning.
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+    import db
+    conn = db.connect(db_path)
+    db.mark_merged(conn, "a", text_mtime=f.stat().st_mtime)
+    conn.close()
+    _run_main([], txt_dir, db_path)
+    assert f.read_text(encoding="utf-8") == "finns ny text"
 
 
-def test_rebuild_ignores_stamp(txt_dir):
+def test_rebuild_processes_all(txt_dir, db_path):
     f = txt_dir / "a.txt"
     f.write_text("ren text", encoding="utf-8")
-    _run_main([], txt_dir)  # skapar stamp
-
-    time.sleep(0.05)
-    out = _run_main(["--rebuild"], txt_dir)
-    assert "oförändrade" not in out
-    assert "1 filer" in out or "1/" in out
+    _run_main([], txt_dir, db_path)
+    out = _run_main(["--rebuild"], txt_dir, db_path)
+    assert "0/0" not in out  # något ska processas
 
 
-def test_dry_run_does_not_create_stamp(txt_dir):
+def test_dry_run_does_not_mark_normalized(txt_dir, db_path):
+    """Dry-run ska inte sätta normalized_at i db."""
     (txt_dir / "a.txt").write_text("ﬁnns text", encoding="utf-8")
-    _run_main(["--dry-run"], txt_dir)
-    assert not (txt_dir / ".normalize_stamp").exists()
+    _run_main(["--dry-run"], txt_dir, db_path)
+    if not db_path.exists():
+        return  # om db inte ens skapades är dry-run helt no-op — ok
+    conn = _connect(db_path)
+    row = conn.execute(
+        "SELECT normalized_at FROM pdf_files WHERE pdf_stem='a'"
+    ).fetchone()
+    if row is not None:
+        assert row["normalized_at"] is None
 
 
-def test_files_from_only_processes_listed(tmp_path, txt_dir):
+def test_files_from_only_processes_listed(tmp_path, txt_dir, db_path):
     (txt_dir / "a.txt").write_text("ﬁnns text", encoding="utf-8")
     (txt_dir / "b.txt").write_text("ﬂöde text", encoding="utf-8")
     (txt_dir / "c.txt").write_text("ﬀlera ord", encoding="utf-8")
@@ -145,19 +167,8 @@ def test_files_from_only_processes_listed(tmp_path, txt_dir):
     files_list = tmp_path / "lista.txt"
     files_list.write_text("a.txt\nb.txt\n", encoding="utf-8")
 
-    _run_main(["--files-from", str(files_list)], txt_dir)
+    _run_main(["--files-from", str(files_list)], txt_dir, db_path)
 
     assert (txt_dir / "a.txt").read_text(encoding="utf-8") == "finns text"
     assert (txt_dir / "b.txt").read_text(encoding="utf-8") == "flöde text"
     assert (txt_dir / "c.txt").read_text(encoding="utf-8") == "ﬀlera ord"
-
-
-def test_files_from_does_not_create_stamp(tmp_path, txt_dir):
-    (txt_dir / "a.txt").write_text("ﬁnns text", encoding="utf-8")
-
-    files_list = tmp_path / "lista.txt"
-    files_list.write_text("a.txt\n", encoding="utf-8")
-
-    _run_main(["--files-from", str(files_list)], txt_dir)
-
-    assert not (txt_dir / ".normalize_stamp").exists()

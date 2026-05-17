@@ -3,6 +3,10 @@
 Rättar Unicode-ligaturer, mjuka bindestreck, styrtecken och
 whitespace-artefakter. Idempotent: en andra körning ger samma utdata.
 
+Inkrementell logik via ``state.db``: kör bara på filer vars text_mtime är
+nyare än senaste ``mark_normalized`` (eller saknar pdf_files-rad helt —
+legacy/direktskrivna filer behandlas defensivt).
+
 Kör:
     python normalize_text.py [--txt text] [--dry-run]
 """
@@ -13,6 +17,8 @@ import sys
 import time
 import unicodedata
 from pathlib import Path
+
+import db as state_db
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -120,14 +126,16 @@ def main() -> None:
     ap.add_argument('--stats', action='store_true',
                     help='visa per-fil-statistik för ändrade filer')
     ap.add_argument('--rebuild', action='store_true',
-                    help='ignorera stamp-fil och normalisera alla filer')
+                    help='ignorera db-delta och normalisera alla filer')
     ap.add_argument('--files-from', default='',
                     help='bearbeta bara filer listade i FILE (ett filnamn per rad)')
     args = ap.parse_args()
 
     root = Path(args.root) if args.root else ROOT
     txt_dir = Path(args.txt) if args.txt else root / 'generated' / 'text'
-    stamp = txt_dir / '.normalize_stamp'
+
+    conn = state_db.connect()
+    state_db.init_schema(conn)
 
     all_files = sorted(txt_dir.glob('*.txt'))
 
@@ -139,16 +147,24 @@ def main() -> None:
                 listed_names.add(name if name.endswith('.txt') else name + '.txt')
         files = [f for f in all_files if f.name in listed_names]
         skipped = 0
+    elif args.rebuild or args.dry_run:
+        files = all_files
+        skipped = 0
     else:
-        since: float = 0.0
-        if not args.rebuild and not args.dry_run and stamp.exists():
-            since = stamp.stat().st_mtime
-        files = [f for f in all_files if f.stat().st_mtime > since] if since else all_files
+        needing = set(state_db.files_needing_normalize(conn))
+        files = []
+        for f in all_files:
+            row = state_db.get_pdf_file(conn, f.stem)
+            if row is None:
+                # Legacy / direktskrivna filer utan pdf_files-rad → ta med.
+                files.append(f)
+            elif f.stem in needing:
+                files.append(f)
         skipped = len(all_files) - len(files)
 
     if not files:
         if skipped:
-            print(f'Normalisering klar — {skipped} filer oförändrade sedan senaste körning.')
+            print(f'Normalisering klar — {skipped} filer oförändrade sedan föregående normalize.')
         else:
             print(f'Inga .txt-filer i {txt_dir}')
         return
@@ -166,6 +182,21 @@ def main() -> None:
                 changed += 1
                 if args.stats or args.dry_run:
                     print(f'\n  [ändrad] {f.name}', end='')
+            if not args.dry_run:
+                try:
+                    state_db.mark_normalized(
+                        conn, f.stem, text_mtime=f.stat().st_mtime
+                    )
+                except KeyError:
+                    # pdf_files-rad saknas (legacy / direktskriven fil).
+                    # Skapa raden defensivt och markera normaliserad.
+                    source = "wpu" if "wpu" in str(f).lower() else "files"
+                    state_db.upsert_pdf_file(
+                        conn, pdf_stem=f.stem, source=source, pdf_path=str(f)
+                    )
+                    state_db.mark_normalized(
+                        conn, f.stem, text_mtime=f.stat().st_mtime
+                    )
         except OSError as e:
             print(f'\n  [fel] {f.name}: {e}', file=sys.stderr, end='')
             errors += 1
@@ -180,9 +211,6 @@ def main() -> None:
     prefix = '[dry-run] ' if args.dry_run else ''
     print(f'{prefix}{changed}/{total} filer normaliserade'
           + (f' ({errors} fel)' if errors else '') + '.')
-
-    if not args.dry_run and not errors and not args.files_from:
-        stamp.touch()
 
 
 if __name__ == '__main__':
