@@ -195,10 +195,19 @@ def _migrate_ingest(conn, root: Path) -> int:
         if "chunks" not in table_names:
             return 0
         tbl = ldb.open_table("chunks")
-        arrow = tbl.to_lance().to_table(columns=["source", "mtime"])
-        sources = arrow.column("source").to_pylist()
-        mtimes = arrow.column("mtime").to_pylist()
-    except Exception:
+        # Försök först snabba lance-scanner-vägen, fallback till pandas om
+        # `pylance` saknas (LanceDB lazy-importerar lance internt).
+        try:
+            arrow = tbl.to_lance().to_table(columns=["source", "mtime"])
+            sources = arrow.column("source").to_pylist()
+            mtimes = arrow.column("mtime").to_pylist()
+        except ImportError:
+            df = tbl.to_pandas()
+            sources = df["source"].tolist()
+            mtimes = df["mtime"].tolist()
+    except Exception as e:
+        print(f"  [_migrate_ingest] LanceDB-läsning misslyckades: {e}",
+              file=__import__("sys").stderr)
         return 0
 
     per_stem: dict[str, tuple[float, int]] = {}
