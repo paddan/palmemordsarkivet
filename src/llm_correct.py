@@ -200,7 +200,8 @@ async def _correct_all(
             eta_s = f'{eta // 60}m{eta % 60:02d}s'
             if not page_text.strip():
                 print(f'  [{done}/{total}] {stem} sida {p}: tom — hoppar  eta {eta_s}')
-                state_db.mark_llm_corrected(conn, stem, p)
+                if not dry_run:
+                    state_db.mark_llm_corrected(conn, stem, p)
                 continue
 
             print(f'  [{done}/{total}] {stem} sida {p} ({len(page_text)} tecken)  eta {eta_s}')

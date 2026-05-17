@@ -113,7 +113,7 @@ def test_unchanged_file_skipped_on_rerun(txt_dir, db_path):
     """Andra körningen utan filändringar ska hoppa över filen."""
     (txt_dir / "a.txt").write_text("ren text", encoding="utf-8")
     _run_main([], txt_dir, db_path)
-    time.sleep(1.1)  # >1s för att sekundprecision ska gå att skilja
+    # Inget filändras → andra körningen ska inte ha något att göra.
     out = _run_main([], txt_dir, db_path)
     assert "oförändrade" in out or "0/0" in out or "Inga" in out
 
@@ -124,14 +124,16 @@ def test_modified_file_reprocessed(txt_dir, db_path):
     f = txt_dir / "a.txt"
     f.write_text("ren text", encoding="utf-8")
     _run_main([], txt_dir, db_path)
-    time.sleep(1.1)
+    # Simulera att merge_pages uppdaterat text_mtime till ett värde som
+    # ligger garanterat efter normalized_at (sekundprecision). Vi använder
+    # ett explicit framtida timestamp istället för att vänta på wall-clock.
     f.write_text("ﬁnns ny text", encoding="utf-8")
-    # Simulera att merge_pages uppdaterat text_mtime i pdf_files efter en omkörning.
     import sys
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
     import db
     conn = db.connect(db_path)
-    db.mark_merged(conn, "a", text_mtime=f.stat().st_mtime)
+    future = time.time() + 3600  # 1h framåt — garanterat > normalized_at
+    db.mark_merged(conn, "a", text_mtime=future)
     conn.close()
     _run_main([], txt_dir, db_path)
     assert f.read_text(encoding="utf-8") == "finns ny text"

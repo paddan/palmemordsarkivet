@@ -22,6 +22,12 @@ from pathlib import Path
 
 import db as state_db
 
+try:
+    from errors_log import log_error
+except Exception:  # pragma: no cover
+    def log_error(component: str, item: str, message: str) -> None:
+        pass
+
 ROOT = Path(__file__).resolve().parent.parent
 TEXT_DIR = ROOT / "generated" / "text"
 
@@ -104,8 +110,7 @@ def merge_one(stem: str, txt_dir: Path, conn: sqlite3.Connection | None = None) 
             try:
                 state_db.mark_merged(conn, stem, text_mtime=txt_path.stat().st_mtime)
             except KeyError:
-                print(f"[merge_pages] {stem}: saknar pdf_files-rad — "
-                      "merged_at sätts inte", file=sys.stderr)
+                log_error("merge_pages", stem, "mark_merged: KeyError")
             msg = f"[merge_pages] {stem}: uppdaterade {len(merged_pages)} av {n_pages} sidor"
             if invalid:
                 msg += f" (ignorerade ogiltiga sidnr: {invalid})"
