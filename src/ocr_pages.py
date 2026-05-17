@@ -6,9 +6,11 @@ enskilda dåliga sidor kan om-OCR:as med en annan motor utan att hela filen
 måste köras om.
 
 Output i ``<out_dir>/<stem>/``:
-    page-NNN.png   — render (raderas inte; idempotency)
-    page-NNN.txt   — OCR-text
-    page-NNN.json  — text + score (heuristik från quality.score_text)
+    page-NNN.png   — render (raderas inte under körning)
+    page-NNN.txt   — OCR-text (raderas av ocr.sh efter merge)
+
+Idempotens och metadata (engine, score) skrivs till ``state.db`` via
+``db.record_page`` — ingen .json-markör skrivs längre.
 
 Sammansatt ``<out_dir>/<stem>.txt`` skrivs på slutet, sidor separerade med ``\f``.
 
@@ -25,7 +27,6 @@ Kör:
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import shutil
 import subprocess
@@ -36,6 +37,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+
+import db as state_db
 
 try:
     from quality import score_text  # type: ignore
@@ -363,6 +366,21 @@ def detect_redactions_file(
         txt_file.write_text("\f".join(pages_text), encoding="utf-8")
 
     marker.write_text("", encoding="utf-8")
+
+    # Skriv även till state.db — autoritativ källa efter Task 12.
+    try:
+        conn = state_db.connect()
+        state_db.init_schema(conn)
+        source = "wpu" if "wpu" in str(pdf).lower() else "files"
+        state_db.upsert_pdf_file(
+            conn, pdf_stem=pdf.stem, source=source, pdf_path=str(pdf),
+        )
+        state_db.mark_redaction_checked(
+            conn, pdf.stem, has_redactions=(n_blocks > 0),
+        )
+    except Exception as e:  # pragma: no cover
+        log_error("ocr_pages.detect_redactions", pdf.name, f"db: {e}")
+
     return n_blocks
 
 
@@ -442,20 +460,25 @@ def main() -> int:
     n_total = 0
     n_skipped = 0
     n_done = 0
+    conn = state_db.connect()
+    state_db.init_schema(conn)
+    source = "wpu" if "wpu" in str(pdf).lower() else "files"
+    state_db.upsert_pdf_file(
+        conn, pdf_stem=pdf.stem, source=source, pdf_path=str(pdf),
+    )
     for page_num, image in render_pages(pdf, args.dpi):
         n_total += 1
         if only_pages is not None and page_num not in only_pages:
             continue
 
         txt_path = stem_dir / f"page-{page_num:03d}.txt"
-        json_path = stem_dir / f"page-{page_num:03d}.json"
         png_path = stem_dir / f"page-{page_num:03d}.png"
 
-        # Idempotens-markör: .json. Skapas alltid sista efter lyckad OCR (rad
-        # nedan), så om den finns vet vi att sidan redan körts.
+        # Idempotens-markör: db.pdf_pages-raden. Skapas alltid sist efter
+        # lyckad OCR (rad nedan), så om raden finns vet vi att sidan redan körts.
         # Per-sida-text mergas direkt in i text/<stem>.txt av merge_pages och
         # raderas där — vi bygger ingen combined-fil längre.
-        if json_path.exists():
+        if state_db.page_exists(conn, pdf.stem, page_num):
             n_skipped += 1
             continue
 
@@ -502,14 +525,10 @@ def main() -> int:
 
         txt_path.write_text(text, encoding="utf-8")
         redact_suffix = f" [{len(redaction_blocks)} mask]" if redaction_blocks else ""
-        meta = {
-            "file": pdf.name,
-            "page": page_num,
-            "engine": args.engine,
-            "redactions": len(redaction_blocks),
-            **scored,
-        }
-        json_path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+        state_db.record_page(
+            conn, pdf_stem=pdf.stem, page_num=page_num,
+            engine=args.engine, text=text, score=scored.get("score"),
+        )
         n_done += 1
         print(f"  [{pdf.stem} p{page_num:03d}] {len(text):5d} tecken "
               f"score={scored.get('score', 0)}{redact_suffix}", flush=True)
