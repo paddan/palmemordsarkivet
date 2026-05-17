@@ -11,6 +11,7 @@ Källor:
   generated/quality.csv                     → quality-tabellen
   generated/quality_pages.jsonl             → quality_pages-tabellen
   generated/lancedb/chunks                  → ingest-tabellen
+  generated/text_wpu/*.done                 → wpu_decisions-tabellen
 """
 
 from __future__ import annotations
@@ -231,6 +232,18 @@ def _migrate_ingest(conn, root: Path) -> int:
     return n
 
 
+def _migrate_wpu_decisions(conn, root: Path) -> int:
+    """Migrera generated/text_wpu/<stem>.done → wpu_decisions-tabellen."""
+    wpu_dir = root / "generated" / "text_wpu"
+    if not wpu_dir.exists():
+        return 0
+    n = 0
+    for m in wpu_dir.glob("*.done"):
+        db.mark_wpu_decided(conn, m.stem)
+        n += 1
+    return n
+
+
 def migrate(conn, root: Path) -> dict[str, int]:
     """Kör alla migreringssteg i rätt ordning."""
     n_downloads = _migrate_downloads(conn, root)
@@ -240,6 +253,7 @@ def migrate(conn, root: Path) -> dict[str, int]:
     n_quality = _migrate_quality(conn, root)
     n_quality_pages = _migrate_quality_pages(conn, root)
     n_ingest = _migrate_ingest(conn, root)
+    n_wpu = _migrate_wpu_decisions(conn, root)
     return {
         "downloads": n_downloads,
         "pdf_files": n_pdf_files,
@@ -247,6 +261,7 @@ def migrate(conn, root: Path) -> dict[str, int]:
         "quality": n_quality,
         "quality_pages": n_quality_pages,
         "ingest": n_ingest,
+        "wpu_decisions": n_wpu,
     }
 
 

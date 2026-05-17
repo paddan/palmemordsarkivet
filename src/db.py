@@ -104,6 +104,11 @@ CREATE TABLE IF NOT EXISTS llm_corrections (
     corrected_at TEXT NOT NULL,
     PRIMARY KEY (pdf_stem, page_num)
 );
+
+CREATE TABLE IF NOT EXISTS wpu_decisions (
+    pdf_stem    TEXT PRIMARY KEY,
+    decided_at  TEXT NOT NULL
+);
 """
 
 
@@ -490,6 +495,25 @@ def llm_corrected(
     return conn.execute(
         "SELECT 1 FROM llm_corrections WHERE pdf_stem=? AND page_num=?",
         (pdf_stem, page_num),
+    ).fetchone() is not None
+
+
+# --- wpu_decisions ----------------------------------------------------
+
+def mark_wpu_decided(conn: sqlite3.Connection, pdf_stem: str) -> None:
+    """Markera att merge_wpu fattat beslut för en wpu-stem (UPSERT)."""
+    conn.execute(
+        """INSERT INTO wpu_decisions(pdf_stem, decided_at) VALUES (?, ?)
+           ON CONFLICT(pdf_stem) DO UPDATE SET decided_at=excluded.decided_at""",
+        (pdf_stem, now()),
+    )
+    conn.commit()
+
+
+def wpu_decided(conn: sqlite3.Connection, pdf_stem: str) -> bool:
+    """Sann om merge_wpu redan fattat beslut för stem."""
+    return conn.execute(
+        "SELECT 1 FROM wpu_decisions WHERE pdf_stem=?", (pdf_stem,)
     ).fetchone() is not None
 
 

@@ -14,6 +14,7 @@ from db import (
     record_quality, record_quality_page, get_bad_pages,
     record_ingest, get_ingested_mtime,
     mark_llm_corrected, llm_corrected,
+    mark_wpu_decided, wpu_decided,
     files_needing_normalize, files_needing_quality, files_needing_ingest,
 )
 
@@ -210,6 +211,16 @@ def test_llm_corrections(tmp_path):
     assert llm_corrected(conn, "s1", 1)
     mark_llm_corrected(conn, "s1", 1)  # idempotent
     n = conn.execute("SELECT COUNT(*) FROM llm_corrections").fetchone()[0]
+    assert n == 1
+
+
+def test_wpu_decisions(tmp_path):
+    conn = _fresh(tmp_path)
+    assert not wpu_decided(conn, "s1")
+    mark_wpu_decided(conn, "s1")
+    assert wpu_decided(conn, "s1")
+    mark_wpu_decided(conn, "s1")  # idempotent
+    n = conn.execute("SELECT COUNT(*) FROM wpu_decisions").fetchone()[0]
     assert n == 1
 
 

@@ -54,6 +54,11 @@ def test_migrate_full_fixture(tmp_path):
         {"file": "00001-0001.pdf", "page": 1, "engine": "tesseract",
          "score": 70.0, "chars": 11}))
 
+    # wpu-decision-markörer
+    (root / "generated/text_wpu").mkdir(parents=True)
+    (root / "generated/text_wpu/foo.done").touch()
+    (root / "generated/text_wpu/bar.done").touch()
+
     db_path = root / "generated/state.db"
     conn = connect(db_path)
     init_schema(conn)
@@ -64,6 +69,7 @@ def test_migrate_full_fixture(tmp_path):
     assert stats["pdf_pages"] == 1
     assert stats["quality"] == 1
     assert stats["quality_pages"] == 1
+    assert stats["wpu_decisions"] == 2
 
     row = conn.execute(
         "SELECT * FROM pdf_files WHERE pdf_stem='00001-0001'"
