@@ -581,7 +581,19 @@ async def stream_to_string(hits, q, cfg) -> str:
 async def stream_mcp_to_string(q: str, resume_id: str | None) -> tuple[str, str | None]:
     placeholder = st.empty()
     parts: list[str] = []
-    new_id = await stream_mcp(q, placeholder, parts, resume_id)
+    try:
+        new_id = await stream_mcp(q, placeholder, parts, resume_id)
+    except Exception as exc:
+        err_str = str(exc)
+        if any(k in err_str.lower() for k in ("authenticate", "403", "exit code 1", "unauthorized")):
+            msg = (
+                "*Fel: Claude Code är inte inloggad. "
+                "Kör `claude auth login` i terminalen och starta om webui.*"
+            )
+        else:
+            msg = f"*Fel i utredningsläget: {exc}*"
+        placeholder.markdown(msg)
+        return msg, None
     final = linkify_citations("".join(parts))
     placeholder.markdown(final, unsafe_allow_html=True)
     return final, new_id
