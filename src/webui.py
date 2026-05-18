@@ -576,9 +576,10 @@ async def stream_openai(user_msg: str, placeholder, parts: list[str], cfg) -> No
             placeholder.markdown("".join(parts))
 
 
-async def stream_to_string(hits, q, cfg) -> str:
+async def stream_to_string(hits, q, cfg, placeholder=None) -> str:
     user_msg = f"Utdrag ur arkivet:\n\n{format_context(hits)}\n\n---\n\nFråga: {q}"
-    placeholder = st.empty()
+    if placeholder is None:
+        placeholder = st.empty()
     parts: list[str] = []
     if cfg["kind"] == "claude":
         await stream_claude(user_msg, placeholder, parts)
@@ -591,6 +592,7 @@ async def stream_to_string(hits, q, cfg) -> str:
 
 async def stream_mcp_to_string(q: str, resume_id: str | None) -> tuple[str, str | None]:
     placeholder = st.empty()
+    placeholder.markdown(_THINKING_HTML, unsafe_allow_html=True)
     parts: list[str] = []
     try:
         new_id = await stream_mcp(q, placeholder, parts, resume_id)
@@ -712,6 +714,62 @@ async def stream_openai_mcp_to_string(cfg: dict, messages: list[dict]) -> str:
     final = linkify_citations("".join(parts))
     text_placeholder.markdown(final, unsafe_allow_html=True)
     return final
+
+
+# CSS-animerad "tänker"-indikator: pulsande stjärna + roterande ord.
+# Injiceras via unsafe_allow_html i st.empty()-platshållare och skrivs
+# automatiskt över av den strömmande texten så fort modellen börjar svara.
+_THINKING_HTML = (
+    '<div style="display:flex;align-items:center;gap:10px;padding:6px 0;">'
+    '<span style="display:inline-block;animation:_ps 1.4s ease-in-out infinite;'
+    'color:#a855f7;font-size:1.2em;line-height:1;">✦</span>'
+    '<span style="position:relative;display:inline-block;min-width:130px;height:1.4em;">'
+    '<span style="position:absolute;top:0;left:0;opacity:0;'
+    'animation:_pw 4.8s 0s infinite;font-style:italic;">Söker…</span>'
+    '<span style="position:absolute;top:0;left:0;opacity:0;'
+    'animation:_pw 4.8s 1.2s infinite;font-style:italic;">Läser dokument…</span>'
+    '<span style="position:absolute;top:0;left:0;opacity:0;'
+    'animation:_pw 4.8s 2.4s infinite;font-style:italic;">Analyserar…</span>'
+    '<span style="position:absolute;top:0;left:0;opacity:0;'
+    'animation:_pw 4.8s 3.6s infinite;font-style:italic;">Sammanställer…</span>'
+    '</span>'
+    '</div>'
+    '<style>'
+    '@keyframes _ps{0%,100%{opacity:1;transform:scale(1)}'
+    '50%{opacity:.15;transform:scale(.45)}}'
+    '@keyframes _pw{0%{opacity:0}5%{opacity:.8}20%{opacity:.8}25%,100%{opacity:0}}'
+    '</style>'
+)
+
+
+def _render_rag_sources(hits: list, key_prefix: str) -> None:
+    with st.expander(f"Källor ({len(hits)})", expanded=False):
+        for i, h in enumerate(hits):
+            pdf = find_pdf(h["source"])
+            txt = find_txt(h["source"])
+            stem = h["source"][:-4] if h["source"].endswith(".txt") else h["source"]
+            with st.container(border=True):
+                cols = st.columns([5, 2, 2])
+                with cols[0]:
+                    st.markdown(f"**{stem}**")
+                    if h.get("page"):
+                        st.caption(f"sida {h['page']}")
+                with cols[1]:
+                    if pdf and st.button(
+                        "Öppna PDF", key=f"{key_prefix}_pdf_{i}", use_container_width=True
+                    ):
+                        try:
+                            subprocess.Popen(["open", str(pdf)])
+                        except OSError as e:
+                            st.error(f"Kan inte öppna fil: {e}")
+                with cols[2]:
+                    if txt and st.button(
+                        "Öppna text", key=f"{key_prefix}_txt_{i}", use_container_width=True
+                    ):
+                        try:
+                            subprocess.Popen(["open", str(txt)])
+                        except OSError as e:
+                            st.error(f"Kan inte öppna fil: {e}")
 
 
 if mcp_mode:
@@ -838,40 +896,19 @@ else:
         ss.hits = hits
 
         st.subheader(f"Svar ({backend_name})")
-        ss.answer = asyncio.run(stream_to_string(hits, q, backend))
+        # Skapa placeholders i rätt ordning innan asyncio.run() blockerar —
+        # _src_slot ersätter omedelbart ev. gamla källexpander från föregående sökning.
+        _stream_slot = st.empty()
+        _src_slot = st.empty()
+        _stream_slot.markdown(_THINKING_HTML, unsafe_allow_html=True)
+        ss.answer = asyncio.run(stream_to_string(hits, q, backend, _stream_slot))
+        with _src_slot.container():
+            _render_rag_sources(hits, "sub")
 
-# Rendera resultat från session_state (även efter rerun från PDF-knappar).
+# Rendera resultat från session_state vid rerun från PDF-knappar (ej ny sökning).
 # Bara i RAG-läget — MCP-chatten renderar sina källor inline per tur.
-if ss.hits and not mcp_mode:
-    if not (submitted and q.strip()):
-        # på rerun: visa cachat svar (redan linkifierat)
-        st.subheader("Svar")
-        st.markdown(ss.answer, unsafe_allow_html=True)
+if ss.hits and not mcp_mode and not (submitted and q.strip()):
+    st.subheader("Svar")
+    st.markdown(ss.answer, unsafe_allow_html=True)
+    _render_rag_sources(ss.hits, "cached")
 
-    with st.expander(f"Källor ({len(ss.hits)})", expanded=False):
-        for i, h in enumerate(ss.hits):
-            pdf = find_pdf(h["source"])
-            txt = find_txt(h["source"])
-            stem = h["source"][:-4] if h["source"].endswith(".txt") else h["source"]
-            with st.container(border=True):
-                cols = st.columns([5, 2, 2])
-                with cols[0]:
-                    st.markdown(f"**{stem}**")
-                    if h.get("page"):
-                        st.caption(f"sida {h['page']}")
-                with cols[1]:
-                    if pdf and st.button(
-                        "Öppna PDF", key=f"open_pdf_{i}", use_container_width=True
-                    ):
-                        try:
-                            subprocess.Popen(["open", str(pdf)])
-                        except OSError as e:
-                            st.error(f"Kan inte öppna fil: {e}")
-                with cols[2]:
-                    if txt and st.button(
-                        "Öppna text", key=f"open_txt_{i}", use_container_width=True
-                    ):
-                        try:
-                            subprocess.Popen(["open", str(txt)])
-                        except OSError as e:
-                            st.error(f"Kan inte öppna fil: {e}")
