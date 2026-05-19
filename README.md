@@ -401,6 +401,7 @@ Webgränssnittet sparar valt backend i `generated/llm_config.json` och laddar de
 
 | Fil | Vad |
 |---|---|
+| `install.sh` | Installera alla beroenden via Homebrew och pip (Python-paket, tessdata, hunspell) |
 | `run_pipeline.sh` | Kör hela pipelinen i ett kommando: download → OCR → ingest (flaggor: `--skip-wpu`, `--skip-redo`, `--with-llm`, `--rebuild-index`, `--jobs N`, `--test N`) |
 | `download.sh` → `src/download.py` | Hämta PDF:er från Drive |
 | `download_wpu.sh` → `src/download_wpu.py` | Ladda ner alla PDF:er från wpu.nu → `downloaded/wpu_files/` |
