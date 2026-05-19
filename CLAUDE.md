@@ -68,7 +68,6 @@ Data-kataloger (gitignored):
 ./ingest.sh [--rebuild] [--reindex-since 2026-05-01]
 ./ask.sh "fråga" [--hybrid] [--no-rerank]
 ./web.sh                             # Starta Streamlit
-./migrate_to_db.sh                   # engångsmigrering av legacy state-filer → state.db
 
 # wpu.nu (valfritt)
 ./download_wpu.sh && ./merge_wpu.sh
@@ -84,10 +83,7 @@ Env-variabler: `CLAUDE_CODE_OAUTH_TOKEN` (Pro/Max, räknas mot prenumeration) el
 downloads, per-PDF-status (redaktion/merge/normalize), per-sida OCR-resultat,
 kvalitetspoäng, LLM-korrigeringar och ingest-tracking. Inkrementell logik
 bygger på att jämföra `pdf_files.text_mtime` mot `normalized_at`/`scored_at`/etc.
-`--rebuild` tvingar omkörning. Modulen `src/db.py` exponerar alla CRUD- och
-delta-queries; konsumenter skriver aldrig egen SQL. Efter `git pull` av denna
-ändring: kör `./migrate_to_db.sh` engångsvis för att fylla databasen från
-befintliga filer.
+`--rebuild` tvingar omkörning. Modulen `src/db.py` exponerar alla CRUD- och delta-queries; konsumenter skriver aldrig egen SQL.
 
 **mtime-tracking (ingest.py)**: Varje `.txt`-fil jämförs mot mtime som lagras i `ingest`-tabellen i state.db (auktoritativt); nyare fil → re-ingest. LanceDB-tabellen har fortfarande en `mtime`-kolumn men den läses inte längre för delta-beslut. Legacy-rader (där `ingest`-tabellen saknar mtime) re-indexeras inte automatiskt — använd `--reindex-since`.
 

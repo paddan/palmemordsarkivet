@@ -31,6 +31,12 @@ på komplexa flerstegs-frågor, men långsammare (~1–3 min).
 
 ![Web-gränssnitt — MCP-läge](utredningsläge.png)
 
+## Krav
+
+- macOS (testat på Darwin 25), Python 3.11+
+- [Homebrew](https://brew.sh)
+- Claude Pro/Max-abonnemang (OAuth-token) eller Anthropic API-nyckel
+
 ## Kom igång
 
 ```bash
@@ -86,22 +92,9 @@ Inspektera med t.ex. `sqlite3 generated/db/state.db`. Tabellerna:
 - `llm_corrections` — vilka sidor som LLM-korrigerats
 - `wpu_decisions` — vilka wpu-stems `merge_wpu` redan fattat beslut för
 
-**Migrering från äldre versioner:** kör `./migrate_to_db.sh` en gång. Skriptet är
-idempotent. När pipelinen verifierats mot state.db i några körningar kan
-`cleanup_legacy_state.sh` köras för att ta bort gamla filmarkörer (manifest.csv,
-stamp-filer, .redact, page-*.json, quality.csv/jsonl, text_wpu/*.done).
-
 **Livscykel:** radera inte `generated/db/state.db` mitt under en pågående
-pipeline-körning. Befintliga processer fortsätter skriva mot den unlinkade inoden
-medan nya processer skapar en tom db — det ger inkonsekvent state. Om databasen
-har raderats, kör `./migrate_to_db.sh` innan nästa körning för att återskapa
-state från eventuella kvarvarande legacy-filer.
-
-## Krav
-
-- macOS (testat på Darwin 25), Python 3.11+
-- [Homebrew](https://brew.sh)
-- Claude Pro/Max-abonnemang (OAuth-token) eller Anthropic API-nyckel
+pipeline-körning — befintliga processer fortsätter skriva mot den unlinkade inoden
+medan nya processer skapar en tom db, vilket ger inkonsekvent state.
 
 ## Vad install.sh gör
 
@@ -196,29 +189,10 @@ du delarna direkt:
 ./quality.sh                     # uppdaterad bedömning
 ```
 
-`ocr_tesseract.sh`:s interna logik:
-- Snabbkoll först: om PDF:en redan har användbart textlager extraheras det
-  direkt utan OCR (kvalitetscheck: alnum-andel, andel korta ord, siffer-i-ord).
-- Skräpigt textlager → `ocrmypdf --redo-ocr` (tar bort det och OCR:ar om).
-- Inget textlager → `ocrmypdf --skip-text --deskew --clean --rotate-pages` med
-  PSM 6, `swe_best.traineddata`, och `tessdata/swe.user-words` (Palme-specifika
-  namn, Q/A-markörer, ärendenummer-prefix).
-- Parallelliserar över filer med `xargs -P` (default 4 jobb). Idempotent.
-
-Tunables via flaggor (env-vars fungerar fortfarande som fallback):
-
 ```bash
 ./ocr_tesseract.sh --jobs 8 --per-file-jobs 2 --psm 4
-./ocr_tesseract.sh --help                          # alla flaggor
-JOBS=8 PER_FILE_JOBS=2 PSM=4 ./ocr_tesseract.sh    # bakåtkompatibelt
+./ocr_tesseract.sh --help
 ```
-
-`ocr_tesseract.sh` byter aldrig OCR-engine på egen hand — för Surya på
-dåliga sidor använder du `./ocr.sh` ovan eller `./ocr.sh --redo` manuellt.
-
-Vid riktiga fel skrivs `[fel] <namn>` följt av indragen ocrmypdf-logg. Tesseracts
-varningar för blanka sidor (`Too few characters. Skipping this page` /
-`Error during processing`) är benigna och göms numera — filen blir ändå OCR:ad.
 
 #### Surya för värsta sidorna
 
@@ -234,21 +208,12 @@ Endast sidor med score < threshold OCR:as om, resultatet mergas tillbaka in i
 
 #### Per-sida OCR (`ocr_pages.sh`)
 
-För ännu finare granularitet — om bara enstaka sidor i en fil är dåliga.
-Renderar PDF:en sida för sida, OCR:ar varje sida individuellt och skriver
-``page-NNN.txt`` + ``page-NNN.json`` (text + score) i en undermapp. Slutsamlar
-till ``<stem>.txt`` med ``\f`` som sidbrytare.
+Renderar PDF:en sida för sida och skriver `page-NNN.txt` + `page-NNN.json` i en undermapp. Kombination med `./quality.sh --per-page` + `./ocr.sh --redo --mode pages` kör om bara sidor under tröskeln med Surya.
 
 ```bash
-./ocr_pages.sh --in downloaded/files/foo.pdf --out-dir generated/text_pages --engine tesseract
 ./ocr_pages.sh --in downloaded/files/foo.pdf --out-dir generated/text_pages --engine surya
-./ocr_pages.sh --in downloaded/files/foo.pdf --out-dir generated/text_pages --pages 3,7,12
+./ocr_pages.sh --help
 ```
-
-Kombo med `./quality.sh --per-page` + `./ocr.sh --redo --mode pages` kör om
-bara de sidor som ligger under tröskeln (med Surya som default). Alla skript
-har `--help` som listar tillgängliga flaggor; env-vars fungerar fortfarande
-som fallback.
 
 #### Auto-byggda user-words (`build_user_words.sh`)
 
@@ -414,9 +379,7 @@ lokalt (via `open`) i en gömd iframe så huvudsidan inte laddas om.
 
 ## LLM-konfiguration (`generated/llm_config.json`)
 
-Webgränssnittet sparar valt backend automatiskt i `generated/llm_config.json`
-när du byter provider i sidebaren. Filen laddas vid nästa start så du slipper
-välja om. Formatet:
+Webgränssnittet sparar valt backend i `generated/llm_config.json` och laddar det vid nästa start. Filen skapas automatiskt — ta bort den för att återgå till standardvalet (Claude Opus 4.7). API-nycklar läses alltid från miljövariabler och lagras aldrig i filen.
 
 ```json
 {
@@ -430,21 +393,9 @@ välja om. Formatet:
 | Fält | Möjliga värden |
 |---|---|
 | `provider` | `claude`, `openai`, `deepseek`, `openai_compatible` |
-| `model` | Modellnamn, t.ex. `claude-opus-4-7`, `gpt-4o`, `deepseek-chat`, `deepseek-reasoner` |
+| `model` | t.ex. `claude-opus-4-7`, `gpt-4o`, `deepseek-chat`, `deepseek-reasoner` |
 | `base_url` | Tomt för molntjänster; URL för lokal endpoint (`http://localhost:11434/v1` för Ollama) |
 | `backend_name` | Visningsnamn i gränssnittet (valfritt) |
-
-Filen skapas automatiskt — det finns inget behov av att redigera den för hand.
-Ta bort den för att återgå till standardvalet (Claude Opus 4.7).
-
-API-nycklar läses alltid från miljövariabler och lagras **aldrig** i filen:
-
-```bash
-export ANTHROPIC_API_KEY=sk-ant-...       # Claude
-export CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...  # Claude Pro/Max (räknas mot prenumeration)
-export OPENAI_API_KEY=sk-...              # OpenAI
-export DEEPSEEK_API_KEY=sk-...           # DeepSeek
-```
 
 ## Filer
 
@@ -470,8 +421,6 @@ export DEEPSEEK_API_KEY=sk-...           # DeepSeek
 | `generated/llm_config.json` | Sparad LLM-konfiguration (backend, modell, URL) — se ovan |
 | `src/webui.py` | Streamlit-webgränssnitt för frågor (RAG + MCP-toggle) |
 | `web.sh` | Wrapper för Streamlit-servern |
-| `migrate_to_db.sh` → `src/migrate_to_db.py` | Engångsmigrering: legacy filmarkörer → `generated/db/state.db` |
-| `cleanup_legacy_state.sh` | Tar bort gamla filmarkörer efter migrering (manifest.csv, stamp-filer, .redact, page-*.json, quality.csv/jsonl) |
 | `src/db.py` | SQLite-state: schema + CRUD + delta-queries (importeras av övriga skript) |
 | `tessdata/swe.user-words` | Palme-specifika ord (committat) |
 | `tessdata/tesseract.config` | `preserve_interword_spaces 1` (committat) |
@@ -479,39 +428,13 @@ export DEEPSEEK_API_KEY=sk-...           # DeepSeek
 ### Bonus: kvalitetskoll
 
 ```bash
-./quality.sh --top 30      # bedöm och visa värsta 30
+./quality.sh --top 30      # visa värsta 30 filer
 ./quality.sh --rebuild     # tvinga om-bedömning av alla filer
 ```
 
-Körs inkrementellt — bara filer vars `text_mtime` är nyare än `scored_at` i
-`pdf_files`-tabellen bedöms om. `--rebuild` ignorerar tidsstämplarna och kör om
-allt.
+Poäng 0–100 per fil, inkrementellt (bara filer vars `text_mtime` är nyare än `scored_at`). Notera att `text-layer` inte automatiskt innebär god kvalitet — vissa PDF:er har gammalt OCR-skräp inbäddat. Sortera på `score`, inte källa. Dåliga textlager rättas med `./ocr.sh --redo --mode files`.
 
-Skriver poäng 0–100 per fil till `quality`-tabellen i state.db (sorterat värst först) baserat på
-junk-tecken-andel, andel 1–2-tecken-ord, ihopklistrade ord, siffror inuti ord
-och vokal/konsonant-balans. Markerar källa `text-layer` (originalet hade text)
-vs `ocr` (Tesseract).
-
-Viktig insikt: `text-layer` betyder inte automatiskt "bra" — vissa PDF:er har
-gammalt OCR-skräp inbäddat fastän originalbilden är fullt läsbar. Sortera
-efter `score`, inte efter källa. För dessa: kör `./ocr.sh --redo --mode files`
-som anropar `ocrmypdf --redo-ocr` (tar bort det dåliga textlagret och OCR:ar
-om från bilden). Default tar med både `text-layer`- och `ocr`-källor. Tröskel
-via flagga: `./ocr.sh --redo --mode files --threshold 70` (eller env
-`THRESHOLD=70`). Begränsa till en källa: `./ocr.sh --redo --mode files
---source text-layer`. `./ocr.sh --help` listar alla flaggor.
-
-Valfritt: installera hunspell + svensk ordlista så fylls `pct_swe`-kolumnen i:
-
-```bash
-brew install hunspell
-mkdir -p ~/Library/Spelling
-curl -L -o ~/Library/Spelling/sv_SE.aff \
-  https://raw.githubusercontent.com/LibreOffice/dictionaries/master/sv_SE/sv_SE.aff
-curl -L -o ~/Library/Spelling/sv_SE.dic \
-  https://raw.githubusercontent.com/LibreOffice/dictionaries/master/sv_SE/sv_SE.dic
-echo "katt hus blabla" | hunspell -d sv_SE -l   # ska skriva ut "blabla"
-```
+Valfritt: installera hunspell + sv_SE-ordlista för att fylla i `pct_swe`-kolumnen (`brew install hunspell` + ordlistfiler från LibreOffice/dictionaries).
 
 ## Tester
 
@@ -540,15 +463,6 @@ tessdata/*.traineddata  — laddas av setup_tessdata.sh
 ```
 
 Åter-skapas helt av skripten — ta bort katalogerna och kör om.
-
-## Starta om
-
-Alla fyra steg är idempotenta — kör om utan oro. De hoppar över redan färdigt
-arbete (download: `downloaded/files/<namn>.pdf` finns; ocr: `generated/text/<namn>.txt` finns;
-ingest: `source` redan i tabellen *och* `.txt`-filens mtime är ≤ den lagrade).
-Avbrutna körningar fortsätter där de slutade. När en `.txt` skrivs om av t.ex.
-`ocr.sh --redo` upptäcker `ingest.sh` det automatiskt och re-indexerar bara den
-filen (delete + add).
 
 ## Licens
 
