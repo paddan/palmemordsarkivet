@@ -55,6 +55,9 @@ Data-kataloger (gitignored):
 # Tests
 .venv/bin/pytest tests/
 
+# Setup
+./install.sh                         # Installera alla beroenden (brew, Python-paket, tessdata)
+
 # Workflow
 ./run_pipeline.sh                    # Hela pipelinen i ett: download → OCR → ingest
 ./run_pipeline.sh --test 5           # Testläge: bara 5 filer från palme + 5 från wpu
@@ -62,9 +65,12 @@ Data-kataloger (gitignored):
 ./ocr.sh                             # Tesseract → normalize → quality → Surya på dåliga sidor
 ./ocr.sh --skip-redo                 # Bara Tesseract + normalize + quality
 ./ocr.sh --redo --mode pages         # Surya på specifika sidor (threshold 50)
+./ocr_tesseract.sh                   # Bara Tesseract-steget
+./detect_redactions.sh               # Redaktionsdetektering på befintliga text/OCR-par
 ./quality.sh [--top 30] [--per-page]
 ./llm_correct.sh [--threshold 60]    # Claude Haiku korrigerar dåliga sidor
 ./merge_pages.sh --all               # Slå ihop text_pages/ → text/
+./build_user_words.sh                # Bygg tessdata/swe.user-words.auto från text/*.txt
 ./ingest.sh [--rebuild] [--reindex-since 2026-05-01]
 ./ask.sh "fråga" [--hybrid] [--no-rerank]
 ./web.sh                             # Starta Streamlit
