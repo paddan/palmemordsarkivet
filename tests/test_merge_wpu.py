@@ -9,7 +9,7 @@ import pytest
 
 import db as state_db
 import merge_wpu
-from merge_wpu import _process_one, decide
+from merge_wpu import _process_one, cleanup_phantom_decisions, decide
 
 
 def test_decide_wpu_wins() -> None:
@@ -57,6 +57,9 @@ def _fake_score(text: str, use_hunspell: bool = False) -> dict:
 
 
 def test_skips_when_wpu_text_missing(tmp_path: Path, db_env: Path) -> None:
+    """När wpu-text saknas (OCR inte klar) ska filen hoppa över utan att
+    markeras decided — annars hindras nästa körning från att försöka igen
+    när OCR producerat texten."""
     text, ocr, files_wpu = _setup(tmp_path)
     pdf = files_wpu / "DA14259-00.pdf"
     pdf.write_bytes(b"x")
@@ -67,6 +70,30 @@ def test_skips_when_wpu_text_missing(tmp_path: Path, db_env: Path) -> None:
 
     assert res["category"] == "skip"
     assert "saknar text" in res["lines"][0]
+    conn = state_db.connect(db_env)
+    assert not state_db.wpu_decided(conn, "DA14259-00")
+    conn.close()
+
+
+def test_retries_after_text_appears(tmp_path: Path, db_env: Path) -> None:
+    """Första körningen saknar text → skip utan markör. Andra körningen,
+    efter att OCR producerat texten, ska göra ett riktigt beslut."""
+    text, ocr, files_wpu = _setup(tmp_path)
+    pdf = files_wpu / "DA14259-00.pdf"
+    pdf.write_bytes(b"x")
+    merge_wpu._PALME_MAP = {}
+    merge_wpu._USE_HUNSPELL = False
+
+    first = _process_one(str(pdf), str(text), str(ocr), False, False, 5)
+    assert first["category"] == "skip"
+
+    wpu_txt = text / "DA14259-00.txt"
+    wpu_txt.write_text("70\nhej", encoding="utf-8")
+
+    with patch.object(merge_wpu, "score_text", _fake_score):
+        second = _process_one(str(pdf), str(text), str(ocr), False, False, 5)
+
+    assert second["category"] == "new"
     conn = state_db.connect(db_env)
     assert state_db.wpu_decided(conn, "DA14259-00")
     conn.close()
@@ -155,6 +182,28 @@ def test_tie_keeps_both(tmp_path: Path, db_env: Path) -> None:
     assert res["category"] == "kept"
     assert wpu_txt.exists()
     assert palme_txt.exists()
+
+
+def test_cleanup_phantom_decisions(tmp_path: Path, db_env: Path) -> None:
+    """Raderar wpu_decisions-rader vars text saknas på disk. Behåller övriga."""
+    text, _, _ = _setup(tmp_path)
+    (text / "har-text.txt").write_text("ok", encoding="utf-8")
+
+    conn = state_db.connect(db_env)
+    state_db.mark_wpu_decided(conn, "har-text")
+    state_db.mark_wpu_decided(conn, "saknar-text-1")
+    state_db.mark_wpu_decided(conn, "saknar-text-2")
+
+    removed = cleanup_phantom_decisions(conn, text)
+    assert removed == 2
+
+    assert state_db.wpu_decided(conn, "har-text")
+    assert not state_db.wpu_decided(conn, "saknar-text-1")
+    assert not state_db.wpu_decided(conn, "saknar-text-2")
+
+    # Idempotent — andra körningen raderar inget.
+    assert cleanup_phantom_decisions(conn, text) == 0
+    conn.close()
 
 
 def test_dry_run_does_not_delete(tmp_path: Path, db_env: Path) -> None:

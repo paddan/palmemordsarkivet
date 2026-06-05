@@ -64,6 +64,25 @@ def build_palme_key_map(text_dir: Path) -> dict[tuple, list[Path]]:
     return dict(mapping)
 
 
+def cleanup_phantom_decisions(conn, text_dir: Path) -> int:
+    """Radera wpu_decisions-rader vars text/<stem>.txt inte finns.
+
+    Skyddar mot en historisk bugg där merge_wpu markerade filer som decided
+    även när OCR inte hunnit producera texten. Idempotent — säker att köra
+    varje gång.
+    """
+    rows = conn.execute("SELECT pdf_stem FROM wpu_decisions").fetchall()
+    bogus = [r["pdf_stem"] for r in rows
+             if not (text_dir / f"{r['pdf_stem']}.txt").exists()]
+    if bogus:
+        conn.executemany(
+            "DELETE FROM wpu_decisions WHERE pdf_stem=?",
+            [(s,) for s in bogus],
+        )
+        conn.commit()
+    return len(bogus)
+
+
 def _init_worker(palme_map: dict[tuple, list[Path]], use_hunspell: bool) -> None:
     global _PALME_MAP, _USE_HUNSPELL
     _PALME_MAP = palme_map
@@ -108,12 +127,12 @@ def _process_one(
 
         wpu_txt = text_dir / f"{stem}.txt"
         if not wpu_txt.exists():
+            # Markera INTE som decided — OCR hann inte bli klar. Nästa körning
+            # försöker igen när text/<stem>.txt finns.
             result["lines"].append(
                 f"[saknar text] {stem[:70]} — kör ocr_tesseract.sh på files_wpu/ först"
             )
             result["category"] = "skip"
-            if not dry_run:
-                state_db.mark_wpu_decided(conn, stem)
             return result
 
         wpu_raw = wpu_txt.read_text(encoding="utf-8", errors="replace")
@@ -213,6 +232,12 @@ def main() -> int:
     if args.rebuild and not args.dry_run:
         init_conn.execute("DELETE FROM wpu_decisions")
         init_conn.commit()
+    elif not args.dry_run:
+        # Självläka fantom-beslut: rader skrivna när text saknades. Kan annars
+        # hindra merge_wpu från att fatta riktigt beslut när OCR producerat texten.
+        removed = cleanup_phantom_decisions(init_conn, text_dir)
+        if removed:
+            print(f"Rensade {removed} fantom-rader ur wpu_decisions (text saknas på disk).")
     init_conn.close()
 
     use_hunspell = has_hunspell_swe()
