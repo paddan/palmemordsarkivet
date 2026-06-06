@@ -141,6 +141,61 @@ def find_orphans(stored_sources: set[str], disk_filenames: set[str]) -> list[str
     return sorted(stored_sources - disk_filenames)
 
 
+def get_table_sources(table) -> set[str]:
+    """Hämta unika source-värden utan att läsa embedding-vektorerna."""
+    rows = (
+        table.search()
+        .select(["source"])
+        .limit(table.count_rows())
+        .to_list()
+    )
+    return {row["source"] for row in rows}
+
+
+def classify_reingest(
+    *,
+    filename: str,
+    disk_mtime: float,
+    already: dict[str, float],
+    table_sources: set[str],
+    reindex_since: float | None,
+) -> bool:
+    """Sann om filens gamla chunks måste ersättas före indexering."""
+    return classify_index_action(
+        filename=filename,
+        disk_mtime=disk_mtime,
+        already=already,
+        table_sources=table_sources,
+        reindex_since=reindex_since,
+    ) == "reingest"
+
+
+def classify_index_action(
+    *,
+    filename: str,
+    disk_mtime: float,
+    already: dict[str, float],
+    table_sources: set[str],
+    reindex_since: float | None,
+    unusable_sources: set[str] | None = None,
+) -> str:
+    """Returnera ``new``, ``reingest`` eller ``skip`` för en textfil."""
+    unusable_sources = unusable_sources or set()
+    if filename not in table_sources:
+        if (
+            filename in unusable_sources
+            and filename in already
+            and not should_reingest(already[filename], disk_mtime, reindex_since)
+        ):
+            return "skip"
+        return "new"
+    if filename not in already:
+        return "reingest"
+    if should_reingest(already[filename], disk_mtime, reindex_since):
+        return "reingest"
+    return "skip"
+
+
 _SAFE_SOURCE_RE = re.compile(r"^[^\x00-\x1f\x7f]+$")
 
 
@@ -154,6 +209,12 @@ def _source_predicate(source: str) -> str:
         raise ValueError(f"Ogiltigt source-filnamn (kontrolltecken): {source!r}")
     safe = source.replace("'", "''")
     return f"source = '{safe}'"
+
+
+def delete_source_for_reingest(table, source: str, *, is_reingest: bool) -> None:
+    """Radera gamla chunks när en source ska ersättas."""
+    if is_reingest:
+        table.delete(_source_predicate(source))
 
 
 def is_useful(chunk: str) -> bool:
@@ -255,15 +316,18 @@ def main() -> int:
             "SELECT pdf_stem, text_mtime FROM ingest"
         )
     }
+    table_sources = get_table_sources(table)
 
     # Läs in oanvändbara filers mtime så de hoppas över tills de ändras på disk.
     unusable_mtimes_file = Path(args.unusable_list).with_name("unusable_mtimes.json")
+    unusable_sources: set[str] = set()
     if unusable_mtimes_file.exists():
         try:
             for fname, mtime in json.loads(
                 unusable_mtimes_file.read_text(encoding="utf-8")
             ).items():
                 m = float(mtime)
+                unusable_sources.add(fname)
                 if fname not in already or m > already[fname]:
                     already[fname] = m
         except Exception:
@@ -276,14 +340,15 @@ def main() -> int:
 
     # Rensa orphan-poster: source-filer som finns i tabellen men inte längre i
     # text/. Hoppas över med --limit eftersom vi då bara ser en delmängd.
-    if not args.limit and already:
+    if not args.limit and (already or table_sources):
         disk_names = {f.name for f in files}
-        orphans = find_orphans(set(already), disk_names)
+        orphans = find_orphans(set(already) | table_sources, disk_names)
         if orphans:
             print(f"Rensar {len(orphans)} föräldralösa poster (text/-fil borta):")
             for s in orphans:
                 table.delete(_source_predicate(s))
-                del already[s]
+                already.pop(s, None)
+                table_sources.discard(s)
                 # rensa även från state.db.ingest
                 stem = s[:-4] if s.endswith(".txt") else s
                 state_conn.execute(
@@ -300,9 +365,17 @@ def main() -> int:
     skipped = 0
     for f in files:
         disk_mtime = f.stat().st_mtime
-        if f.name not in already:
+        action = classify_index_action(
+            filename=f.name,
+            disk_mtime=disk_mtime,
+            already=already,
+            table_sources=table_sources,
+            reindex_since=reindex_since,
+            unusable_sources=unusable_sources,
+        )
+        if action == "new":
             todo.append((f, disk_mtime, False))
-        elif should_reingest(already[f.name], disk_mtime, reindex_since):
+        elif action == "reingest":
             todo.append((f, disk_mtime, True))
         else:
             skipped += 1
@@ -345,6 +418,11 @@ def main() -> int:
 
         if not rows:
             print(f"  [{i}/{len(todo)}] {f.name}: inga användbara chunks")
+            delete_source_for_reingest(table, f.name, is_reingest=is_reingest)
+            state_db.record_ingest(
+                state_conn, pdf_stem=f.stem,
+                text_mtime=disk_mtime, chunks=0,
+            )
             unusable.append(f.name)
             unusable_mtimes[f.name] = disk_mtime
             continue
@@ -371,8 +449,7 @@ def main() -> int:
         for r, v in zip(rows, embeddings):
             r["vector"] = v.tolist()
 
-        if is_reingest:
-            table.delete(_source_predicate(f.name))
+        delete_source_for_reingest(table, f.name, is_reingest=is_reingest)
         table.add(rows)
         total_chunks += len(rows)
 

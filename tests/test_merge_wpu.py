@@ -206,6 +206,24 @@ def test_cleanup_phantom_decisions(tmp_path: Path, db_env: Path) -> None:
     conn.close()
 
 
+def test_cleanup_keeps_decision_for_intentionally_deleted_wpu_loser(
+    tmp_path: Path, db_env: Path
+) -> None:
+    text, _, _ = _setup(tmp_path)
+    conn = state_db.connect(db_env)
+    state_db.mark_tesseract_done(
+        conn,
+        "DA14259-00",
+        pdf_path="downloaded/wpu_files/DA14259-00.pdf",
+        source="wpu",
+    )
+    state_db.mark_wpu_decided(conn, "DA14259-00")
+
+    assert cleanup_phantom_decisions(conn, text) == 0
+    assert state_db.wpu_decided(conn, "DA14259-00")
+    conn.close()
+
+
 def test_dry_run_does_not_delete(tmp_path: Path, db_env: Path) -> None:
     text, ocr, files_wpu = _setup(tmp_path)
     pdf = files_wpu / "DA14259-00.pdf"

@@ -37,6 +37,7 @@ motsvarande env-var (versaler, understreck) — flagga vinner över env-var.
   --files-from FILE       lista med filstammar att bearbeta (en per rad, .txt trimmas);
                           om utelämnad bearbetas alla PDF:er i --in
   --retry-failed          nollställ tesseract_failed-flaggor i state.db så att misslyckade filer körs om
+  --retry-blacklist       nollställ tesseract_blacklisted_at-flaggor så att permanent uteslutna filer körs om
   -h, --help              visa denna hjälp och avsluta
 EOF
 }
@@ -59,6 +60,7 @@ MIN_TEXT_CHARS=${MIN_TEXT_CHARS:-200}
 IMAGE_DPI=${IMAGE_DPI:-300}
 ERRORS_LOG=${ERRORS_LOG:-}
 RETRY_FAILED=${RETRY_FAILED:-0}
+RETRY_BLACKLIST=${RETRY_BLACKLIST:-0}
 FILES_FROM=${FILES_FROM:-}
 
 while [ $# -gt 0 ]; do
@@ -80,6 +82,7 @@ while [ $# -gt 0 ]; do
     --errors-log)       ERRORS_LOG="$2"; shift 2 ;;
     --files-from)       FILES_FROM="$2"; shift 2 ;;
     --retry-failed)     RETRY_FAILED=1; shift ;;
+    --retry-blacklist)  RETRY_BLACKLIST=1; shift ;;
     -h|--help)          usage; exit 0 ;;
     *) echo "okänd flagga: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -255,6 +258,12 @@ process_one() {
     return 0
   fi
 
+  # Hoppa över permanent blacklistade filer — bara --retry-blacklist tar in dem igen.
+  if "$PYBIN" "$DB_HELPER" check-blacklisted "$base"; then
+    printf 'blacklist-skip' > "$PROGRESS_DIR/${base}.status"
+    return 0
+  fi
+
   # Hoppa över filer som tidigare misslyckats — använd --retry-failed för att köra om.
   if "$PYBIN" "$DB_HELPER" check-failed "$base"; then
     printf 'fel-skip' > "$PROGRESS_DIR/${base}.status"
@@ -325,6 +334,15 @@ if [ "$RETRY_FAILED" = "1" ]; then
   fi
 fi
 
+if [ "$RETRY_BLACKLIST" = "1" ]; then
+  count=$("$PYBIN" "$DB_HELPER" clear-blacklisted)
+  if [ "${count:-0}" -gt 0 ]; then
+    echo "Återaktiverade $count blacklistade OCR-jobb i state.db."
+  else
+    echo "Inga blacklistade OCR-jobb i state.db."
+  fi
+fi
+
 # Bygg PDF-lista: antingen från --files-from eller find med förfiltrering.
 PDFLIST=$(mktemp)
 if [ -n "$FILES_FROM" ]; then
@@ -336,11 +354,14 @@ if [ -n "$FILES_FROM" ]; then
     [ -f "$pdf" ] && echo "$pdf" >> "$PDFLIST"
   done < "$FILES_FROM"
 else
-  # Förfiltrera via state.db — hoppa stems som redan markerats klara eller misslyckade.
+  # Förfiltrera via state.db — hoppa stems som redan markerats klara, misslyckade eller blacklistade.
   # En enda DB-query ersätter N filsystemskontroller.
   ALL_TOTAL=$(find "$IN" -name '*.pdf' | wc -l | tr -d ' ')
   _SKIP_FILE=$(mktemp)
-  { "$PYBIN" "$DB_HELPER" list-done; "$PYBIN" "$DB_HELPER" list-failed; } | sort -u > "$_SKIP_FILE"
+  { "$PYBIN" "$DB_HELPER" list-done
+    "$PYBIN" "$DB_HELPER" list-failed
+    "$PYBIN" "$DB_HELPER" list-blacklisted
+  } | sort -u > "$_SKIP_FILE"
   while IFS= read -r -d '' pdf; do
     base="${pdf##*/}"; base="${base%.pdf}"
     grep -qxF "$base" "$_SKIP_FILE" || echo "$pdf" >> "$PDFLIST"
@@ -391,15 +412,20 @@ if [ -z "$FILES_FROM" ]; then
   echo "Kontrollerar att alla PDF:er finns i $OCR/ …"
   missing=0
   known_failed=0
+  known_blacklisted=0
   merged_away=0
   _DONE_FILE=$(mktemp)
   _FAILED_FILE=$(mktemp)
-  "$PYBIN" "$DB_HELPER" list-done  | sort > "$_DONE_FILE"
-  "$PYBIN" "$DB_HELPER" list-failed | sort > "$_FAILED_FILE"
+  _BLACKLIST_FILE=$(mktemp)
+  "$PYBIN" "$DB_HELPER" list-done        | sort > "$_DONE_FILE"
+  "$PYBIN" "$DB_HELPER" list-failed      | sort > "$_FAILED_FILE"
+  "$PYBIN" "$DB_HELPER" list-blacklisted | sort > "$_BLACKLIST_FILE"
   while IFS= read -r -d '' f; do
     base=$(basename "$f" .pdf)
     if [ ! -s "$OCR/$base.pdf" ]; then
-      if grep -qxF "$base" "$_FAILED_FILE"; then
+      if grep -qxF "$base" "$_BLACKLIST_FILE"; then
+        known_blacklisted=$((known_blacklisted + 1))
+      elif grep -qxF "$base" "$_FAILED_FILE"; then
         known_failed=$((known_failed + 1))
       elif grep -qxF "$base" "$_DONE_FILE"; then
         merged_away=$((merged_away + 1))
@@ -409,17 +435,19 @@ if [ -z "$FILES_FROM" ]; then
       fi
     fi
   done < <(find "$IN" -name '*.pdf' -print0)
-  rm -f "$_DONE_FILE" "$_FAILED_FILE"
+  rm -f "$_DONE_FILE" "$_FAILED_FILE" "$_BLACKLIST_FILE"
   total=$(find "$IN" -name '*.pdf' | wc -l | tr -d ' ')
   if [ "$missing" -eq 0 ]; then
     msg="  OK — $total PDF:er bearbetade"
-    [ "$merged_away" -gt 0 ] && msg="$msg ($merged_away ersatta av palme-versionen)"
-    [ "$known_failed" -gt 0 ] && msg="$msg, $known_failed misslyckanden hoppades över"
+    [ "$merged_away" -gt 0 ]      && msg="$msg ($merged_away ersatta av palme-versionen)"
+    [ "$known_failed" -gt 0 ]     && msg="$msg, $known_failed misslyckanden hoppades över"
+    [ "$known_blacklisted" -gt 0 ] && msg="$msg, $known_blacklisted blacklistade hoppades över"
     echo "$msg."
   else
     echo "  $missing PDF:er saknas i $OCR/ — kör om skriptet."
-    [ "$known_failed" -gt 0 ] && echo "  $known_failed tidigare misslyckanden hoppades över."
-    [ "$merged_away" -gt 0 ] && echo "  $merged_away ersatta av palme-versionen (merge_wpu)."
+    [ "$known_failed" -gt 0 ]      && echo "  $known_failed tidigare misslyckanden hoppades över."
+    [ "$known_blacklisted" -gt 0 ] && echo "  $known_blacklisted blacklistade hoppades över."
+    [ "$merged_away" -gt 0 ]       && echo "  $merged_away ersatta av palme-versionen (merge_wpu)."
     exit 1
   fi
 fi

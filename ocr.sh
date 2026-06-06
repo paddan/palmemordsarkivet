@@ -354,8 +354,6 @@ if [ -n "${FROM_LIST:-}" ]; then
 
   OCR_DIR="${OCR:-$ROOT/generated/ocr}"
   TXT_DIR="${TXT:-$ROOT/generated/text}"
-  PAGES_DIR="${PAGES_OUT:-$ROOT/generated/text_pages}"
-
   count=0
   while IFS= read -r line; do
     stem="${line%.txt}"

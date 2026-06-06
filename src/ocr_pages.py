@@ -6,8 +6,9 @@ enskilda dåliga sidor kan om-OCR:as med en annan motor utan att hela filen
 måste köras om.
 
 Output i ``<out_dir>/<stem>/``:
-    page-NNN.png   — render (raderas inte under körning)
-    page-NNN.txt   — OCR-text (raderas av ocr.sh efter merge)
+    page-NNN.png   — render för Tesseract/Vision
+
+OCR-text och metadata lagras i ``state.db``-tabellen ``pdf_pages``.
 
 Idempotens och metadata (engine, score) skrivs till ``state.db`` via
 ``db.record_page`` — ingen .json-markör skrivs längre.
@@ -176,6 +177,10 @@ def update_pdf_text_layer(
                     if rc >= 0:
                         break
                     fontsize = max(1.0, fontsize * 0.5)
+                if rc < 0:
+                    raise RuntimeError(
+                        f"kunde inte infoga textrad på sida {page_num}: {line['text'][:80]!r}"
+                    )
             patched += 1
 
         # Skriv via tempfil om src == dst

@@ -5,7 +5,16 @@ from __future__ import annotations
 import pytest
 
 import db as state_db
-from ingest import _source_predicate, _table_exists, find_orphans, should_reingest
+from ingest import (
+    _source_predicate,
+    _table_exists,
+    classify_index_action,
+    classify_reingest,
+    delete_source_for_reingest,
+    find_orphans,
+    get_table_sources,
+    should_reingest,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -29,6 +38,40 @@ class _MockDB:
 
     def list_tables(self):
         return self._result
+
+
+class _MockSourceQuery:
+    def __init__(self, sources: list[str]) -> None:
+        self._sources = sources
+        self.selected: list[str] | None = None
+        self.limit_value: int | None = None
+
+    def select(self, columns: list[str]):
+        self.selected = columns
+        return self
+
+    def limit(self, value: int):
+        self.limit_value = value
+        return self
+
+    def to_list(self):
+        return [{"source": source} for source in self._sources[:self.limit_value]]
+
+
+class _MockTable:
+    def __init__(self, sources: list[str]) -> None:
+        self.sources = sources
+        self.deleted: list[str] = []
+        self.query = _MockSourceQuery(sources)
+
+    def search(self):
+        return self.query
+
+    def count_rows(self):
+        return len(self.sources)
+
+    def delete(self, predicate: str) -> None:
+        self.deleted.append(predicate)
 
 
 def test_table_exists_pydantic_response_found() -> None:
@@ -107,6 +150,56 @@ def test_find_orphans_empty_when_all_match() -> None:
 def test_find_orphans_sorted() -> None:
     stored = {"z.txt", "a.txt", "m.txt"}
     assert find_orphans(stored, set()) == ["a.txt", "m.txt", "z.txt"]
+
+
+def test_get_table_sources_reads_existing_lancedb_sources() -> None:
+    table = _MockTable(["a.txt", "a.txt", "b.txt"])
+    assert get_table_sources(table) == {"a.txt", "b.txt"}
+    assert table.query.selected == ["source"]
+    assert table.query.limit_value == 3
+
+
+def test_existing_lancedb_source_is_reingest_when_sqlite_state_is_missing() -> None:
+    assert classify_reingest(
+        filename="a.txt",
+        disk_mtime=200.0,
+        already={},
+        table_sources={"a.txt"},
+        reindex_since=None,
+    ) is True
+
+
+def test_missing_lancedb_source_is_new_when_sqlite_state_still_exists() -> None:
+    assert classify_index_action(
+        filename="a.txt",
+        disk_mtime=200.0,
+        already={"a.txt": 200.0},
+        table_sources=set(),
+        reindex_since=None,
+    ) == "new"
+
+
+def test_unchanged_unusable_source_is_still_skipped() -> None:
+    assert classify_index_action(
+        filename="bad.txt",
+        disk_mtime=200.0,
+        already={"bad.txt": 200.0},
+        table_sources=set(),
+        reindex_since=None,
+        unusable_sources={"bad.txt"},
+    ) == "skip"
+
+
+def test_delete_source_for_reingest_removes_old_chunks() -> None:
+    table = _MockTable(["a.txt"])
+    delete_source_for_reingest(table, "a.txt", is_reingest=True)
+    assert table.deleted == ["source = 'a.txt'"]
+
+
+def test_delete_source_for_new_file_keeps_table_unchanged() -> None:
+    table = _MockTable([])
+    delete_source_for_reingest(table, "a.txt", is_reingest=False)
+    assert table.deleted == []
 
 
 # ---------------------------------------------------------------------------

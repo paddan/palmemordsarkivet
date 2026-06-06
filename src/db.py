@@ -44,16 +44,17 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_downloads_pk
 CREATE INDEX IF NOT EXISTS idx_downloads_sha1 ON downloads(sha1);
 
 CREATE TABLE IF NOT EXISTS pdf_files (
-    pdf_stem             TEXT PRIMARY KEY,
-    source               TEXT NOT NULL,
-    pdf_path             TEXT NOT NULL,
-    redaction_checked_at TEXT,
-    has_redactions       INTEGER,
-    merged_at            TEXT,
-    normalized_at        TEXT,
-    text_mtime           REAL,
-    tesseract_done_at    TEXT,
-    tesseract_failed     INTEGER DEFAULT 0
+    pdf_stem                  TEXT PRIMARY KEY,
+    source                    TEXT NOT NULL,
+    pdf_path                  TEXT NOT NULL,
+    redaction_checked_at      TEXT,
+    has_redactions            INTEGER,
+    merged_at                 TEXT,
+    normalized_at             TEXT,
+    text_mtime                REAL,
+    tesseract_done_at         TEXT,
+    tesseract_failed          INTEGER DEFAULT 0,
+    tesseract_blacklisted_at  TEXT
 );
 
 CREATE TABLE IF NOT EXISTS pdf_pages (
@@ -152,6 +153,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
     for col, typedef in [
         ("tesseract_done_at", "TEXT"),
         ("tesseract_failed", "INTEGER DEFAULT 0"),
+        ("tesseract_blacklisted_at", "TEXT"),
     ]:
         try:
             conn.execute(f"ALTER TABLE pdf_files ADD COLUMN {col} {typedef}")
@@ -346,6 +348,49 @@ def clear_tesseract_failed(conn: sqlite3.Connection) -> int:
     )
     conn.commit()
     return cur.rowcount
+
+
+def mark_tesseract_blacklisted(conn: sqlite3.Connection, pdf_stem: str) -> None:
+    """Permanent uteslut Tesseract-OCR för pdf_stem. Skippas även av --retry-failed —
+    bara --retry-blacklist tar in dem igen. Kräver att pdf_files-raden redan finns."""
+    cur = conn.execute(
+        "UPDATE pdf_files SET tesseract_blacklisted_at=? WHERE pdf_stem=?",
+        (now(), pdf_stem),
+    )
+    if cur.rowcount == 0:
+        raise KeyError(f"okänt pdf_stem: {pdf_stem}")
+    conn.commit()
+
+
+def clear_tesseract_blacklisted(conn: sqlite3.Connection) -> int:
+    """Nollställ tesseract_blacklisted_at för alla filer. Returnerar antal påverkade rader."""
+    cur = conn.execute(
+        "UPDATE pdf_files SET tesseract_blacklisted_at=NULL "
+        "WHERE tesseract_blacklisted_at IS NOT NULL"
+    )
+    conn.commit()
+    return cur.rowcount
+
+
+def retry_tesseract_blacklisted(conn: sqlite3.Connection) -> int:
+    """Återaktivera blacklistade filer genom att även nollställa failed-status."""
+    cur = conn.execute(
+        "UPDATE pdf_files "
+        "SET tesseract_blacklisted_at=NULL, tesseract_failed=0 "
+        "WHERE tesseract_blacklisted_at IS NOT NULL"
+    )
+    conn.commit()
+    return cur.rowcount
+
+
+def is_tesseract_blacklisted(conn: sqlite3.Connection, pdf_stem: str) -> bool:
+    """True om pdf_stem är permanent uteslutet."""
+    row = conn.execute(
+        "SELECT tesseract_blacklisted_at FROM pdf_files "
+        "WHERE pdf_stem=? AND tesseract_blacklisted_at IS NOT NULL",
+        (pdf_stem,),
+    ).fetchone()
+    return row is not None
 
 
 

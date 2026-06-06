@@ -78,6 +78,8 @@ Eller steg för steg:
 ```
 
 Varje steg är idempotent — avbryt och fortsätt när som helst.
+`run_pipeline.sh` kör därför OCR och ingest även när nedladdningssteget inte
+hittar nya filer, så väntande arbete från en tidigare avbruten körning slutförs.
 
 ## State-databas (`generated/db/state.db`)
 
@@ -85,7 +87,7 @@ Alla pipeline-markörer och status lagras i SQLite (`generated/db/state.db`).
 Inspektera med t.ex. `sqlite3 generated/db/state.db`. Tabellerna:
 
 - `downloads` — Drive- och wpu-nedladdningar (drive_id, sha1, filename)
-- `pdf_files` — per-PDF-status (redaction_checked_at, merged_at, normalized_at, text_mtime)
+- `pdf_files` — per-PDF-status (redaction_checked_at, merged_at, normalized_at, text_mtime, tesseract_done_at, tesseract_failed, tesseract_blacklisted_at)
 - `pdf_pages` — per-sida OCR-resultat (text, engine, score)
 - `quality` / `quality_pages` — kvalitetspoäng per fil och sida
 - `ingest` — vad som indexerats i LanceDB och med vilken text_mtime
@@ -95,6 +97,8 @@ Inspektera med t.ex. `sqlite3 generated/db/state.db`. Tabellerna:
 **Livscykel:** radera inte `generated/db/state.db` mitt under en pågående
 pipeline-körning — befintliga processer fortsätter skriva mot den unlinkade inoden
 medan nya processer skapar en tom db, vilket ger inkonsekvent state.
+Om databasen däremot saknas när `ingest.sh` startar identifieras befintliga
+LanceDB-källor och ersätts i stället för att dupliceras.
 
 ## Vad install.sh gör
 
@@ -191,8 +195,16 @@ du delarna direkt:
 
 ```bash
 ./ocr_tesseract.sh --jobs 8 --per-file-jobs 2 --psm 4
+./ocr_tesseract.sh --retry-failed       # försök misslyckade filer igen
+./ocr_tesseract.sh --retry-blacklist    # försök även permanent uteslutna filer
 ./ocr_tesseract.sh --help
 ```
+
+Filer som upprepat misslyckas (t.ex. korrupt JPEG inuti PDF:en, eller PDF:er
+som ocrmypdf inte kan hantera) kan markeras permanent uteslutna via
+`tesseract_blacklisted_at` i `pdf_files`. De skippas då även av
+`--retry-failed`; `--retry-blacklist` nollställer både blacklist- och
+failed-status så de faktiskt körs igen.
 
 #### Surya för värsta sidorna
 
@@ -208,7 +220,9 @@ Endast sidor med score < threshold OCR:as om, resultatet mergas tillbaka in i
 
 #### Per-sida OCR (`ocr_pages.sh`)
 
-Renderar PDF:en sida för sida och skriver `page-NNN.txt` + `page-NNN.json` i en undermapp. Kombination med `./quality.sh --per-page` + `./ocr.sh --redo --mode pages` kör om bara sidor under tröskeln med Surya.
+Renderar PDF:en sida för sida och lagrar OCR-text + metadata i `pdf_pages`-
+tabellen i state.db. Kombination med `./quality.sh --per-page` +
+`./ocr.sh --redo --mode pages` kör om bara sidor under tröskeln med Surya.
 
 ```bash
 ./ocr_pages.sh --in downloaded/files/foo.pdf --out-dir generated/text_pages --engine surya
@@ -264,26 +278,19 @@ fångar dem automatiskt).
 ```
 
 **Per-sida-merge av Surya-omkörningar:** `ocr.sh --redo --mode pages` skriver
-per-sida-text till `generated/text_pages/<stem>/page-NNN.txt`. Direkt efter att ett
-dokument är klart slår `ocr.sh` automatiskt ihop dessa sidor in i
-`generated/text/<stem>.txt` (en sida i taget, behåller övriga sidor) och raderar
-`page-NNN.txt` + `page-NNN.png`. Kvar i `generated/text_pages/<stem>/` blir bara
-lättviktiga `page-NNN.json` (kvalitetsmetadata) som fungerar som idempotens-
-markör för nya körningar av `ocr.sh --redo --mode pages`.
+per-sida-text till `pdf_pages`-tabellen i state.db. Direkt efter att ett dokument
+är klart slår `ocr.sh` automatiskt ihop dessa sidor in i
+`generated/text/<stem>.txt` en sida i taget och behåller övriga sidor.
+Idempotens spåras i state.db, och ingest fångar ändringarna via textfilens mtime.
 
-Resultat: ingest fångar ändringarna via mtime, och `generated/text_pages/` ackumulerar
-inte stort innehåll.
-
-För befintliga `generated/text_pages`-mappar (som inte mergades/städades automatiskt)
-finns en engångsåtgärd:
+För att slå ihop alla väntande per-sida-resultat från state.db:
 
 ```bash
-./merge_pages.sh --all            # slå ihop + städa alla generated/text_pages/<stem>/
+./merge_pages.sh --all            # slå ihop alla väntande per-sida-resultat
 ./merge_pages.sh --stem "1 — PM …"  # bara en specifik fil
 ```
 
-Båda kommandona är idempotenta — kör om utan oro, de gör bara något om det
-finns nya `page-NNN.txt` att slå in.
+Båda kommandona är idempotenta.
 
 - Chunkar `text/*.txt` (800 tecken med 150 teckens överlapp, bryter på radslut).
 - Embeddar lokalt med `intfloat/multilingual-e5-large` (svenska duger bra).
@@ -402,15 +409,15 @@ Webgränssnittet sparar valt backend i `generated/llm_config.json` och laddar de
 | Fil | Vad |
 |---|---|
 | `install.sh` | Installera alla beroenden via Homebrew och pip (Python-paket, tessdata, hunspell) |
-| `run_pipeline.sh` | Kör hela pipelinen i ett kommando: download → OCR → ingest (flaggor: `--skip-wpu`, `--skip-redo`, `--with-llm`, `--rebuild-index`, `--jobs N`, `--test N`) |
+| `run_pipeline.sh` | Kör hela pipelinen i ett kommando: download → OCR → ingest (flaggor: `--skip-wpu`, `--skip-redo`, `--with-llm`, `--jobs N`, `--test N`) |
 | `download.sh` → `src/download.py` | Hämta PDF:er från Drive |
 | `download_wpu.sh` → `src/download_wpu.py` | Ladda ner alla PDF:er från wpu.nu → `downloaded/wpu_files/` |
 | `merge_wpu.sh` → `src/merge_wpu.py` | Jämför wpu- och palme-text per fil, behåll bäst kvalitet |
 | `setup_tessdata.sh` | Sätt upp projekt-lokal `tessdata/` med swe_best |
 | `ocr.sh` | Full OCR-pipeline (Tesseract → kvalitet → Surya på dåliga sidor); `--redo` kör om dåliga filer/sidor |
 | `ocr_tesseract.sh` | Bara Tesseract-steget (textextraktion + ocrmypdf) |
-| `ocr_pages.sh` → `src/ocr_pages.py` | Per-sida OCR (Tesseract/Surya) med sidor i `\f`-separerad txt |
-| `merge_pages.sh` → `src/merge_pages.py` | Slå ihop `generated/text_pages/<stem>/page-*.txt` in i `generated/text/<stem>.txt` |
+| `ocr_pages.sh` → `src/ocr_pages.py` | Per-sida OCR (Tesseract/Surya), lagrar sidtext och metadata i `state.db` |
+| `merge_pages.sh` → `src/merge_pages.py` | Slå ihop per-sida-text från `state.db` in i `generated/text/<stem>.txt` |
 | `build_user_words.sh` → `src/build_user_words.py` | Bygg `tessdata/swe.user-words.auto` från `generated/text/*.txt` |
 | `quality.sh` → `src/quality.py` | Heuristisk kvalitetsbedömning av `generated/text/*.txt` (`--per-page` finns) |
 | `normalize.sh` → `src/normalize_text.py` | Regelbaserad OCR-normalisering (körs automatiskt av `ocr.sh`) |

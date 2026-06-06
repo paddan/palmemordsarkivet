@@ -1,6 +1,7 @@
 """Tester för detect_redactions_image och _merge_redaction_markers."""
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -109,3 +110,17 @@ def test_merge_surya_exact_position():
     )
     lines = result.split("\n")
     assert lines == ["rad A", "rad B", "[MASKAD]", "rad C"]
+
+
+def test_pdf_patch_preserves_original_when_text_line_cannot_be_inserted(tiny_pdf):
+    pymupdf = pytest.importorskip("pymupdf")
+    from ocr_pages import update_pdf_text_layer
+
+    original = tiny_pdf.read_bytes()
+    lines = {1: [{"text": "kan inte infogas", "bbox": [10, 10, 11, 11]}]}
+
+    with patch.object(pymupdf.Page, "insert_textbox", return_value=-1):
+        with pytest.raises(RuntimeError, match="kunde inte infoga"):
+            update_pdf_text_layer(tiny_pdf, tiny_pdf, lines, dpi=72)
+
+    assert tiny_pdf.read_bytes() == original

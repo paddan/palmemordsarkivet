@@ -2,13 +2,17 @@
 """CLI-hjälpare för ocr_tesseract.sh — sköter DB-operationer parallellsäkert.
 
 Kommandon:
-  check-done   <stem>             → exit 0 om done, exit 1 annars
-  check-failed <stem>             → exit 0 om failed, exit 1 annars
-  mark-done    <stem> <pdf_path>  → registrera lyckad OCR
-  mark-failed  <stem> <pdf_path>  → registrera misslyckad OCR
-  clear-failed                    → nollställ alla failed-flaggor, skriv count till stdout
-  list-done                       → skriv en stem per rad (alla tesseract_done_at IS NOT NULL)
-  list-failed                     → skriv en stem per rad (alla tesseract_failed=1)
+  check-done        <stem>             → exit 0 om done, exit 1 annars
+  check-failed      <stem>             → exit 0 om failed, exit 1 annars
+  check-blacklisted <stem>             → exit 0 om blacklistad, exit 1 annars
+  mark-done         <stem> <pdf_path>  → registrera lyckad OCR
+  mark-failed       <stem> <pdf_path>  → registrera misslyckad OCR
+  mark-blacklisted  <stem>             → permanent uteslut från OCR
+  clear-failed                         → nollställ alla failed-flaggor, skriv count till stdout
+  clear-blacklisted                    → återaktivera blacklistade filer, skriv count till stdout
+  list-done                            → skriv en stem per rad (alla tesseract_done_at IS NOT NULL)
+  list-failed                          → skriv en stem per rad (alla tesseract_failed=1)
+  list-blacklisted                     → skriv en stem per rad (alla tesseract_blacklisted_at IS NOT NULL)
 
 Engångsmigrering av legacy .ocr-done/.ocr-failed-markörfiler sköts av migrate_to_db.py.
 """
@@ -65,6 +69,18 @@ def main() -> None:
         count = db.clear_tesseract_failed(conn)
         print(count)
 
+    elif cmd == "check-blacklisted":
+        stem = sys.argv[2]
+        sys.exit(0 if db.is_tesseract_blacklisted(conn, stem) else 1)
+
+    elif cmd == "mark-blacklisted":
+        stem = sys.argv[2]
+        db.mark_tesseract_blacklisted(conn, stem)
+
+    elif cmd == "clear-blacklisted":
+        count = db.retry_tesseract_blacklisted(conn)
+        print(count)
+
     elif cmd == "list-done":
         rows = conn.execute(
             "SELECT pdf_stem FROM pdf_files WHERE tesseract_done_at IS NOT NULL"
@@ -75,6 +91,13 @@ def main() -> None:
     elif cmd == "list-failed":
         rows = conn.execute(
             "SELECT pdf_stem FROM pdf_files WHERE tesseract_failed=1"
+        ).fetchall()
+        for r in rows:
+            print(r["pdf_stem"])
+
+    elif cmd == "list-blacklisted":
+        rows = conn.execute(
+            "SELECT pdf_stem FROM pdf_files WHERE tesseract_blacklisted_at IS NOT NULL"
         ).fetchall()
         for r in rows:
             print(r["pdf_stem"])

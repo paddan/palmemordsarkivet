@@ -15,6 +15,9 @@ from db import (
     record_ingest, get_ingested_mtime,
     mark_llm_corrected, llm_corrected,
     mark_wpu_decided, wpu_decided,
+    mark_tesseract_failed, mark_tesseract_blacklisted, retry_tesseract_blacklisted,
+    clear_tesseract_blacklisted,
+    is_tesseract_blacklisted,
     files_needing_normalize, files_needing_quality, files_needing_ingest,
 )
 
@@ -222,6 +225,46 @@ def test_wpu_decisions(tmp_path):
     mark_wpu_decided(conn, "s1")  # idempotent
     n = conn.execute("SELECT COUNT(*) FROM wpu_decisions").fetchone()[0]
     assert n == 1
+
+
+def test_tesseract_blacklist(tmp_path):
+    conn = _fresh(tmp_path)
+    upsert_pdf_file(conn, pdf_stem="bad-pdf", source="wpu",
+                    pdf_path="downloaded/wpu_files/bad-pdf.pdf")
+    upsert_pdf_file(conn, pdf_stem="ok-pdf", source="wpu",
+                    pdf_path="downloaded/wpu_files/ok-pdf.pdf")
+
+    assert not is_tesseract_blacklisted(conn, "bad-pdf")
+    mark_tesseract_blacklisted(conn, "bad-pdf")
+    assert is_tesseract_blacklisted(conn, "bad-pdf")
+    assert not is_tesseract_blacklisted(conn, "ok-pdf")
+
+    # Idempotent — andra anropet stämplar bara om timestampen.
+    mark_tesseract_blacklisted(conn, "bad-pdf")
+
+    # clear-funktionen återställer endast blacklisten.
+    assert clear_tesseract_blacklisted(conn) == 1
+    assert not is_tesseract_blacklisted(conn, "bad-pdf")
+    assert clear_tesseract_blacklisted(conn) == 0  # idempotent
+
+
+def test_mark_tesseract_blacklisted_requires_existing_stem(tmp_path):
+    conn = _fresh(tmp_path)
+    with pytest.raises(KeyError):
+        mark_tesseract_blacklisted(conn, "nonexistent")
+
+
+def test_retry_tesseract_blacklisted_clears_blacklist_and_failed(tmp_path):
+    conn = _fresh(tmp_path)
+    mark_tesseract_failed(
+        conn, "bad-pdf", pdf_path="downloaded/files/bad-pdf.pdf", source="files"
+    )
+    mark_tesseract_blacklisted(conn, "bad-pdf")
+
+    assert retry_tesseract_blacklisted(conn) == 1
+    row = get_pdf_file(conn, "bad-pdf")
+    assert row["tesseract_blacklisted_at"] is None
+    assert row["tesseract_failed"] == 0
 
 
 def test_parallel_page_writes(tmp_path):

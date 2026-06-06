@@ -12,7 +12,6 @@
 # Användning:
 #   ./run_pipeline.sh
 #   ./run_pipeline.sh --skip-wpu --skip-redo
-#   ./run_pipeline.sh --rebuild-index
 
 set -eu
 
@@ -83,14 +82,10 @@ else
   echo "━━━━━ Hoppar steg 2 (--skip-wpu) ━━━━━"
 fi
 
-if [ "$new_files" -le 0 ] && [ "$TEST_LIMIT" -eq 0 ]; then
-  t1=$(date +%s); elapsed=$((t1 - t0)); m=$((elapsed / 60)); s=$((elapsed % 60))
-  echo
-  echo "━━━━━ Inga nya filer — hoppar steg 3–5 (${m}m${s}s) ━━━━━"
-  exit 0
-fi
 if [ "$new_files" -gt 0 ]; then
   echo "  ${new_files} nya filer — fortsätter med OCR och ingest."
+else
+  echo "  Inga nya filer — fortsätter för att slutföra eventuellt väntande arbete."
 fi
 
 step "3/5  OCR + normalisering + kvalitetsbedömning (./ocr.sh)"
