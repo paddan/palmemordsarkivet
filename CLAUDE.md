@@ -85,6 +85,8 @@ Env-variabler: `CLAUDE_CODE_OAUTH_TOKEN` (Pro/Max, räknas mot prenumeration) el
 
 **MCP-läge (webui.py)**: Konversationskontinuitet uppnås genom att fånga `session_id` från `ResultMessage` och skicka tillbaka det som `ClaudeAgentOptions(resume=...)` på nästa fråga. "Ny konversation" nollställer `chat_history` + `mcp_session_id`.
 
+**Citatlänkar (webui.py)**: `[Nr X, sida Y]` linkas till PDF via `resolve_nr_all` som matchar `X` mot filstammar. Modellen förkortar långa WPU-nr (klipper titel-suffixet), så uppslaget faller tillbaka på prefix-matchning. Delar flera filer samma dokument-ID-prefix renderas en länk per fil; i RAG-läge skickas faktiskt hämtade källor (`known_sources`) in för att särskilja till en enda länk. MCP-läget saknar den infon och visar därför flera knappar.
+
 **SQLite-state (`generated/db/state.db`)**: all operativ pipeline-state lever här —
 downloads, per-PDF-status (redaktion/merge/normalize), per-sida OCR-resultat,
 kvalitetspoäng, LLM-korrigeringar och ingest-tracking. Inkrementell logik

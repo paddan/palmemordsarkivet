@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import html
 import os
 import re
 import subprocess
@@ -83,22 +84,24 @@ def build_nr_to_pdf() -> dict[str, Path]:
     return mapping
 
 
-def resolve_nr(nr: str, mapping: dict[str, Path]) -> Path | None:
-    """Slå upp ett citerat Nr i nr→PDF-mappningen.
+def resolve_nr_all(nr: str, mapping: dict[str, Path]) -> list[Path]:
+    """Returnera alla PDF-kandidater för ett citerat Nr.
 
     Modellen förkortar ibland långa WPU-nr genom att klippa bort det
     titel-liknande suffixet (t.ex. citerar "Pol-...-04-C" fast stammen är
-    "Pol-...-04-C_Förhör-Jan-Stocklassa"). Faller därför tillbaka på en
-    prefix-matchning vid avsaknad av exakt träff — men bara om den är entydig.
+    "Pol-...-04-C_Förhör-Jan-Stocklassa"). Vid avsaknad av exakt träff faller
+    vi tillbaka på prefix-matchning. Två olika dokument kan dela samma
+    dokument-ID-prefix (t.ex. "...EA9982-00-B" finns i två filer) — då
+    returneras båda och callern får särskilja eller länka till var och en.
     """
     if nr in mapping:
-        return mapping[nr]
-    candidates = {
-        path
-        for key, path in mapping.items()
-        if key.startswith(nr) and not key[len(nr):len(nr) + 1].isalnum()
-    }
-    return next(iter(candidates)) if len(candidates) == 1 else None
+        return [mapping[nr]]
+    # Dedup på sökväg men behåll stabil ordning för deterministisk rendering.
+    seen: dict[str, Path] = {}
+    for key, path in mapping.items():
+        if key.startswith(nr) and not key[len(nr):len(nr) + 1].isalnum():
+            seen.setdefault(str(path), path)
+    return sorted(seen.values(), key=lambda p: p.stem)
 
 
 def find_pdf(source_txt: str) -> Path | None:
@@ -157,26 +160,28 @@ def extract_cited_sources(answer: str) -> list[dict]:
     seen: dict[str, dict] = {}
     for m in CITE_RE.finditer(answer):
         nr = m.group(1)
-        if nr in seen:
-            continue
-        pdf = resolve_nr(nr, nr_to_pdf)
-        if pdf is None:
-            continue
-        stem = pdf.stem
-        parts = [p.strip() for p in stem.split(" — ")]
-        seen[nr] = {
-            "source": stem + ".txt",
-            "page": None,
-            "nr": nr,
-            "titel": parts[1] if len(parts) > 1 else stem,
-        }
+        for pdf in resolve_nr_all(nr, nr_to_pdf):
+            stem = pdf.stem
+            if stem in seen:
+                continue
+            parts = [p.strip() for p in stem.split(" — ")]
+            seen[stem] = {
+                "source": stem + ".txt",
+                "page": None,
+                "nr": nr,
+                "titel": parts[1] if len(parts) > 1 else stem,
+            }
     return list(seen.values())
 
 
-def linkify_citations(text: str) -> str:
+def linkify_citations(text: str, known_sources: set[str] | None = None) -> str:
     """Förvandla "Nr X, sida Y" till små inline-knappar som öppnar PDF lokalt
     via ?pdf=<base64>-handlern högst upp i scriptet (oberoende av session_state).
     Fungerar i både RAG- och MCP-läge — slår upp nr → PDF direkt i filsystemet.
+
+    ``known_sources`` (källfilnamn som faktiskt hämtades för svaret, finns bara
+    i RAG-läge) används för att särskilja när ett nr-prefix matchar flera filer.
+    Återstår fler än en kandidat renderas en länk per fil så användaren kan välja.
     """
     nr_to_pdf = build_nr_to_pdf()
 
@@ -188,19 +193,32 @@ def linkify_citations(text: str) -> str:
         "font-family:ui-monospace,SFMono-Regular,monospace;"
     )
 
-    def repl(m: re.Match) -> str:
-        nr, page = m.group(1), m.group(2)
-        pdf = resolve_nr(nr, nr_to_pdf)
-        if pdf is None:
-            return m.group(0)
-        token = (
-            base64.urlsafe_b64encode(str(pdf).encode()).decode().rstrip("=")
-        )
-        href = f"?pdf={token}"
+    def _anchor(pdf: Path, label: str, title: str) -> str:
+        token = base64.urlsafe_b64encode(str(pdf).encode()).decode().rstrip("=")
         return (
-            f'<a href="{href}" target="pdf_opener" '
-            f'style="{style}" title="Öppna PDF">{m.group(0)}</a>'
+            f'<a href="?pdf={token}" target="pdf_opener" '
+            f'style="{style}" title="{html.escape(title, quote=True)}">{label}</a>'
         )
+
+    def repl(m: re.Match) -> str:
+        nr = m.group(1)
+        cands = resolve_nr_all(nr, nr_to_pdf)
+        # Smalna av tvetydiga träffar till de källor som faktiskt hämtades.
+        if known_sources and len(cands) > 1:
+            narrowed = [p for p in cands if f"{p.stem}.txt" in known_sources]
+            if narrowed:
+                cands = narrowed
+        if not cands:
+            return m.group(0)
+        if len(cands) == 1:
+            return _anchor(cands[0], m.group(0), "Öppna PDF")
+        # Genuint tvetydigt nr (flera dokument delar prefix): en länk per fil,
+        # märkt med den särskiljande titeldelen ur stammen.
+        links = []
+        for pdf in cands:
+            suffix = pdf.stem[len(nr):].lstrip("_- ") or pdf.stem
+            links.append(_anchor(pdf, html.escape(suffix[:30]), pdf.stem))
+        return f"{m.group(0)} ({' '.join(links)})"
 
     return CITE_RE.sub(repl, text)
 
@@ -604,7 +622,8 @@ async def stream_to_string(hits, q, cfg, placeholder=None) -> str:
         await stream_claude(user_msg, placeholder, parts)
     else:
         await stream_openai(user_msg, placeholder, parts, cfg)
-    final = linkify_citations("".join(parts))
+    known = {h["source"] for h in hits}
+    final = linkify_citations("".join(parts), known_sources=known)
     placeholder.markdown(final, unsafe_allow_html=True)
     return final
 

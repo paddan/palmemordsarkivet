@@ -382,7 +382,9 @@ ollama pull llama3.1:8b
 ```
 
 Citat i svaret renderas som små inline-knappar — klick öppnar original-PDF:en
-lokalt (via `open`) i en gömd iframe så huvudsidan inte laddas om.
+lokalt (via `open`) i en gömd iframe så huvudsidan inte laddas om. Om samma
+dokument-ID delas av flera filer (t.ex. en palme- och en wpu-version) och svaret
+inte entydigt pekar ut vilken, visas en knapp per fil märkt med titeldelen.
 
 ## LLM-konfiguration (`generated/llm_config.json`)
 
