@@ -352,15 +352,14 @@ PYBIN="$ROOT/.venv/bin/python"
 if [ -n "${FROM_LIST:-}" ]; then
   [ -f "$FROM_LIST" ] || { echo "Saknar --from-list-fil: $FROM_LIST"; exit 1; }
 
-  OCR_DIR="${OCR:-$ROOT/generated/ocr}"
   TXT_DIR="${TXT:-$ROOT/generated/text}"
   count=0
   while IFS= read -r line; do
     stem="${line%.txt}"
     [ -n "$stem" ] || continue
-    rm -f "$OCR_DIR/$stem.ocr-done" "$OCR_DIR/$stem.ocr-failed"
     rm -f "$TXT_DIR/$stem.txt" "$TXT_DIR/$stem.redact"
-    # Rensa pdf_pages-rader för stem så att Surya kan köras om för dåliga sidor.
+    # Nollställ pipeline-state i state.db så hela kedjan körs om för stem:
+    # pdf_pages (Surya) + tesseract-markörerna (annars hoppar ocr_tesseract.sh över).
     # Skicka stem via argv så filnamn med apostrof inte bryter shell-quotingen.
     ROOT="$ROOT" "$PYBIN" - "$stem" <<'PYEOF' 2>/dev/null || true
 import sys, os
@@ -369,6 +368,11 @@ import db
 conn = db.connect()
 db.init_schema(conn)
 conn.execute('DELETE FROM pdf_pages WHERE pdf_stem=?', (sys.argv[1],))
+conn.execute(
+    'UPDATE pdf_files SET tesseract_done_at=NULL, tesseract_failed=0, '
+    'tesseract_blacklisted_at=NULL WHERE pdf_stem=?',
+    (sys.argv[1],),
+)
 conn.commit()
 PYEOF
     count=$((count + 1))

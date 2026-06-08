@@ -97,6 +97,8 @@ bygger på att jämföra `pdf_files.text_mtime` mot `normalized_at`/`scored_at`/
 
 **Per-dokument-cleanup (ocr.sh + Surya)**: Efter att `ocr_pages.py` är klar kör `ocr.sh` automatiskt `merge_pages.merge_one` + `normalize_text.process_file`, raderar `page-NNN.txt`/`.png`/`.json`. Idempotens för per-sida-OCR spåras i `pdf_pages`-tabellen i state.db — `page-NNN.json`-markörerna existerar inte längre.
 
+**Tesseract-idempotens (ocr_tesseract.sh)**: Avgörs av `pdf_files.tesseract_done_at`/`tesseract_failed`/`tesseract_blacklisted_at` i state.db — `.ocr-done`/`.ocr-failed`-markörfilerna existerar inte längre. `merge_wpu` raderar bara förlorarens `text/`+`ocr/`-filer (DB-raden behåller `tesseract_done_at`, så filen körs inte om). `ocr.sh --from-list` nollställer dessa kolumner i DB för att tvinga om-OCR.
+
 ## Common Gotchas
 
 1. **Beroendepinning**: `sentence-transformers<5` och `transformers<5` är avsiktligt pinnade — v5 bryter cross-encoder och AutoProcessor.

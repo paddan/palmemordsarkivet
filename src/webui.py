@@ -83,6 +83,23 @@ def build_nr_to_pdf() -> dict[str, Path]:
     return mapping
 
 
+def resolve_nr(nr: str, mapping: dict[str, Path]) -> Path | None:
+    """Slå upp ett citerat Nr i nr→PDF-mappningen.
+
+    Modellen förkortar ibland långa WPU-nr genom att klippa bort det
+    titel-liknande suffixet (t.ex. citerar "Pol-...-04-C" fast stammen är
+    "Pol-...-04-C_Förhör-Jan-Stocklassa"). Faller därför tillbaka på en
+    prefix-matchning vid avsaknad av exakt träff — men bara om den är entydig.
+    """
+    if nr in mapping:
+        return mapping[nr]
+    candidates = {
+        path
+        for key, path in mapping.items()
+        if key.startswith(nr) and not key[len(nr):len(nr) + 1].isalnum()
+    }
+    return next(iter(candidates)) if len(candidates) == 1 else None
+
 
 def find_pdf(source_txt: str) -> Path | None:
     """Hitta original-PDF för en chunk. Föredrar ocr/ (sökbar)."""
@@ -142,9 +159,10 @@ def extract_cited_sources(answer: str) -> list[dict]:
         nr = m.group(1)
         if nr in seen:
             continue
-        if nr not in nr_to_pdf:
+        pdf = resolve_nr(nr, nr_to_pdf)
+        if pdf is None:
             continue
-        stem = nr_to_pdf[nr].stem
+        stem = pdf.stem
         parts = [p.strip() for p in stem.split(" — ")]
         seen[nr] = {
             "source": stem + ".txt",
@@ -172,10 +190,11 @@ def linkify_citations(text: str) -> str:
 
     def repl(m: re.Match) -> str:
         nr, page = m.group(1), m.group(2)
-        if nr not in nr_to_pdf:
+        pdf = resolve_nr(nr, nr_to_pdf)
+        if pdf is None:
             return m.group(0)
         token = (
-            base64.urlsafe_b64encode(str(nr_to_pdf[nr]).encode()).decode().rstrip("=")
+            base64.urlsafe_b64encode(str(pdf).encode()).decode().rstrip("=")
         )
         href = f"?pdf={token}"
         return (

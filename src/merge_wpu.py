@@ -99,8 +99,8 @@ def _delete_pair(text_path: Path, ocr_dir: Path, dry_run: bool) -> None:
         return
     text_path.unlink(missing_ok=True)
     (ocr_dir / f"{text_path.stem}.pdf").unlink(missing_ok=True)
-    # Sätt markör så att ocr_tesseract.sh inte kör om filen nästa gång.
-    (ocr_dir / f"{text_path.stem}.ocr-done").touch()
+    # Ingen markörfil behövs: filen har redan tesseract_done_at i state.db, så
+    # ocr_tesseract.sh hoppar över den även när text/+ocr/ raderats här.
 
 
 def _process_one(

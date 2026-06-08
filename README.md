@@ -160,7 +160,7 @@ Surya-steget körs sen mot kvarvarande `generated/text/`-filer och hanterar palm
 ```bash
 ./merge_wpu.sh             # kör om manuellt (parallellt, default cpu_count)
 ./merge_wpu.sh --dry-run   # visa vad som skulle hända
-./merge_wpu.sh --rebuild   # ignorera .done-markeringar
+./merge_wpu.sh --rebuild   # ignorera wpu_decisions-tabellen i state.db
 ./merge_wpu.sh --jobs 8    # antal parallella processer
 ```
 
