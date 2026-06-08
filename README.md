@@ -321,7 +321,7 @@ Klassisk *retrieval-augmented generation*: en fast pipeline i tre steg.
 2. **Hybrid + reranking (valfritt)** — `--hybrid` kombinerar vektor och BM25 (FTS)
    med *Reciprocal Rank Fusion* (k=60). Sedan omrankar
    `BAAI/bge-reranker-v2-m3` resultaten och plockar ut topp-6.
-3. **Claude svarar** — de 6 utdragen skickas som kontext till Claude Opus 4.7
+3. **Claude svarar** — de 6 utdragen skickas som kontext till Claude Opus 4.8
    (adaptive thinking). Svaret innehåller källhänvisningar `[Nr X, sida Y]`.
 
 Snabbt och förutsägbart. Passar enkla faktafrågor där ett enstaka söksteg räcker.
@@ -358,8 +358,9 @@ historiken och startar en ny session.
 
 Stödjer flera AI-backends via en väljare i sidebaren:
 
-- **Claude Opus 4.7** (default) — via `claude-agent-sdk` med adaptive thinking,
+- **Claude Opus 4.8** (default) — via `claude-agent-sdk` med adaptive thinking,
   kräver `CLAUDE_CODE_OAUTH_TOKEN` eller `ANTHROPIC_API_KEY`. Stödjer MCP-läge.
+  (Opus 4.7, Sonnet 4.6 och Haiku 4.5 går också att välja i sidebaren.)
 - **OpenAI GPT-5 / GPT-4o** — kräver `OPENAI_API_KEY`.
 - **DeepSeek V4 / Reasoner** — kräver `DEEPSEEK_API_KEY`
   (`deepseek-chat` är V4-routern, `deepseek-reasoner` är thinking-modellen).
@@ -388,13 +389,13 @@ inte entydigt pekar ut vilken, visas en knapp per fil märkt med titeldelen.
 
 ## LLM-konfiguration (`generated/llm_config.json`)
 
-Webgränssnittet sparar valt backend i `generated/llm_config.json` och laddar det vid nästa start. Filen skapas automatiskt — ta bort den för att återgå till standardvalet (Claude Opus 4.7). API-nycklar läses alltid från miljövariabler och lagras aldrig i filen.
+Webgränssnittet sparar valt backend i `generated/llm_config.json` och laddar det vid nästa start. Filen skapas automatiskt — ta bort den för att återgå till standardvalet (Claude Opus 4.8). API-nycklar läses alltid från miljövariabler och lagras aldrig i filen.
 
 ```json
 {
   "backend_name": "Claude",
   "provider": "claude",
-  "model": "claude-opus-4-7",
+  "model": "claude-opus-4-8",
   "base_url": ""
 }
 ```
@@ -402,7 +403,7 @@ Webgränssnittet sparar valt backend i `generated/llm_config.json` och laddar de
 | Fält | Möjliga värden |
 |---|---|
 | `provider` | `claude`, `openai`, `deepseek`, `openai_compatible` |
-| `model` | t.ex. `claude-opus-4-7`, `gpt-4o`, `deepseek-chat`, `deepseek-reasoner` |
+| `model` | t.ex. `claude-opus-4-8`, `gpt-4o`, `deepseek-chat`, `deepseek-reasoner` |
 | `base_url` | Tomt för molntjänster; URL för lokal endpoint (`http://localhost:11434/v1` för Ollama) |
 | `backend_name` | Visningsnamn i gränssnittet (valfritt) |
 

@@ -46,7 +46,7 @@ DB_DIR = Path(__file__).resolve().parents[2] / "generated" / "lancedb"
 TABLE = "chunks"
 EMBED_MODEL = "intfloat/multilingual-e5-large"
 RERANK_MODEL = "BAAI/bge-reranker-v2-m3"
-CLAUDE_MODEL = "claude-opus-4-7"
+CLAUDE_MODEL = "claude-opus-4-8"
 
 SYSTEM_PROMPT = """Du svarar på frågor om Palmemordsarkivet baserat på de utdrag användaren ger dig.
 
@@ -61,6 +61,7 @@ MCP_SYSTEM_PROMPT = """Du är en utredningsassistent med tillgång till Palmemor
 
 Regler:
 - Svara på svenska.
+- Anropa verktygen direkt — beskriv inte bara att du *tänker* söka och avsluta sedan. Säger du att du ska söka eller kolla något, gör det i samma svar.
 - Använd search_archive för att hitta relevant material. Sök gärna flera gånger med olika termer.
 - Använd get_page för att läsa mer kontext kring ett intressant stycke.
 - Stötta varje påstående med [Nr X, sida Y].

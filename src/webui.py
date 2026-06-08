@@ -44,6 +44,7 @@ from claude_agent_sdk import (  # noqa: E402
     ResultMessage,
     TextBlock,
     ThinkingConfigAdaptive,
+    ToolUseBlock,
     query,
 )
 
@@ -240,6 +241,7 @@ BACKENDS = {
         "kind": "claude",
         "model": CLAUDE_MODEL,
         "models": [
+            "claude-opus-4-8",
             "claude-opus-4-7",
             "claude-sonnet-4-6",
             "claude-haiku-4-5-20251001",
@@ -509,13 +511,25 @@ if "pdf" in qp:
     st.query_params.clear()
 
 
+def _mcp_tool_label(name: str, inp: dict) -> str:
+    """Människoläsbar etikett för ett MCP-verktygsanrop (namnet är prefixat
+    ``mcp__arkiv__``)."""
+    short = name.rsplit("__", 1)[-1]
+    if short == "search_archive":
+        return f'🔍 Söker: "{inp.get("query", "")}"'
+    if short == "get_page":
+        return f'📄 Läser: {inp.get("source", "")}, sida {inp.get("page", "")}'
+    return f"🔧 {short}"
+
+
 async def stream_mcp(
-    q: str, placeholder, parts: list[str], resume_id: str | None
-) -> str | None:
+    q: str, status_box, text_placeholder, parts: list[str], resume_id: str | None
+) -> tuple[str | None, int]:
     """Utredningsläge: Claude anropar search_archive/get_page autonomt.
 
-    Returnerar Claudes session_id så att nästa fråga kan resume:a samma
-    konversation (Claude minns tidigare frågor och tool-resultat)."""
+    Skriver varje verktygsanrop till ``status_box`` så användaren ser att
+    sökningarna faktiskt körs (kan ta 1–3 min). Returnerar Claudes session_id
+    (så nästa fråga kan resume:a samma konversation) och antalet verktygsanrop."""
     db_dir = ROOT / "generated" / "lancedb"
     env = {
         "DB_DIR": str(db_dir),
@@ -547,15 +561,19 @@ async def stream_mcp(
         resume=resume_id,
     )
     new_session_id: str | None = None
+    tool_count = 0
     async for message in query(prompt=q, options=options):
         if isinstance(message, AssistantMessage):
             for block in message.content:
                 if isinstance(block, TextBlock):
                     parts.append(block.text)
-                    placeholder.markdown("".join(parts))
+                    text_placeholder.markdown("".join(parts))
+                elif isinstance(block, ToolUseBlock):
+                    tool_count += 1
+                    status_box.write(_mcp_tool_label(block.name, block.input or {}))
         elif isinstance(message, ResultMessage):
             new_session_id = message.session_id
-    return new_session_id
+    return new_session_id, tool_count
 
 
 async def stream_claude(user_msg: str, placeholder, parts: list[str]) -> None:
@@ -629,11 +647,13 @@ async def stream_to_string(hits, q, cfg, placeholder=None) -> str:
 
 
 async def stream_mcp_to_string(q: str, resume_id: str | None) -> tuple[str, str | None]:
-    placeholder = st.empty()
-    placeholder.markdown(_THINKING_HTML, unsafe_allow_html=True)
+    status_box = st.status("Söker i arkivet…", expanded=True)
+    text_placeholder = st.empty()
     parts: list[str] = []
     try:
-        new_id = await stream_mcp(q, placeholder, parts, resume_id)
+        new_id, tool_count = await stream_mcp(
+            q, status_box, text_placeholder, parts, resume_id
+        )
     except Exception as exc:
         err_str = str(exc)
         if any(k in err_str.lower() for k in ("authenticate", "403", "exit code 1", "unauthorized")):
@@ -643,10 +663,19 @@ async def stream_mcp_to_string(q: str, resume_id: str | None) -> tuple[str, str 
             )
         else:
             msg = f"*Fel i utredningsläget: {exc}*"
-        placeholder.markdown(msg)
+        status_box.update(label="Fel i utredningsläget", state="error", expanded=False)
+        text_placeholder.markdown(msg)
         return msg, None
     final = linkify_citations("".join(parts))
-    placeholder.markdown(final, unsafe_allow_html=True)
+    text_placeholder.markdown(final, unsafe_allow_html=True)
+    n = tool_count
+    suffix = "ar" if n != 1 else ""
+    done = "a" if n != 1 else ""
+    status_box.update(
+        label=f"{n} sökning{suffix} gjord{done}",
+        state="complete",
+        expanded=False,
+    )
     return final, new_id
 
 

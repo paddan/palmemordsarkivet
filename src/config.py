@@ -10,7 +10,7 @@ CONFIG_FILE = ROOT / "generated" / "llm_config.json"
 _DEFAULTS: dict = {
     "backend_name": "Claude",
     "provider": "claude",
-    "model": "claude-opus-4-7",
+    "model": "claude-opus-4-8",
     "base_url": "",
 }
 
