@@ -28,3 +28,6 @@ test_txt/
 test_files/
 test_ocr/
 .idea/
+
+# Genererad kunskapsgraf från /graphify (lokal tool-output + cache)
+graphify-out/
