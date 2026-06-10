@@ -419,6 +419,7 @@ Webgränssnittet sparar valt backend i `generated/llm_config.json` och laddar de
 | `setup_tessdata.sh` | Sätt upp projekt-lokal `tessdata/` med swe_best |
 | `ocr.sh` | Full OCR-pipeline (Tesseract → kvalitet → Surya på dåliga sidor); `--redo` kör om dåliga filer/sidor |
 | `ocr_tesseract.sh` | Bara Tesseract-steget (textextraktion + ocrmypdf) |
+| `src/ocr_db_helper.py` | CLI-hjälpare för shell-skripten: tesseract-status och `text_mtime`-stämpling i `state.db` |
 | `ocr_pages.sh` → `src/ocr_pages.py` | Per-sida OCR (Tesseract/Surya), lagrar sidtext och metadata i `state.db` |
 | `merge_pages.sh` → `src/merge_pages.py` | Slå ihop per-sida-text från `state.db` in i `generated/text/<stem>.txt` |
 | `build_user_words.sh` → `src/build_user_words.py` | Bygg `tessdata/swe.user-words.auto` från `generated/text/*.txt` |
@@ -430,7 +431,11 @@ Webgränssnittet sparar valt backend i `generated/llm_config.json` och laddar de
 | `src/rag/ask.py` | Frågefunktioner — RAG-läge och MCP-läge (importeras av webui och mcp_server) |
 | `src/rag/mcp_server.py` | MCP-server med `search_archive` och `get_page` (startas av ask.py/webui.py) |
 | `generated/llm_config.json` | Sparad LLM-konfiguration (backend, modell, URL) — se ovan |
+| `src/config.py` | Läser/skriver `generated/llm_config.json` (delas av webui och llm_correct) |
+| `src/citations.py` | Slår upp `[Nr X, sida Y]`-citat mot PDF:er och renderar citatlänkar |
 | `src/webui.py` | Streamlit-webgränssnitt för frågor (RAG + MCP-toggle) |
+| `migrate_to_db.sh` → `src/migrate_to_db.py` | Engångsmigrering av legacy filmarkörer → `state.db` |
+| `cleanup_legacy_state.sh` | Ta bort kvarvarande legacy-markörfiler efter migrering |
 | `web.sh` | Wrapper för Streamlit-servern |
 | `src/db.py` | SQLite-state: schema + CRUD + delta-queries (importeras av övriga skript) |
 | `tessdata/swe.user-words` | Palme-specifika ord (committat) |
@@ -456,7 +461,9 @@ Valfritt: installera hunspell + sv_SE-ordlista för att fylla i `pct_swe`-kolumn
 
 Testerna täcker: `score_text` (quality), `chunk_text` (ingest), `extract_drive_id`/`sniff_extension` (download),
 `detect_redactions_image` (ocr_pages), `merge_one` (merge_pages), `merge_wpu` (merge_wpu),
-LLM-korrektionslogiken (llm_correct) och re-ingest-flödet (ingest).
+LLM-korrektionslogiken (llm_correct), re-ingest-flödet (ingest), state-databasen inkl.
+delta-urval och `text_mtime`-stämpling (db, ocr_db_helper, normalize, quality),
+citatuppslag/-länkning (citations), RRF-hybridsökningen (ask) och `get_page` (mcp_server).
 Fixturen som genererar en mini-PDF med pymupdf skipas gracefully om pymupdf inte är installerat.
 
 ## Felloggning

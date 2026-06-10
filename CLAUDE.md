@@ -26,18 +26,24 @@ src/
   db.py                # SQLite-state: schema + CRUD + delta-queries för hela pipelinen
   migrate_to_db.py     # Engångsmigrering: legacy filstate → generated/db/state.db
   download.py          # Google Drive PDF downloader (state via db.py)
+  download_wpu.py      # wpu.nu-nedladdare + dokument-ID-parsning (wpu/palme-nycklar)
+  merge_wpu.py         # Jämför wpu- vs palme-text per dokument-ID, raderar förloraren
   quality.py           # OCR quality scoring (0–100 heuristics + optional hunspell)
   ocr_pages.py         # Per-page OCR pipeline (Tesseract/Surya) + redaktionsdetektering
+  ocr_db_helper.py     # CLI-hjälpare för ocr_tesseract.sh: tesseract-status + text_mtime i state.db
   normalize_text.py    # Rule-based OCR normalization (ligatures, whitespace). Inkrementellt via state.db.
   llm_correct.py       # LLM post-correction av dåliga OCR-sidor via Claude Haiku
   merge_pages.py       # Slå ihop text_pages/<stem>/page-*.txt → text/<stem>.txt
   build_user_words.py  # Generera Tesseract user-words från OCR-text
   errors_log.py        # Centraliserad felloggning (tab-separerad)
+  config.py            # Delad LLM-konfiguration (generated/llm_config.json)
+  citations.py         # [Nr X, sida Y]-uppslag mot PDF:er + länkrendering (Streamlit-fritt)
   webui.py             # Streamlit-gränssnitt
   rag/
     ingest.py          # LanceDB vector index builder
     ask.py             # RAG query + Claude integration
-tests/                 # pytest (test_quality, test_chunk, test_download, test_merge_pages, test_detect_redactions, test_reingest, test_normalize_text)
+    mcp_server.py      # MCP-server: search_archive + get_page (startas av ask/webui)
+tests/                 # pytest — en testfil per modul (test_db, test_quality, test_chunk, test_download, test_merge_pages, test_merge_wpu, test_detect_redactions, test_reingest, test_normalize_text, test_llm_correct, test_migrate_to_db, test_scripts, test_citations, test_ask, test_mcp_server)
 *.sh                   # Bash-wrappers (aktiverar .venv, läser API-nycklar, vidarebefordrar flaggor)
 tessdata/              # swe_best.traineddata, swe.user-words, tesseract.config
 ```
@@ -100,6 +106,8 @@ bygger på att jämföra `pdf_files.text_mtime` mot `normalized_at`/`scored_at`/
 **Per-dokument-cleanup (ocr.sh + Surya)**: Efter att `ocr_pages.py` är klar kör `ocr.sh` automatiskt `merge_pages.merge_one` + `normalize_text.process_file`, raderar `page-NNN.txt`/`.png`/`.json`. Idempotens för per-sida-OCR spåras i `pdf_pages`-tabellen i state.db — `page-NNN.json`-markörerna existerar inte längre.
 
 **Tesseract-idempotens (ocr_tesseract.sh)**: Avgörs av `pdf_files.tesseract_done_at`/`tesseract_failed`/`tesseract_blacklisted_at` i state.db — `.ocr-done`/`.ocr-failed`-markörfilerna existerar inte längre. `merge_wpu` raderar bara förlorarens `text/`+`ocr/`-filer (DB-raden behåller `tesseract_done_at`, så filen körs inte om). `ocr.sh --from-list` nollställer dessa kolumner i DB för att tvinga om-OCR.
+
+**text_mtime måste stämplas när text skrivs (db.touch_text_mtime)**: normalize/quality-deltat kräver `pdf_files.text_mtime IS NOT NULL`. All kod som skriver `text/<stem>.txt` utanför merge_pages-spåret måste stämpla mtime: `ocr_tesseract.sh` skickar txt-sökvägen till `ocr_db_helper mark-done`, `ocr.sh --redo --mode files` kör `ocr_db_helper touch-mtime` efter pdftotext. Normalize och quality tar dessutom defensivt med rader vars `text_mtime` är NULL (historiska Tesseract-filer som annars aldrig bearbetas).
 
 ## Common Gotchas
 

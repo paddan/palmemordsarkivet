@@ -228,7 +228,9 @@ def main() -> int:
         files_to_score = []
         for f in files_all:
             row = state_db.get_pdf_file(conn, f.stem)
-            if row is None or f.stem in needing:
+            # text_mtime NULL = rad skapad av mark_tesseract_done utan stämpel —
+            # delta-frågan (kräver text_mtime IS NOT NULL) missar annars filen.
+            if row is None or row["text_mtime"] is None or f.stem in needing:
                 files_to_score.append(f)
 
     if not files_to_score:
@@ -269,13 +271,18 @@ def main() -> int:
 
         # Defensiv: om pdf_files saknar raden (legacy) — skapa den så att
         # foreign-relationen håller och files_needing_* fungerar framöver.
-        if state_db.get_pdf_file(conn, f.stem) is None:
+        row = state_db.get_pdf_file(conn, f.stem)
+        if row is None:
             source = state_db.source_for_path(f, root=ROOT)
             state_db.upsert_pdf_file(
                 conn, pdf_stem=f.stem, source=source, pdf_path=str(f),
             )
             # Stämpla text_mtime så normalize/merge inte ser filen som "obesvarad".
             state_db.mark_merged(conn, f.stem, text_mtime=f.stat().st_mtime)
+        elif row["text_mtime"] is None:
+            # Rad utan stämpel (mark_tesseract_done) — stämpla så filen inte
+            # om-bedöms varje körning och delta-frågorna fungerar framöver.
+            state_db.touch_text_mtime(conn, f.stem, text_mtime=text_mtime)
 
         extras = {k: scored.get(k) for k in (
             "pct_swe", "junk_ratio", "short_word_ratio", "long_word_ratio",

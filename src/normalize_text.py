@@ -158,6 +158,11 @@ def main() -> None:
             if row is None:
                 # Legacy / direktskrivna filer utan pdf_files-rad → ta med.
                 files.append(f)
+            elif row["text_mtime"] is None:
+                # Rad skapad av t.ex. mark_tesseract_done utan text_mtime —
+                # filen har aldrig normaliserats (delta-frågan kräver
+                # text_mtime IS NOT NULL och missar annars dessa).
+                files.append(f)
             elif f.stem in needing:
                 files.append(f)
         skipped = len(all_files) - len(files)

@@ -407,6 +407,21 @@ def mark_merged(
     conn.commit()
 
 
+def touch_text_mtime(
+    conn: sqlite3.Connection, pdf_stem: str, *, text_mtime: float
+) -> None:
+    """Uppdatera enbart text_mtime — för text skriven utanför merge_pages-spåret
+    (t.ex. pdftotext i ocr_tesseract.sh / ocr.sh --redo --mode files), så att
+    delta-frågorna ser filen. Kastar KeyError om pdf_stem saknas."""
+    cur = conn.execute(
+        "UPDATE pdf_files SET text_mtime=? WHERE pdf_stem=?",
+        (text_mtime, pdf_stem),
+    )
+    if cur.rowcount == 0:
+        raise KeyError(pdf_stem)
+    conn.commit()
+
+
 def mark_normalized(
     conn: sqlite3.Connection, pdf_stem: str, *, text_mtime: float
 ) -> None:

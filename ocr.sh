@@ -64,7 +64,8 @@ Flaggor (default visas inom parentes):
                           'inga användbara chunks' (skrivs till generated/unusable.txt).
   --no-update-pdf         hoppa PDF-textlager-patchen efter Surya per sida
                           (default: textlagret i \$OCR/<stem>.pdf uppdateras)
-  --retry-failed          ta bort .ocr-failed-markörer så att misslyckade filer körs om
+  --retry-failed          nollställ tesseract_failed-flaggor i state.db så att
+                          misslyckade filer körs om
   -h, --help              visa denna hjälp
 EOF
 }
@@ -466,6 +467,9 @@ from normalize_text import process_file
 from pathlib import Path
 process_file(Path(sys.argv[2]))
 " "$ROOT/src" "$out_txt" 2>/dev/null || true
+    # Stämpla text_mtime i state.db — annars ser quality-deltat filen som
+    # oförändrad och behåller gamla poängen efter om-OCR:en.
+    "$ROOT/.venv/bin/python" "$ROOT/src/ocr_db_helper.py" touch-mtime "$base" "$out_txt" || true
     rm -f "$log"
   else
     echo "[fel] $base — se loggen nedan:" >&2

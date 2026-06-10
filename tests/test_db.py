@@ -322,3 +322,25 @@ def test_source_for_path(tmp_path):
     assert source_for_path(txt2, root=root) == "files"
     # Utan root → 'files'
     assert source_for_path(txt1) == "files"
+
+
+def test_touch_text_mtime_updates_only_mtime(tmp_path):
+    from db import mark_tesseract_done, touch_text_mtime
+    conn = _fresh(tmp_path)
+    mark_tesseract_done(conn, "doc", pdf_path="downloaded/files/doc.pdf",
+                        source="files")
+    row = get_pdf_file(conn, "doc")
+    assert row["text_mtime"] is None
+    touch_text_mtime(conn, "doc", text_mtime=1234.5)
+    row = get_pdf_file(conn, "doc")
+    assert row["text_mtime"] == 1234.5
+    # merged_at/normalized_at ska inte påverkas
+    assert row["merged_at"] is None
+    assert row["normalized_at"] is None
+
+
+def test_touch_text_mtime_unknown_stem_raises(tmp_path):
+    from db import touch_text_mtime
+    conn = _fresh(tmp_path)
+    with pytest.raises(KeyError):
+        touch_text_mtime(conn, "finns-ej", text_mtime=1.0)

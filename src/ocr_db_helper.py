@@ -5,7 +5,11 @@ Kommandon:
   check-done        <stem>             → exit 0 om done, exit 1 annars
   check-failed      <stem>             → exit 0 om failed, exit 1 annars
   check-blacklisted <stem>             → exit 0 om blacklistad, exit 1 annars
-  mark-done         <stem> <pdf_path>  → registrera lyckad OCR
+  mark-done         <stem> <pdf_path> [txt_path]
+                                       → registrera lyckad OCR; med txt_path
+                                         stämplas även text_mtime (krävs för
+                                         normalize/quality-deltat)
+  touch-mtime       <stem> <txt_path>  → uppdatera text_mtime efter om-OCR
   mark-failed       <stem> <pdf_path>  → registrera misslyckad OCR
   mark-blacklisted  <stem>             → permanent uteslut från OCR
   clear-failed                         → nollställ alla failed-flaggor, skriv count till stdout
@@ -21,6 +25,7 @@ from __future__ import annotations
 
 import sys
 import os
+from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
 
@@ -28,7 +33,6 @@ import db
 
 
 def _source(pdf_path: str) -> str:
-    from pathlib import Path
     return db.source_for_path(pdf_path)
 
 
@@ -60,6 +64,19 @@ def main() -> None:
     elif cmd == "mark-done":
         stem, pdf_path = sys.argv[2], sys.argv[3]
         db.mark_tesseract_done(conn, stem, pdf_path=pdf_path, source=_source(pdf_path))
+        if len(sys.argv) > 4:
+            txt = Path(sys.argv[4])
+            if txt.is_file():
+                db.touch_text_mtime(conn, stem, text_mtime=txt.stat().st_mtime)
+
+    elif cmd == "touch-mtime":
+        stem, txt_path = sys.argv[2], sys.argv[3]
+        txt = Path(txt_path)
+        if txt.is_file():
+            db.touch_text_mtime(conn, stem, text_mtime=txt.stat().st_mtime)
+        else:
+            print(f"saknar txt-fil: {txt_path}", file=sys.stderr)
+            sys.exit(1)
 
     elif cmd == "mark-failed":
         stem, pdf_path = sys.argv[2], sys.argv[3]

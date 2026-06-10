@@ -250,7 +250,7 @@ process_one() {
   if "$PYBIN" "$DB_HELPER" check-done "$base"; then
     _done=1
   elif [ -s "$out_txt" ]; then
-    "$PYBIN" "$DB_HELPER" mark-done "$base" "$f"
+    "$PYBIN" "$DB_HELPER" mark-done "$base" "$f" "$out_txt"
     _done=1
   fi
   if [ "$_done" = "1" ]; then
@@ -318,7 +318,9 @@ process_one() {
   fi
 
   printf '%s' "$_STATUS" > "$PROGRESS_DIR/${base}.status"
-  "$PYBIN" "$DB_HELPER" mark-done "$base" "$f"
+  # txt-sökvägen stämplar text_mtime — utan den ser normalize/quality-deltat
+  # aldrig nya Tesseract-filer (text_mtime förblir NULL).
+  "$PYBIN" "$DB_HELPER" mark-done "$base" "$f" "$out_txt"
 }
 export -f process_one run_ocr _run_ocrmypdf log_err
 export IN OCR TXT PER_FILE_JOBS MIN_TEXT_CHARS LANGS PSM \

@@ -174,3 +174,25 @@ def test_files_from_only_processes_listed(tmp_path, txt_dir, db_path):
     assert (txt_dir / "a.txt").read_text(encoding="utf-8") == "finns text"
     assert (txt_dir / "b.txt").read_text(encoding="utf-8") == "flöde text"
     assert (txt_dir / "c.txt").read_text(encoding="utf-8") == "ﬀlera ord"
+
+
+def test_tesseract_only_row_is_not_skipped(txt_dir, db_path):
+    """Regression: en rad skapad av mark_tesseract_done har text_mtime NULL.
+    Sådana filer hoppades tidigare över av delta-urvalet trots att .txt
+    aldrig normaliserats."""
+    f = txt_dir / "a.txt"
+    f.write_text("text\x00med styrtecken", encoding="utf-8")
+    conn = _connect(db_path)
+    import db
+    db.init_schema(conn)
+    db.mark_tesseract_done(conn, "a", pdf_path="downloaded/files/a.pdf",
+                           source="files")
+    conn.close()
+    _run_main([], txt_dir, db_path)
+    conn = _connect(db_path)
+    row = conn.execute(
+        "SELECT normalized_at, text_mtime FROM pdf_files WHERE pdf_stem='a'"
+    ).fetchone()
+    assert row["normalized_at"] is not None
+    assert row["text_mtime"] is not None
+    assert "\x00" not in f.read_text(encoding="utf-8")

@@ -487,7 +487,7 @@ def main() -> int:
     n_done = 0
     conn = state_db.connect()
     state_db.init_schema(conn)
-    source = "wpu" if "wpu" in str(pdf).lower() else "files"
+    source = state_db.source_for_path(pdf)
     state_db.upsert_pdf_file(
         conn, pdf_stem=pdf.stem, source=source, pdf_path=str(pdf),
     )
