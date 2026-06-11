@@ -80,7 +80,9 @@ sidofältet. Detaljer i [Teknisk referens](teknisk-referens.md#4-ställ-frågor)
 ## Kunskapsgraf (valfritt)
 
 Utöver vektorsökningen kan arkivet byggas som en kunskapsgraf i Neo4j, med en
-interaktiv grafvy i webgränssnittet:
+interaktiv grafvy i webgränssnittet.
+
+### 1. Installera grafberoenden
 
 Installera först grafens valfria beroenden. Podman-maskinen behöver minst 4 GiB
 minne för Neo4j:
@@ -91,11 +93,58 @@ podman machine init --memory 4096
 .venv/bin/pip install -e '.[graph]'
 ```
 
+### 2. Välj LLM för extraktionen
+
+`extract_entities.sh` skickar OCR-texten sida för sida till en LLM för att hitta
+personer, platser, organisationer och relationer. Det kan därför ta tid och
+kosta API-tokens. Skriptet använder normalt samma sparade LLM-val som
+webgränssnittet och `llm_correct.sh`.
+
+Visa aktuell konfiguration och välj exempelvis Claude Haiku eller OpenAI:
+
 ```bash
-./extract_entities.sh --limit 20   # extrahera entiteter/relationer (provkörning)
-./neo4j.sh                         # starta Neo4j via podman
-./load_graph.sh                    # ladda grafen
-./web.sh                           # öppna "Graf"-sidan i sidofältet
+./llm_config.sh
+
+# Sparat val: används även av framtida körningar och webgränssnittet
+export CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...  # eller ANTHROPIC_API_KEY
+./llm_config.sh --provider claude --model claude-haiku-4-5-20251001
+
+# Alternativt OpenAI
+export OPENAI_API_KEY=sk-...
+./llm_config.sh --provider openai --model gpt-4o-mini
+```
+
+En dyr modell som Opus kan bli kostsam för hela arkivet. Välj därför gärna en
+billigare modell uttryckligen innan extraktionen.
+
+Du kan också skriva över det sparade valet för bara en körning:
+
+```bash
+./extract_entities.sh --limit 20 \
+  --provider claude --model claude-haiku-4-5-20251001
+```
+
+### 3. Extrahera entiteter och relationer
+
+Extraktionen skriver resultatet till `generated/db/state.db` och kräver inte att
+Neo4j är igång. Börja med en kostnadsfri dry-run och en begränsad provkörning:
+
+```bash
+./extract_entities.sh --dry-run    # visa hur många sidor som återstår, utan LLM-anrop
+./extract_entities.sh --limit 20   # provkör på 20 dokument
+./extract_entities.sh              # extrahera resten av arkivet
+```
+
+### 4. Starta, använd och stoppa Neo4j
+
+```bash
+./neo4j.sh          # starta Neo4j; skapar container och lösenord första gången
+./neo4j.sh status   # kontrollera om Neo4j kör
+./load_graph.sh     # ladda extraherade entiteter/relationer från state.db
+./web.sh            # öppna "Graf"-sidan i sidofältet
+
+./neo4j.sh stop     # stoppa Neo4j
+./neo4j.sh          # starta samma container igen senare
 ```
 
 Full beskrivning (schema, kostnad, namnnormalisering) finns under
