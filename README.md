@@ -93,6 +93,7 @@ Inspektera med t.ex. `sqlite3 generated/db/state.db`. Tabellerna:
 - `ingest` — vad som indexerats i LanceDB och med vilken text_mtime
 - `llm_corrections` — vilka sidor som LLM-korrigerats
 - `wpu_decisions` — vilka wpu-stems `merge_wpu` redan fattat beslut för
+- `doc_entities` — extraherade entiteter/relationer per sida (kunskapsgrafen)
 
 **Livscykel:** radera inte `generated/db/state.db` mitt under en pågående
 pipeline-körning — befintliga processer fortsätter skriva mot den unlinkade inoden
@@ -387,6 +388,111 @@ lokalt (via `open`) i en gömd iframe så huvudsidan inte laddas om. Om samma
 dokument-ID delas av flera filer (t.ex. en palme- och en wpu-version) och svaret
 inte entydigt pekar ut vilken, visas en knapp per fil märkt med titeldelen.
 
+## Kunskapsgraf (Neo4j, valfritt)
+
+Utöver vektorsökningen kan arkivet byggas upp som en kunskapsgraf: en LLM
+extraherar personer, platser, organisationer och relationer ur arkivtexten,
+sida för sida. Grafen är ett **komplement** till RAG-sökningen, inte en
+ersättning — LanceDB sköter fortfarande all sökning, medan Neo4j ger
+relationsfrågor och visualisering. De två lagren delar nyckeln `pdf_stem`.
+
+Extraktionen använder samma LLM som är konfigurerad i `generated/llm_config.json`
+(samma config som webui/`llm_correct.sh`); finns ingen config används Claude
+Haiku som default. Flaggorna `--provider`, `--model`, `--base-url` och
+`--api-key` skriver över den sparade konfigurationen för just denna körning.
+
+```bash
+./extract_entities.sh --dry-run        # se omfång utan kostnad
+./extract_entities.sh --limit 20       # provkörning
+./extract_entities.sh                  # hela arkivet (~$60–120, gäller Claude Haiku)
+```
+
+Starta sedan Neo4j och ladda grafen. `./neo4j.sh` (podman) sköter allt —
+startar podman-maskinen vid behov, genererar ett lösenord (sparas i
+`neo4j/.password`, läses automatiskt av `load_graph.sh`), skapar/startar
+containern och väntar tills Neo4j svarar:
+
+```bash
+./neo4j.sh             # starta (skapar container + lösenord första gången)
+./load_graph.sh        # ladda grafen — lösenordet plockas upp automatiskt
+./neo4j.sh status      # kör den?
+./neo4j.sh stop
+```
+
+Kör du **Docker** istället för podman finns även en compose-fil:
+
+```bash
+cd neo4j && NEO4J_PASSWORD=... docker compose up -d
+NEO4J_PASSWORD=... ./load_graph.sh     # ladda grafen till Neo4j
+```
+
+> Podman-maskinen behöver ≥4 GiB minne för Neo4j:s 2G-heap:
+> `podman machine set --memory 4096` (en gång, med maskinen stoppad).
+
+> Om webui har sparat en dyrare modell (t.ex. Opus) i `llm_config.json`, kör
+> `./extract_entities.sh --model claude-haiku-4-5-20251001` för att tvinga
+> Haiku och hålla kostnaden nere.
+
+`--jobs` (default 4) styr hur många sidor som extraheras parallellt — sidorna
+i ett dokument är oberoende av varandra, så detta krävs för att hinna med hela
+arkivet (~40 000 sidor) på rimlig tid. `--timeout` (default 120 s) sätter en
+maxgräns per LLM-anrop; sidor som tar längre loggas som fel och försöks om vid
+nästa körning.
+
+Schema:
+
+```
+(:Dokument {stem, nr, titel})
+(:Person {norm, namn})  (:Plats {norm, namn})  (:Organisation {norm, namn})
+(:Dokument)-[:NÄMNER {sida}]->(entitet)
+(entitet)-[:RELATERAR {typ, stem, sida}]->(entitet)
+```
+
+### Utforska
+
+Öppna Neo4j Browser på <http://localhost:7474> och logga in med användarnamnet
+`neo4j` och lösenordet du satte i `NEO4J_PASSWORD`. Exempel-Cypher:
+
+```cypher
+MATCH (p:Person {norm: "stig engström"})<-[:NÄMNER]-(d:Dokument) RETURN d.titel, d.nr
+MATCH (a:Person)-[r:RELATERAR]->(b) RETURN a.namn, r.typ, b.namn LIMIT 50
+```
+
+Extraktionen är idempotent — vilka sidor som behandlats spåras i
+`doc_entities`-tabellen i state.db. Neo4j-grafen kan alltid byggas om från
+grunden därifrån, och en omkörning av `load_graph.sh` ger samma graf igen
+(`MERGE`).
+
+### Utforska i webgränssnittet
+
+Webgränssnittet (`./web.sh`) har en **Graf**-sida i sidofältet. Sök en person,
+plats eller organisation så ritas dess nätverk (relationer + dokument som
+nämner den) som en interaktiv graf, och källdokumenten listas med
+PDF-knappar. Kräver att Neo4j är igång (`./neo4j.sh`) och grafen laddad
+(`./load_graph.sh`) — saknas det visar sidan en uppmaning i stället för fel.
+
+**Fäll ut noder:** välj en grannod i sidofältet och klicka *Fäll ut noden* för
+att lägga till dess nätverk i grafen — så går det att vandra utåt från den
+sökta noden. Utfällda center ritas större och inramade; *Återställ till sökt
+nod* fäller ihop igen. (Utfällning sker via en sidofältskontroll, inte genom
+klick i canvasen, eftersom pyvis-grafen renderas i en iframe utan återkanal till
+Streamlit.) Återkommer en relation i flera dokument kollapsas den till en kant
+märkt `×N`.
+
+![Web-gränssnitt — Graf](graf.png)
+
+### Namnvarianter (entity resolution)
+
+Samma person kan stavas på flera sätt i materialet. Två deterministiska steg i
+`load_neo4j` motar det utan att gissa: `Efternamn, Förnamn` vänds till
+`Förnamn Efternamn`, och ett ensamt efternamn (`Engström`) slås ihop med
+fullnamnet (`Stig Engström`) **bara om exakt ett** fullnamn i samma dokument
+matchar. Tvetydiga fall (dokument med både Olof och Lisbeth Palme) lämnas
+orörda. Återstående varianter motas vid källan av en prompt-regel som kräver
+konsekvent `Förnamn Efternamn`-form (gäller nya extraktioner). Efter ändrade
+regler: töm grafen (`MATCH (n) DETACH DELETE n` i Neo4j Browser) och kör
+`load_graph.sh` igen.
+
 ## LLM-konfiguration (`generated/llm_config.json`)
 
 Webgränssnittet sparar valt backend i `generated/llm_config.json` och laddar det vid nästa start. Filen skapas automatiskt — ta bort den för att återgå till standardvalet (Claude Opus 4.8). API-nycklar läses alltid från miljövariabler och lagras aldrig i filen.
@@ -406,6 +512,18 @@ Webgränssnittet sparar valt backend i `generated/llm_config.json` och laddar de
 | `model` | t.ex. `claude-opus-4-8`, `gpt-4o`, `deepseek-chat`, `deepseek-reasoner` |
 | `base_url` | Tomt för molntjänster; URL för lokal endpoint (`http://localhost:11434/v1` för Ollama) |
 | `backend_name` | Visningsnamn i gränssnittet (valfritt) |
+
+### Visa/ändra konfigen utan webui (`llm_config.sh`)
+
+Snabbaste sättet att se eller byta vald LLM utan att starta Streamlit:
+
+```bash
+./llm_config.sh                                              # visa aktuell konfig
+./llm_config.sh --model claude-haiku-4-5-20251001            # byt modell (samma provider)
+./llm_config.sh --provider openai                            # byt provider, modell återställs till providerns default
+./llm_config.sh --provider openai --model gpt-4o --base-url https://api.deepseek.com/v1
+./llm_config.sh --reset                                      # ta bort sparad konfig, tillbaka till defaults
+```
 
 ## Filer
 
@@ -432,10 +550,18 @@ Webgränssnittet sparar valt backend i `generated/llm_config.json` och laddar de
 | `src/rag/mcp_server.py` | MCP-server med `search_archive` och `get_page` (startas av ask.py/webui.py) |
 | `generated/llm_config.json` | Sparad LLM-konfiguration (backend, modell, URL) — se ovan |
 | `src/config.py` | Läser/skriver `generated/llm_config.json` (delas av webui och llm_correct) |
+| `llm_config.sh` → `src/llm_config_cli.py` | Visa/ändra `generated/llm_config.json` utan webui |
 | `src/citations.py` | Slår upp `[Nr X, sida Y]`-citat mot PDF:er och renderar citatlänkar |
 | `src/webui.py` | Streamlit-webgränssnitt för frågor (RAG + MCP-toggle) |
 | `migrate_to_db.sh` → `src/migrate_to_db.py` | Engångsmigrering av legacy filmarkörer → `state.db` |
 | `cleanup_legacy_state.sh` | Ta bort kvarvarande legacy-markörfiler efter migrering |
+| `extract_entities.sh` → `src/graph/extract_entities.py` | Entitets-/relationsextraktion till `doc_entities` i state.db (Claude Haiku) |
+| `load_graph.sh` → `src/graph/load_neo4j.py` | Ladda kunskapsgrafen från state.db till Neo4j |
+| `neo4j.sh` | Starta/stoppa Neo4j via podman (lösenord i `neo4j/.password`) |
+| `src/graph/viz.py` | Bygg ego-nätverk (flera center) + pyvis-rendering för grafsidan |
+| `src/pages/1_Graf.py` | Streamlit-grafsida: sök entitet → interaktivt nätverk, fäll ut noder |
+| `neo4j.sh` | Starta/stoppa Neo4j via podman (genererar lösenord → `neo4j/.password`) |
+| `neo4j/docker-compose.yml` | Neo4j 5 för kunskapsgrafen med Docker (Browser på :7474) |
 | `web.sh` | Wrapper för Streamlit-servern |
 | `src/db.py` | SQLite-state: schema + CRUD + delta-queries (importeras av övriga skript) |
 | `tessdata/swe.user-words` | Palme-specifika ord (committat) |
@@ -463,7 +589,8 @@ Testerna täcker: `score_text` (quality), `chunk_text` (ingest), `extract_drive_
 `detect_redactions_image` (ocr_pages), `merge_one` (merge_pages), `merge_wpu` (merge_wpu),
 LLM-korrektionslogiken (llm_correct), re-ingest-flödet (ingest), state-databasen inkl.
 delta-urval och `text_mtime`-stämpling (db, ocr_db_helper, normalize, quality),
-citatuppslag/-länkning (citations), RRF-hybridsökningen (ask) och `get_page` (mcp_server).
+citatuppslag/-länkning (citations), RRF-hybridsökningen (ask) och `get_page` (mcp_server),
+entitetsextraktion (extract_entities) och graf-laddning (load_neo4j).
 Fixturen som genererar en mini-PDF med pymupdf skipas gracefully om pymupdf inte är installerat.
 
 ## Felloggning

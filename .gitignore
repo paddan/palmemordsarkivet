@@ -31,3 +31,7 @@ test_ocr/
 
 # Genererad kunskapsgraf från /graphify (lokal tool-output + cache)
 graphify-out/
+
+# Neo4j-datakatalog (kunskapsgrafen)
+neo4j/data/
+neo4j/.password

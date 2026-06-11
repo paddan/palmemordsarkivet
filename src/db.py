@@ -112,6 +112,15 @@ CREATE TABLE IF NOT EXISTS wpu_decisions (
     pdf_stem    TEXT PRIMARY KEY,
     decided_at  TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS doc_entities (
+    pdf_stem     TEXT NOT NULL,
+    page_num     INTEGER NOT NULL,
+    payload      TEXT NOT NULL,
+    model        TEXT,
+    extracted_at TEXT NOT NULL,
+    PRIMARY KEY (pdf_stem, page_num)
+);
 """
 
 
@@ -630,6 +639,46 @@ def wpu_decided(conn: sqlite3.Connection, pdf_stem: str) -> bool:
     return conn.execute(
         "SELECT 1 FROM wpu_decisions WHERE pdf_stem=?", (pdf_stem,)
     ).fetchone() is not None
+
+
+# --- doc_entities (kunskapsgraf) --------------------------------------
+
+def record_doc_entities(
+    conn: sqlite3.Connection, *,
+    pdf_stem: str, page_num: int, payload: dict, model: str,
+) -> None:
+    """UPSERT av extraherade entiteter/relationer för en sida. payload som JSON."""
+    conn.execute(
+        """INSERT INTO doc_entities(pdf_stem, page_num, payload, model, extracted_at)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(pdf_stem, page_num) DO UPDATE SET
+               payload=excluded.payload, model=excluded.model,
+               extracted_at=excluded.extracted_at""",
+        (pdf_stem, page_num, json.dumps(payload, ensure_ascii=False), model, now()),
+    )
+    conn.commit()
+
+
+def doc_entities_extracted(
+    conn: sqlite3.Connection, pdf_stem: str, page_num: int
+) -> bool:
+    """Sann om sidan redan entitetsextraherats."""
+    return conn.execute(
+        "SELECT 1 FROM doc_entities WHERE pdf_stem=? AND page_num=?",
+        (pdf_stem, page_num),
+    ).fetchone() is not None
+
+
+def iter_doc_entities(conn: sqlite3.Connection) -> list[dict]:
+    """Alla extraktioner som dictar med pdf_stem, page_num, payload (parsad JSON)."""
+    return [
+        {"pdf_stem": row["pdf_stem"], "page_num": row["page_num"],
+         "payload": json.loads(row["payload"])}
+        for row in conn.execute(
+            "SELECT pdf_stem, page_num, payload FROM doc_entities "
+            "ORDER BY pdf_stem, page_num"
+        )
+    ]
 
 
 # --- delta-queries (inkrementell logik) -------------------------------

@@ -344,3 +344,29 @@ def test_touch_text_mtime_unknown_stem_raises(tmp_path):
     conn = _fresh(tmp_path)
     with pytest.raises(KeyError):
         touch_text_mtime(conn, "finns-ej", text_mtime=1.0)
+
+
+def test_doc_entities_roundtrip(tmp_path):
+    from db import record_doc_entities, doc_entities_extracted, iter_doc_entities
+    conn = _fresh(tmp_path)
+    payload = {"entiteter": [{"typ": "person", "namn": "Stig Engström"}],
+               "relationer": []}
+    assert not doc_entities_extracted(conn, "doc", 1)
+    record_doc_entities(conn, pdf_stem="doc", page_num=1,
+                        payload=payload, model="haiku-test")
+    assert doc_entities_extracted(conn, "doc", 1)
+    rows = list(iter_doc_entities(conn))
+    assert len(rows) == 1
+    assert rows[0]["pdf_stem"] == "doc"
+    assert rows[0]["payload"]["entiteter"][0]["namn"] == "Stig Engström"
+
+
+def test_record_doc_entities_is_upsert(tmp_path):
+    from db import record_doc_entities, iter_doc_entities
+    conn = _fresh(tmp_path)
+    record_doc_entities(conn, pdf_stem="doc", page_num=1,
+                        payload={"entiteter": [], "relationer": []}, model="a")
+    record_doc_entities(conn, pdf_stem="doc", page_num=1,
+                        payload={"entiteter": [], "relationer": []}, model="b")
+    rows = list(iter_doc_entities(conn))
+    assert len(rows) == 1

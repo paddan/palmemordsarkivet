@@ -37,13 +37,20 @@ src/
   build_user_words.py  # Generera Tesseract user-words från OCR-text
   errors_log.py        # Centraliserad felloggning (tab-separerad)
   config.py            # Delad LLM-konfiguration (generated/llm_config.json)
+  llm_config_cli.py    # CLI för att visa/ändra llm_config.json utan webui
   citations.py         # [Nr X, sida Y]-uppslag mot PDF:er + länkrendering (Streamlit-fritt)
   webui.py             # Streamlit-gränssnitt
   rag/
     ingest.py          # LanceDB vector index builder
     ask.py             # RAG query + Claude integration
     mcp_server.py      # MCP-server: search_archive + get_page (startas av ask/webui)
-tests/                 # pytest — en testfil per modul (test_db, test_quality, test_chunk, test_download, test_merge_pages, test_merge_wpu, test_detect_redactions, test_reingest, test_normalize_text, test_llm_correct, test_migrate_to_db, test_scripts, test_citations, test_ask, test_mcp_server)
+  graph/
+    extract_entities.py # Per-sida entitets-/relationsextraktion via Claude Haiku → doc_entities i state.db
+    load_neo4j.py       # Ladda doc_entities → Neo4j (MERGE, idempotent) + namnkanonisering
+    viz.py              # Ego-nätverk för flera center (Cypher → noder/kanter, dedup) + pyvis-rendering
+  pages/
+    1_Graf.py           # Streamlit multipage-sida: sök entitet → interaktiv graf, fäll ut grannoder (kräver Neo4j)
+tests/                 # pytest — en testfil per modul (test_db, test_quality, test_chunk, test_download, test_merge_pages, test_merge_wpu, test_detect_redactions, test_reingest, test_normalize_text, test_llm_correct, test_migrate_to_db, test_scripts, test_citations, test_ask, test_mcp_server, test_extract_entities, test_load_neo4j)
 *.sh                   # Bash-wrappers (aktiverar .venv, läser API-nycklar, vidarebefordrar flaggor)
 tessdata/              # swe_best.traineddata, swe.user-words, tesseract.config
 ```
@@ -75,6 +82,7 @@ Data-kataloger (gitignored):
 ./detect_redactions.sh               # Redaktionsdetektering på befintliga text/OCR-par
 ./quality.sh [--top 30] [--per-page]
 ./llm_correct.sh [--threshold 60]    # Claude Haiku korrigerar dåliga sidor
+./llm_config.sh [--model X] [--provider claude|openai] [--reset]  # visa/ändra llm_config.json utan webui
 ./merge_pages.sh --all               # Slå ihop text_pages/ → text/
 ./build_user_words.sh                # Bygg tessdata/swe.user-words.auto från text/*.txt
 ./ingest.sh [--rebuild] [--reindex-since 2026-05-01]
@@ -83,6 +91,12 @@ Data-kataloger (gitignored):
 
 # wpu.nu (valfritt)
 ./download_wpu.sh && ./merge_wpu.sh
+
+# Kunskapsgraf (valfritt)
+./extract_entities.sh [--limit N] [--dry-run] [--jobs N] [--timeout SEC]  # entiteter/relationer → doc_entities (LLM från llm_config.json, default Haiku)
+./neo4j.sh                                     # starta Neo4j via podman (lösenord → neo4j/.password)
+./load_graph.sh                                # ladda doc_entities → Neo4j (lösenordet plockas upp automatiskt)
+# (Docker-alternativ: cd neo4j && NEO4J_PASSWORD=... docker compose up -d)
 ```
 
 Env-variabler: `CLAUDE_CODE_OAUTH_TOKEN` (Pro/Max, räknas mot prenumeration) eller `ANTHROPIC_API_KEY`. Valfritt: `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`.
@@ -108,6 +122,36 @@ bygger på att jämföra `pdf_files.text_mtime` mot `normalized_at`/`scored_at`/
 **Tesseract-idempotens (ocr_tesseract.sh)**: Avgörs av `pdf_files.tesseract_done_at`/`tesseract_failed`/`tesseract_blacklisted_at` i state.db — `.ocr-done`/`.ocr-failed`-markörfilerna existerar inte längre. `merge_wpu` raderar bara förlorarens `text/`+`ocr/`-filer (DB-raden behåller `tesseract_done_at`, så filen körs inte om). `ocr.sh --from-list` nollställer dessa kolumner i DB för att tvinga om-OCR.
 
 **text_mtime måste stämplas när text skrivs (db.touch_text_mtime)**: normalize/quality-deltat kräver `pdf_files.text_mtime IS NOT NULL`. All kod som skriver `text/<stem>.txt` utanför merge_pages-spåret måste stämpla mtime: `ocr_tesseract.sh` skickar txt-sökvägen till `ocr_db_helper mark-done`, `ocr.sh --redo --mode files` kör `ocr_db_helper touch-mtime` efter pdftotext. Normalize och quality tar dessutom defensivt med rader vars `text_mtime` är NULL (historiska Tesseract-filer som annars aldrig bearbetas).
+
+**Kunskapsgrafen (src/graph/)**: ett separat lager ovanpå pipelinen — LanceDB
+fortsätter sköta retrieval/RAG, Neo4j sköter relationer/visualisering. De två
+delar nyckeln `pdf_stem`. `extract_entities.py` extraherar per sida via den
+LLM som är konfigurerad i `generated/llm_config.json` (samma config som
+webui/`llm_correct.py`; default Claude Haiku, override via
+`--provider`/`--model`/`--base-url`/`--api-key`) och skriver till
+`doc_entities` i state.db, vilket är den auktoritativa källan; `load_neo4j.py`
+laddar (MERGE, idempotent) detta till Neo4j, så Neo4j-grafen kan alltid byggas
+om från grunden från `doc_entities` med `load_graph.sh`. Uppskattad kostnad
+för hela arkivet (~40 000 sidor, bildsidor hoppas över): ~$60–120 i
+Haiku-tokens.
+
+Namnkanonisering (entity resolution) hålls medvetet konservativ och
+deterministisk i `load_neo4j`, i två steg:
+1. **Comma-inversion** (`normalize_name`/`display_name`): `Efternamn, Förnamn`
+   → `Förnamn Efternamn`, hoppas över vid siffror/flera kommatecken så
+   adresser lämnas.
+2. **Dokument-scopad efternamnsuppslagning** (`build_surname_map`): ett ensamt
+   efternamn (`Engström`) slås ihop med fullnamnet (`Stig Engström`) *bara om
+   exakt ett* fullnamn i samma dokument slutar på det efternamnet. Materialet
+   har flera personer med samma efternamn (Palme, Andersson …); scopet +
+   entydighetskravet gör att tvetydiga fall (dokument med både Olof och
+   Lisbeth Palme) lämnas orörda. Ingen fuzzy-matchning.
+Mellannamnsvarianter (`Yvonne Nieminen` vs `Yvonne Anita Nieminen`) slås inte
+ihop. Återstående fragmentering motas vid källan av prompt-regeln i `_SYSTEM`
+som kräver konsekvent `Förnamn Efternamn`-form (gäller nya extraktioner).
+Grafen byggs alltid om från `doc_entities` — `load_graph.sh` är idempotent men
+nya regler kräver att grafen töms först (`MATCH (n) DETACH DELETE n`) eftersom
+gamla norm-nycklar annars ligger kvar.
 
 ## Common Gotchas
 

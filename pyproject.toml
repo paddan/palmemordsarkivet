@@ -37,6 +37,10 @@ webui = [
     "streamlit",
     "openai",
 ]
+graph = [
+    "neo4j",
+    "pyvis",
+]
 
 [tool.ruff]
 line-length = 100
