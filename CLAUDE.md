@@ -8,9 +8,11 @@ Kör **inte** `/cap` automatiskt efter varje ändring — användaren kör det s
 
 ## Dokumentation hålls synkad
 
-När du gör förändringar i projektet ska du **alltid** uppdatera både `CLAUDE.md` och `README.md` i samma commit — om ändringen påverkar något i dem.
+När du gör förändringar i projektet ska du **alltid** uppdatera den användarvända dokumentationen och `CLAUDE.md` i samma commit — om ändringen påverkar något i dem.
 
-- `README.md` — användarvända dokumentationen (svenska)
+- `README.md` — presentationssida (svenska): vad projektet är + de tre skärmbilderna, länkar vidare
+- `docs/kom-igang.md` — snabbstart (svenska): krav, installation, API-nyckel, kör pipelinen, ställ första frågan
+- `docs/teknisk-referens.md` — detaljerad dokumentation (svenska): alla steg/flaggor, state-db, kunskapsgraf, LLM-config, filöversikt, tester
 - `CLAUDE.md` — instruktioner för framtida Claude-sessioner
 
 ## Project Overview
@@ -69,7 +71,7 @@ Data-kataloger (gitignored):
 .venv/bin/pytest tests/
 
 # Setup
-./install.sh                         # Installera alla beroenden (brew, Python-paket, tessdata)
+./install.sh                         # Installera pipeline/webui (brew, Python-paket, tessdata)
 
 # Workflow
 ./run_pipeline.sh                    # Hela pipelinen i ett: download → OCR → ingest
@@ -92,7 +94,7 @@ Data-kataloger (gitignored):
 # wpu.nu (valfritt)
 ./download_wpu.sh && ./merge_wpu.sh
 
-# Kunskapsgraf (valfritt)
+# Kunskapsgraf (valfritt; installera först podman + Python-extra .[graph])
 ./extract_entities.sh [--limit N] [--dry-run] [--jobs N] [--timeout SEC]  # entiteter/relationer → doc_entities (LLM från llm_config.json, default Haiku)
 ./neo4j.sh                                     # starta Neo4j via podman (lösenord → neo4j/.password)
 ./load_graph.sh                                # ladda doc_entities → Neo4j (lösenordet plockas upp automatiskt)

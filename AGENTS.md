@@ -8,9 +8,11 @@ Kör **inte** `/cap` automatiskt efter varje ändring — användaren kör det s
 
 ## Dokumentation hålls synkad
 
-När du gör förändringar i projektet ska du **alltid** uppdatera både `AGENTS.md` och `README.md` i samma commit — om ändringen påverkar något i dem.
+När du gör förändringar i projektet ska du **alltid** uppdatera den användarvända dokumentationen och `AGENTS.md` i samma commit — om ändringen påverkar något i dem.
 
-- `README.md` — användarvända dokumentationen (svenska)
+- `README.md` — presentationssida (svenska): vad projektet är + de tre skärmbilderna, länkar vidare
+- `docs/kom-igang.md` — snabbstart (svenska): krav, installation, API-nyckel, kör pipelinen, ställ första frågan
+- `docs/teknisk-referens.md` — detaljerad dokumentation (svenska): alla steg/flaggor, state-db, kunskapsgraf, LLM-config, filöversikt, tester
 - `AGENTS.md` — instruktioner för framtida Codex-sessioner
 
 ## Project Overview
@@ -56,7 +58,7 @@ Data-kataloger (gitignored):
 .venv/bin/pytest tests/
 
 # Setup
-./install.sh                         # Installera alla beroenden (brew, Python-paket, tessdata)
+./install.sh                         # Installera pipeline/webui (brew, Python-paket, tessdata)
 
 # Workflow
 ./run_pipeline.sh                    # Hela pipelinen i ett: download → OCR → ingest
@@ -77,6 +79,11 @@ Data-kataloger (gitignored):
 
 # wpu.nu (valfritt)
 ./download_wpu.sh && ./merge_wpu.sh
+
+# Kunskapsgraf (valfritt; installera först podman + Python-extra .[graph])
+./extract_entities.sh [--limit N] [--dry-run]
+./neo4j.sh
+./load_graph.sh
 ```
 
 Env-variabler: `CLAUDE_CODE_OAUTH_TOKEN` (Pro/Max, räknas mot prenumeration) eller `ANTHROPIC_API_KEY`. Valfritt: `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`.
