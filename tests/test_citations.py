@@ -78,6 +78,21 @@ def test_resolve_ambiguous_returns_all_sorted(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# pdf_anchor
+# ---------------------------------------------------------------------------
+
+def test_pdf_anchor_format(tmp_path: Path) -> None:
+    from citations import pdf_anchor
+    pdf = tmp_path / "281 — Titel.pdf"
+    out = pdf_anchor(pdf, "281", title='Öppna "PDF"')
+    assert out.startswith('<a href="?pdf=')
+    assert 'target="pdf_opener"' in out
+    assert ">281</a>" in out
+    # Titeln HTML-escapas (citattecken får inte bryta attributet).
+    assert "&quot;PDF&quot;" in out
+
+
+# ---------------------------------------------------------------------------
 # linkify_citations
 # ---------------------------------------------------------------------------
 

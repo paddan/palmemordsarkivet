@@ -20,10 +20,19 @@ MCP_SERVER = Path(__file__).resolve().parent / "rag" / "mcp_server.py"
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import citations as _citations  # noqa: E402
 import config as _llm_config  # noqa: E402
+from errors_log import log_error  # noqa: E402
+from graph import answer_entities as _answer_entities  # noqa: E402
+from graph import viz as _viz  # noqa: E402
 
 import lancedb
 import streamlit as st
 from sentence_transformers import SentenceTransformer
+
+try:
+    from st_link_analysis import EdgeStyle, NodeStyle, st_link_analysis
+    _HAS_LINK_ANALYSIS = True
+except ImportError:  # pragma: no cover — ingår i extran .[graph]
+    _HAS_LINK_ANALYSIS = False
 
 # importera funktioner ur rag/ask.py utan att köra dess main()
 sys.path.insert(0, str(Path(__file__).resolve().parent / "rag"))
@@ -340,6 +349,10 @@ with st.sidebar:
         st.session_state.chat_history = []
         st.session_state.mcp_session_id = None
         st.session_state.openai_chat_messages = []
+        # Rensa graf-state per tur så en ny konversations tur N inte ärver
+        # utfällda noder från den gamla.
+        for k in [k for k in st.session_state if k.startswith("turn_")]:
+            del st.session_state[k]
         st.rerun()
     do_rerank = st.toggle(
         "Använd cross-encoder reranker",
@@ -347,6 +360,14 @@ with st.sidebar:
         help="Långsammare första gången (laddar ~568 MB) men bättre precision. "
         "Klicka för att byta till RAG-läget när utredningsläget är aktivt.",
         on_change=_on_rerank_change,
+    )
+    show_graph = st.toggle(
+        "Visa kunskapsgraf",
+        value=True,
+        key="show_graph",
+        help="Extraherar svarets nyckelentiteter (Claude Haiku) och ritar deras "
+        "nätverk ur kunskapsgrafen i en sektion under svaret. "
+        "Kräver att Neo4j är igång (./neo4j.sh).",
     )
     top_k = st.slider(
         "Hämta top-K kandidater",
@@ -388,6 +409,7 @@ ss.setdefault("answer", "")
 ss.setdefault("chat_history", [])
 ss.setdefault("mcp_session_id", None)
 ss.setdefault("openai_chat_messages", [])
+ss.setdefault("answer_centers", [])
 
 # Klick på inline-citatknapp i svaret: ?pdf=<base64-encoded path> → öppna PDF.
 # PDF-sökvägen kodas direkt i URL:en så det fungerar även om session_state
@@ -712,6 +734,223 @@ _THINKING_HTML = (
 )
 
 
+GRAPH_HEIGHT = 620
+
+
+@st.cache_resource(show_spinner=False)
+def _connect_graph(pw: str):
+    """Cachad Neo4j-uppkoppling (stabil över reruns). Exceptions cachas inte
+    av st.cache_resource, så en nere-Neo4j provas om vid nästa rerun."""
+    return _viz.connect(pw)
+
+
+def _graph_driver():
+    """Neo4j-driver för inline-grafen, eller None om grafen är otillgänglig.
+
+    Misslyckade anslutningar cachas inte — startar användaren Neo4j senare
+    plockas den upp vid nästa rerun utan cache-rensning."""
+    pw = _viz.resolve_password()
+    if not pw:
+        return None
+    try:
+        return _connect_graph(pw)
+    except Exception:  # noqa: BLE001 — grafen är frivillig, svaret får aldrig falla
+        return None
+
+
+def _compute_answer_centers(answer: str) -> list[dict]:
+    """Svar → LLM-entitetslista → center-noder i grafen. Fel → tom lista."""
+    driver = _graph_driver()
+    if driver is None or not answer.strip():
+        return []
+    cfg = _answer_entities.resolve_entity_cfg(_llm_config.load())
+    if cfg is None:
+        return []
+    try:
+        names = asyncio.run(_answer_entities.extract_answer_entities(answer, cfg))
+        if not names:
+            return []
+        with driver.session() as s:
+            return _viz.lookup_centers(s, names)
+    except Exception as exc:  # noqa: BLE001
+        log_error("webui.graph", answer[:60], str(exc))
+        return []
+
+
+def _render_graph_panel(nodes: list[dict], state_key: str,
+                        extra_key: str) -> int:
+    """Sidopanelen i grafsektionen: höjdreglage, legend, återställning av
+    utfällda noder och PDF-länkar för dokumentnoderna. Returnerar vald
+    grafhöjd i px. (Utfällning sker via dubbelklick direkt i grafen.)"""
+    import html as _html  # noqa: PLC0415
+
+    height = st.slider("Höjd (px)", 400, 1200, GRAPH_HEIGHT, step=50,
+                       key=f"{state_key}_h")
+
+    st.caption("Noder")
+    present = {n["type"] for n in nodes}
+    legend = [
+        f'<span style="color:{_viz.NODE_COLORS[typ]};">'
+        f'{"■" if typ == "Dokument" else "●"}</span> {typ}'
+        for typ in ("Person", "Plats", "Organisation", "Dokument")
+        if typ in present
+    ]
+    legend.append("<small>★ = svarets entitet / utfälld nod</small>")
+    st.markdown("<br>".join(legend), unsafe_allow_html=True)
+
+    if ss[extra_key] and st.button("Återställ", key=f"{state_key}_reset",
+                                   use_container_width=True):
+        ss[extra_key] = []
+        st.rerun()
+
+    # Dokumentnoder som klickbara PDF-länkar — samma ?pdf=-mekanism som
+    # citatlänkarna i svaret (laddas i den gömda pdf_opener-iframen).
+    doc_nodes = sorted((n for n in nodes if n["type"] == "Dokument"),
+                       key=lambda n: n["namn"])
+    if doc_nodes:
+        st.caption("Dokument")
+        links = []
+        for n in doc_nodes:
+            pdf = find_pdf(n["stem"])
+            label = _html.escape(str(n["namn"]))
+            links.append(_citations.pdf_anchor(pdf, label, title=n["stem"])
+                         if pdf else label)
+        st.markdown("<br>".join(links), unsafe_allow_html=True)
+    return height
+
+
+def _render_cytoscape_graph(nodes: list[dict], edges: list[dict],
+                            expanded_norms: set[str], height: int,
+                            state_key: str, extra_key: str) -> None:
+    """Interaktiv Cytoscape-graf (st-link-analysis).
+
+    Dubbelklick på en entitetsnod fäller ut dess grannskap; dubbelklick på en
+    dokumentnod öppnar PDF:en lokalt. Expand-händelser dedupas på timestamp
+    eftersom komponentens returvärde består över reruns."""
+    elements = _viz.to_cytoscape_elements(nodes, edges)
+    node_styles = [
+        NodeStyle(typ, _viz.NODE_COLORS[typ], "name", _viz.NODE_ICONS[typ])
+        for typ in ("Person", "Plats", "Organisation", "Dokument")
+    ]
+    # labeled=None kringgår en biblioteksbugg: deprecation-varningen triggar
+    # på "is not None" så även defaultvärdet False varnar.
+    edge_styles = [EdgeStyle("REL", caption="name", labeled=None,
+                             directed=True)]
+    # Höjden bakas in i nyckeln — komponenten läser height bara vid mount.
+    ret = st_link_analysis(
+        elements, layout="cose",
+        node_styles=node_styles, edge_styles=edge_styles,
+        height=height, key=f"{state_key}_cy_{height}",
+        node_actions=["expand"],
+    )
+    st.caption("Dubbelklick: visa entitetsnods grannskap · öppna dokumentnod")
+
+    if not ret or ret.get("action") != "expand":
+        return
+    ts = ret.get("timestamp")
+    if ts == ss.get(f"{state_key}_last_evt"):
+        return
+    ss[f"{state_key}_last_evt"] = ts
+    by_id = {n["id"]: n for n in nodes}
+    changed = False
+    for nid in ret.get("data", {}).get("node_ids", []):
+        n = by_id.get(nid)
+        if n is None:
+            continue
+        if n["type"] == "Dokument":
+            pdf = find_pdf(n.get("stem") or "")
+            if pdf:
+                try:
+                    subprocess.Popen(["open", str(pdf)])
+                except OSError as e:
+                    st.error(f"Kan inte öppna fil: {e}")
+        elif nid not in expanded_norms:
+            ss[extra_key].append({"norm": nid, "namn": n["namn"],
+                                  "label": n["type"]})
+            changed = True
+    if changed:
+        st.rerun()
+
+
+def _render_answer_graph(centers: list[dict], state_key: str) -> None:
+    """Rita ego-nätverk för centers i en hopfällbar sektion i fullbredd
+    mellan svaret och källorna.
+
+    Sektionen styrs av en keyad toggle i stället för st.expander: Cytoscape-
+    komponenten saknar resize-hantering och blir tom om den monteras i en
+    hopfälld (dold) container, så grafen renderas bara när den är synlig.
+    Det sparar dessutom Neo4j-frågorna helt när sektionen är stängd.
+
+    Grundgrafen visar ENDAST svarets entiteter och relationerna mellan dem —
+    inte deras hela grannskap (det blev oöverskådligt). Dubbelklick på en nod
+    fäller ut dess grannskap (relationer + dokument); de utfällda noderna
+    sparas i session state per ``state_key`` och nollställs när svaret
+    (centers) byts. Sidopanelen ger legend, höjdreglage, återställning och
+    PDF-länkar för synliga dokumentnoder."""
+    if not _HAS_LINK_ANALYSIS:
+        st.caption("Kunskapsgraf otillgänglig — installera grafextran: "
+                   "`pip install -e .[graph]`.")
+        return
+    driver = _graph_driver()
+    if driver is None:
+        st.caption("Kunskapsgraf otillgänglig — starta Neo4j med `./neo4j.sh`.")
+        return
+    if not centers:
+        st.caption("Inga entiteter ur svaret återfanns i grafen.")
+        return
+
+    # Utfällda noder ackumuleras per svar; nytt svar (ny center-mängd) nollställer.
+    seed = tuple(sorted((c["label"], c["norm"]) for c in centers))
+    extra_key = f"{state_key}_extra"
+    if ss.get(f"{state_key}_seed") != seed:
+        ss[f"{state_key}_seed"] = seed
+        ss[extra_key] = []
+
+    names = ", ".join(c["namn"] for c in centers)
+    if not st.toggle(f"🕸 Kunskapsgraf: {names}", key=f"{state_key}_open",
+                     help="Visa/dölj grafen"):
+        return
+
+    # Utfällda noder kan vara både svars-entiteter och grannar; dedupa
+    # hämtningslistan men behåll utfälld-status separat.
+    base_ids = {(c["label"], c["norm"]) for c in centers}
+    expanded_norms = {c["norm"] for c in ss[extra_key]}
+    fetch_centers = centers + [c for c in ss[extra_key]
+                               if (c["label"], c["norm"]) not in base_ids]
+
+    all_rels: list[dict] = []
+    all_docs: list[dict] = []
+    try:
+        with driver.session() as s:
+            for c in fetch_centers:
+                rels, docs = _viz.fetch_ego(s, c["norm"], c["label"], limit=40)
+                all_rels.extend(rels)
+                for d in docs:
+                    all_docs.append({**d, "center_norm": c["norm"]})
+    except Exception as exc:  # noqa: BLE001
+        log_error("webui.graph", centers[0]["namn"], str(exc))
+        st.caption("Kunskapsgraf otillgänglig — starta Neo4j med `./neo4j.sh`.")
+        return
+
+    # Visa bara det svaret nämner: relationer mellan svarets entiteter.
+    # Grannskap (alla relationer + dokument) bara för utfällda noder.
+    visible = {c["norm"] for c in fetch_centers}
+    all_rels = [r for r in all_rels
+                if (r["s_norm"] in visible and r["e_norm"] in visible)
+                or r["s_norm"] in expanded_norms
+                or r["e_norm"] in expanded_norms]
+    all_docs = [d for d in all_docs if d.get("center_norm") in expanded_norms]
+
+    nodes, edges = _viz.assemble_graph(fetch_centers, _viz.dedup_rels(all_rels),
+                                       all_docs)
+    graph_col, panel_col = st.columns([4, 1])
+    with panel_col:
+        height = _render_graph_panel(nodes, state_key, extra_key)
+    with graph_col:
+        _render_cytoscape_graph(nodes, edges, expanded_norms, height,
+                                state_key, extra_key)
+
+
 def _render_rag_sources(hits: list, key_prefix: str) -> None:
     with st.expander(f"Källor ({len(hits)})", expanded=False):
         for i, h in enumerate(hits):
@@ -742,36 +981,42 @@ def _render_rag_sources(hits: list, key_prefix: str) -> None:
                             st.error(f"Kan inte öppna fil: {e}")
 
 
+def _render_chat_sources(srcs: list, key_prefix: str) -> None:
+    with st.expander(f"Källor ({len(srcs)})", expanded=False):
+        for i, h in enumerate(srcs):
+            pdf = find_pdf(h["source"])
+            stem = h["source"][:-4] if h["source"].endswith(".txt") else h["source"]
+            with st.container(border=True):
+                cols = st.columns([5, 2])
+                with cols[0]:
+                    st.markdown(f"**{stem}**")
+                with cols[1]:
+                    if pdf and st.button("Öppna PDF", key=f"{key_prefix}_{i}",
+                                         use_container_width=True):
+                        try:
+                            subprocess.Popen(["open", str(pdf)])
+                        except OSError as e:
+                            st.error(f"Kan inte öppna fil: {e}")
+
+
+def _render_chat_turn(turn: dict, turn_idx: int) -> None:
+    """Rendera en historiktur; assistentturer med centers får grafexpander
+    mellan svaret och källorna."""
+    with st.chat_message(turn["role"]):
+        st.markdown(turn["text"], unsafe_allow_html=True)
+        centers = turn.get("centers") or []
+        if turn["role"] == "assistant" and show_graph and centers:
+            _render_answer_graph(centers, f"turn_{turn_idx}")
+        srcs = turn.get("sources") or []
+        if srcs:
+            _render_chat_sources(srcs, f"chat_pdf_{turn_idx}")
+
+
 if mcp_mode:
     if backend["kind"] == "claude":
         # Chatt-läge: rendera historiken först, sedan st.chat_input nederst.
         for turn_idx, turn in enumerate(ss.chat_history):
-            with st.chat_message(turn["role"]):
-                st.markdown(turn["text"], unsafe_allow_html=True)
-                srcs = turn.get("sources") or []
-                if srcs:
-                    with st.expander(f"Källor ({len(srcs)})", expanded=False):
-                        for i, h in enumerate(srcs):
-                            pdf = find_pdf(h["source"])
-                            stem = (
-                                h["source"][:-4]
-                                if h["source"].endswith(".txt")
-                                else h["source"]
-                            )
-                            with st.container(border=True):
-                                cols = st.columns([5, 2])
-                                with cols[0]:
-                                    st.markdown(f"**{stem}**")
-                                with cols[1]:
-                                    if pdf and st.button(
-                                        "Öppna PDF",
-                                        key=f"chat_pdf_{turn_idx}_{i}",
-                                        use_container_width=True,
-                                    ):
-                                        try:
-                                            subprocess.Popen(["open", str(pdf)])
-                                        except OSError as e:
-                                            st.error(f"Kan inte öppna fil: {e}")
+            _render_chat_turn(turn, turn_idx)
 
         chat_q = st.chat_input("Ställ en fråga till utredningsassistenten…")
         if chat_q and chat_q.strip():
@@ -782,43 +1027,25 @@ if mcp_mode:
                 answer, new_id = asyncio.run(
                     stream_mcp_to_string(chat_q, ss.mcp_session_id)
                 )
+                centers: list[dict] = []
+                if show_graph:
+                    with st.spinner("Bygger kunskapsgraf…"):
+                        centers = _compute_answer_centers(answer)
+                    # Samma state_key som turen får i historiken efter append.
+                    _render_answer_graph(centers, f"turn_{len(ss.chat_history)}")
             ss.mcp_session_id = new_id
             ss.chat_history.append(
                 {
                     "role": "assistant",
                     "text": answer,
                     "sources": extract_cited_sources(answer),
+                    "centers": centers,
                 }
             )
             st.rerun()
     else:
         for turn_idx, turn in enumerate(ss.chat_history):
-            with st.chat_message(turn["role"]):
-                st.markdown(turn["text"], unsafe_allow_html=True)
-                srcs = turn.get("sources") or []
-                if srcs:
-                    with st.expander(f"Källor ({len(srcs)})", expanded=False):
-                        for i, h in enumerate(srcs):
-                            pdf = find_pdf(h["source"])
-                            stem = (
-                                h["source"][:-4]
-                                if h["source"].endswith(".txt")
-                                else h["source"]
-                            )
-                            with st.container(border=True):
-                                cols = st.columns([5, 2])
-                                with cols[0]:
-                                    st.markdown(f"**{stem}**")
-                                with cols[1]:
-                                    if pdf and st.button(
-                                        "Öppna PDF",
-                                        key=f"chat_pdf_{turn_idx}_{i}",
-                                        use_container_width=True,
-                                    ):
-                                        try:
-                                            subprocess.Popen(["open", str(pdf)])
-                                        except OSError as e:
-                                            st.error(f"Kan inte öppna fil: {e}")
+            _render_chat_turn(turn, turn_idx)
 
         chat_q = st.chat_input("Ställ en fråga till utredningsassistenten…")
         if chat_q and chat_q.strip():
@@ -834,11 +1061,18 @@ if mcp_mode:
                 answer = asyncio.run(
                     stream_openai_mcp_to_string(backend, ss.openai_chat_messages)
                 )
+                centers: list[dict] = []
+                if show_graph:
+                    with st.spinner("Bygger kunskapsgraf…"):
+                        centers = _compute_answer_centers(answer)
+                    # Samma state_key som turen får i historiken efter append.
+                    _render_answer_graph(centers, f"turn_{len(ss.chat_history)}")
             ss.chat_history.append(
                 {
                     "role": "assistant",
                     "text": answer,
                     "sources": extract_cited_sources(answer),
+                    "centers": centers,
                 }
             )
             st.rerun()
@@ -866,19 +1100,29 @@ else:
         ss.hits = hits
 
         st.subheader(f"Svar ({backend_name})")
-        # Skapa placeholders i rätt ordning innan asyncio.run() blockerar —
-        # _src_slot ersätter omedelbart ev. gamla källexpander från föregående sökning.
+        # Skapa placeholders i skärmordning (svar → graf → källor) innan
+        # asyncio.run() blockerar — _src_slot ersätter omedelbart ev. gamla
+        # källexpander från föregående sökning.
         _stream_slot = st.empty()
+        _graph_slot = st.empty()
         _src_slot = st.empty()
         _stream_slot.markdown(_THINKING_HTML, unsafe_allow_html=True)
         ss.answer = asyncio.run(stream_to_string(hits, q, backend, _stream_slot))
         with _src_slot.container():
             _render_rag_sources(hits, "sub")
+        ss.answer_centers = []
+        if show_graph:
+            with _graph_slot.container():
+                with st.spinner("Bygger kunskapsgraf…"):
+                    ss.answer_centers = _compute_answer_centers(ss.answer)
+                _render_answer_graph(ss.answer_centers, "rag")
 
 # Rendera resultat från session_state vid rerun från PDF-knappar (ej ny sökning).
 # Bara i RAG-läget — MCP-chatten renderar sina källor inline per tur.
 if ss.hits and not mcp_mode and not (submitted and q.strip()):
     st.subheader("Svar")
     st.markdown(ss.answer, unsafe_allow_html=True)
+    if show_graph:
+        _render_answer_graph(ss.answer_centers, "rag")
     _render_rag_sources(ss.hits, "cached")
 

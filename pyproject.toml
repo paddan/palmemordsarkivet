@@ -39,7 +39,7 @@ webui = [
 ]
 graph = [
     "neo4j",
-    "pyvis",
+    "st-link-analysis",
 ]
 
 [tool.ruff]

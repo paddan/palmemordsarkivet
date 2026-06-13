@@ -1,8 +1,9 @@
-"""Bygg och rendera ego-nätverk ur kunskapsgrafen för webui-grafsidan.
+"""Bygg ego-nätverk ur kunskapsgrafen för webui:s grafvyer.
 
 Neo4j-frågorna hålls tunna; transformationen rad→noder/kanter och
-pyvis-renderingen är rena funktioner (testbara utan Neo4j). Sidan
-``src/pages/1_Graf.py`` kopplar ihop dem med Streamlit.
+Cytoscape-konverteringen är rena funktioner (testbara utan Neo4j).
+Renderingen sker med st-link-analysis i ``webui.py`` (svarsgrafen) och
+``src/pages/1_Graf.py`` (grafsidan).
 """
 from __future__ import annotations
 
@@ -19,6 +20,14 @@ NODE_COLORS = {
     "Plats": "#17bebb",
     "Organisation": "#ffc914",
     "Dokument": "#76b041",
+}
+
+# Material-ikoner per nodtyp för st-link-analysis-renderingen.
+NODE_ICONS = {
+    "Person": "person",
+    "Plats": "place",
+    "Organisation": "business",
+    "Dokument": "description",
 }
 
 
@@ -85,6 +94,28 @@ def search_entities(session, query: str, limit: int = 20) -> list[dict]:
     return out
 
 
+def lookup_centers(session, names: list[str], per_name_limit: int = 10) -> list[dict]:
+    """Slå upp svars-entiteter mot grafen → center-dicts för ``assemble_graph``.
+
+    Bästa träff per namn: exakt namnmatch (skiftlägesokänslig) vinner, annars
+    första träffen (``search_entities`` sorterar kortast namn först). Namn utan
+    träff hoppas över; dubbletter (samma label+norm) dedupas."""
+    centers: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for name in names:
+        hits = search_entities(session, name, limit=per_name_limit)
+        if not hits:
+            continue
+        exact = [h for h in hits if h["namn"].lower() == name.lower()]
+        best = exact[0] if exact else hits[0]
+        key = (best["label"], best["norm"])
+        if key in seen:
+            continue
+        seen.add(key)
+        centers.append(best)
+    return centers
+
+
 def fetch_ego(session, norm: str, label: str, limit: int = 80) -> tuple[list[dict], list[dict]]:
     """Hämta relationsrader (RELATERAR) och dokumentrader (NÄMNER) kring en nod."""
     rels = [dict(r) for r in session.run(_REL_CYPHER, norm=norm, label=label, limit=limit)]
@@ -109,6 +140,19 @@ def dedup_rels(rows: list[dict]) -> list[dict]:
 
 
 # ── Ren transformation + rendering ────────────────────────────────────────────
+
+def _doc_label(d: dict) -> str:
+    """Läsbar etikett för en dokumentnod: ``Nr — Titel``.
+
+    Faller tillbaka på enbart numret eller titeln om någon del saknas, och
+    sist på filstammen. Titeln saknades tidigare i nodnamnet (bara numret
+    visades)."""
+    nr = (d.get("nr") or "").strip()
+    titel = (d.get("titel") or "").strip()
+    if nr and titel:
+        return f"{nr} — {titel}"
+    return titel or nr or d["stem"]
+
 
 def assemble_graph(
     centers: dict | list[dict], rel_rows: list[dict], doc_rows: list[dict]
@@ -151,39 +195,42 @@ def assemble_graph(
     fallback_norm = centers[0]["norm"]
     for d in doc_rows:
         doc_id = "doc:" + d["stem"]
-        add(doc_id, d.get("nr") or d["stem"], "Dokument", stem=d["stem"])
+        add(doc_id, _doc_label(d), "Dokument", stem=d["stem"])
         add_edge(doc_id, d.get("center_norm") or fallback_norm, "nämner")
     return list(nodes.values()), list(edges.values())
 
 
-def build_pyvis_html(nodes: list[dict], edges: list[dict], height: str = "620px") -> str:
-    """Rendera noder/kanter till fristående interaktiv pyvis-HTML."""
-    from pyvis.network import Network  # noqa: PLC0415
-
-    net = Network(height=height, width="100%", directed=True,
-                  bgcolor="#ffffff", font_color="#222222")
-    net.barnes_hut(gravity=-8000, spring_length=120)
+def to_cytoscape_elements(nodes: list[dict], edges: list[dict]) -> dict:
+    """Konvertera ``assemble_graph``-noder/kanter till Cytoscape-elementformat
+    (st-link-analysis). Nodens typ blir Cytoscape-``label`` (stylinggrupp);
+    alla kanter får gruppen ``REL`` med relationstexten i ``name`` så att en
+    enda EdgeStyle med ``caption="name"`` visar texten. Centernoder märks med
+    ``★``-prefix i namnet (NodeStyle kan bara styla per typ-grupp, inte per
+    attribut). Kanter med saknade ändpunkter hoppas över (komponenten
+    kraschar annars)."""
+    cy_nodes = []
     for n in nodes:
-        is_center = bool(n.get("center"))
-        net.add_node(
-            n["id"], label=n["namn"],
-            color=NODE_COLORS.get(n["type"], "#999999"),
-            shape="box" if n["type"] == "Dokument" else "dot",
-            title=f'{n["type"]}: {n["namn"]}',
-            size=28 if is_center else 16,
-            borderWidth=4 if is_center else 1,
-        )
+        # Korta av långa namn (främst dokumenttitlar) i grafen så de inte
+        # spränger nodlayouten; full titel finns kvar i sidopanelens lista.
+        display = n["namn"] if len(n["namn"]) <= 45 else n["namn"][:44] + "…"
+        name = f"★ {display}" if n.get("center") else display
+        data = {"id": n["id"], "label": n["type"], "name": name}
+        if n.get("stem"):
+            data["stem"] = n["stem"]
+        if n.get("center"):
+            data["center"] = True
+        cy_nodes.append({"data": data})
     present = {n["id"] for n in nodes}
-    for e in edges:
+    cy_edges = []
+    for i, e in enumerate(edges):
         if e["source"] not in present or e["target"] not in present:
             continue
         base = e.get("label") or ""
         count = e.get("count", 1)
-        # Visa antalet förekomster när relationen återkommer i flera dokument.
-        label = f"{base} (×{count})" if count > 1 else base
-        # Dämpad, takad bredd så att en relation med många källor inte blir
-        # en oläslig klump (1 → 1.5, växer långsamt, max 5).
-        width = min(1.0 + 0.5 * (count - 1), 5.0)
-        net.add_edge(e["source"], e["target"], label=label, title=label,
-                     width=width)
-    return net.generate_html(notebook=False)
+        name = f"{base} (×{count})" if count > 1 else base
+        cy_edges.append({"data": {
+            "id": f"e{i}", "source": e["source"], "target": e["target"],
+            "label": "REL", "name": name,
+        }})
+    return {"nodes": cy_nodes, "edges": cy_edges}
+

@@ -49,10 +49,11 @@ src/
   graph/
     extract_entities.py # Per-sida entitets-/relationsextraktion via Claude Haiku → doc_entities i state.db
     load_neo4j.py       # Ladda doc_entities → Neo4j (MERGE, idempotent) + namnkanonisering
-    viz.py              # Ego-nätverk för flera center (Cypher → noder/kanter, dedup) + pyvis-rendering
+    viz.py              # Ego-nätverk för flera center (Cypher → noder/kanter, dedup) + Cytoscape-konvertering
+    answer_entities.py  # LLM (Haiku) listar nyckelentiteter ur ett RAG-svar → inline-grafen i webui
   pages/
     1_Graf.py           # Streamlit multipage-sida: sök entitet → interaktiv graf, fäll ut grannoder (kräver Neo4j)
-tests/                 # pytest — en testfil per modul (test_db, test_quality, test_chunk, test_download, test_merge_pages, test_merge_wpu, test_detect_redactions, test_reingest, test_normalize_text, test_llm_correct, test_migrate_to_db, test_scripts, test_citations, test_ask, test_mcp_server, test_extract_entities, test_load_neo4j)
+tests/                 # pytest — en testfil per modul (test_db, test_quality, test_chunk, test_download, test_merge_pages, test_merge_wpu, test_detect_redactions, test_reingest, test_normalize_text, test_llm_correct, test_migrate_to_db, test_scripts, test_citations, test_ask, test_mcp_server, test_extract_entities, test_answer_entities, test_load_neo4j)
 *.sh                   # Bash-wrappers (aktiverar .venv, läser API-nycklar, vidarebefordrar flaggor)
 tessdata/              # swe_best.traineddata, swe.user-words, tesseract.config
 ```
@@ -136,6 +137,28 @@ laddar (MERGE, idempotent) detta till Neo4j, så Neo4j-grafen kan alltid byggas
 om från grunden från `doc_entities` med `load_graph.sh`. Uppskattad kostnad
 för hela arkivet (~40 000 sidor, bildsidor hoppas över): ~$60–120 i
 Haiku-tokens.
+
+I webui visas dessutom en inline-graf till varje svar (RAG- och MCP-läge) som
+en hopfälld toggle-sektion i fullbredd mellan svaret och källorna (medvetet
+inte st.expander: Cytoscape-komponenten blir tom om den monteras i en dold
+container — ingen resize-hantering i bundeln; toggle-gaten renderar grafen
+först när den är synlig och hoppar över Neo4j-frågorna när den är stängd):
+`answer_entities.py` (Haiku) listar svarets nyckelentiteter →
+`viz.lookup_centers` slår upp dem i Neo4j → `viz.to_cytoscape_elements`
+konverterar → grafen ritas med **st-link-analysis** (Cytoscape; samma motor
+på grafsidan `pages/1_Graf.py` — pyvis är borttaget). Grundgrafen visar
+endast svarets entiteter + relationer mellan dem (grannskap/dokument
+filtreras bort efter fetch_ego); dubbelklick fäller ut en nods grannskap
+respektive öppnar dokumentnoders PDF; expand-event dedupas på
+timestamp eftersom komponentvärdet består över reruns; höjden bakas in i
+komponentnyckeln då den bara läses vid mount; centernoder märks med ★ i
+namnet (NodeStyle kan bara styla per typ-grupp). Sektionen har en sidopanel
+(`_render_graph_panel`) med höjdreglage, legend, återställning (extranoder i
+session state per `state_key`, nollställs vid nytt svar) och dokumentnoder
+som PDF-länkar via `citations.pdf_anchor` (samma `?pdf=`-mekanism som
+citatlänkarna). Degraderar tyst (notis) om Neo4j/LLM-konfig/st-link-analysis
+saknas; sidofältstoggeln "Visa kunskapsgraf" (på som standard) stänger av
+steget, och entitetslistan cachas per svar i session state.
 
 Namnkanonisering (entity resolution) hålls medvetet konservativ och
 deterministisk i `load_neo4j`, i två steg:

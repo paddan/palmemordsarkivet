@@ -42,7 +42,9 @@ på komplexa flerstegs-frågor, men långsammare (~1–3 min).
 
 En **Graf**-sida visualiserar kunskapsgrafen: sök en person, plats eller
 organisation och utforska dess nätverk av relationer och källdokument som ett
-interaktivt ego-nätverk, med möjlighet att fälla ut grannoder.
+interaktivt ego-nätverk — dubbelklicka en nod för att fälla ut dess grannskap
+eller öppna ett källdokument. Samma graf dyker även upp automatiskt till varje
+svar i frågeläget, centrerad kring de entiteter svaret handlar om.
 
 ![Web-gränssnitt — Graf](graf.png)
 

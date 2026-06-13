@@ -312,6 +312,40 @@ lokalt (via `open`) i en gömd iframe så huvudsidan inte laddas om. Om samma
 dokument-ID delas av flera filer (t.ex. en palme- och en wpu-version) och svaret
 inte entydigt pekar ut vilken, visas en knapp per fil märkt med titeldelen.
 
+#### Kunskapsgraf till svaret
+
+När Neo4j är igång (`./neo4j.sh` + `./load_graph.sh`) visas ett ego-nätverk ur
+kunskapsgrafen som en hopfälld sektion (toggle) i fullbredd mellan svaret och
+källistan — i både RAG-läget och utredningsläget. Grafen ritas först när
+sektionen öppnas; Cytoscape-komponenten kan inte monteras dold (ingen
+resize-hantering) och stängd sektion slipper dessutom Neo4j-frågorna. Efter
+att svaret är klart listar Claude Haiku svarets nyckelentiteter
+(`src/graph/answer_entities.py`); namnen slås upp i grafen
+(`viz.lookup_centers`) och ritas med Cytoscape (st-link-analysis, ingår i
+extran `.[graph]`).
+
+Grundgrafen visar **endast svarets entiteter** och relationerna mellan dem —
+inte deras hela grannskap. Grafen är interaktiv: dubbelklick på en entitetsnod
+fäller ut dess grannskap (relationer + dokument som nämner den), dubbelklick
+på en dokumentnod öppnar PDF:en lokalt. Centernoder (svarets entiteter +
+utfällda) märks med ★ i namnet. Inbyggd verktygsrad ger fullskärm och
+zoom-passning.
+
+I grafsektionen finns en sidopanel med:
+
+- **Höjdreglage** — gör graffönstret större (400–1200 px).
+- **Legend** — typ och färg för nodtyperna som ingår (Person, Plats,
+  Organisation, Dokument).
+- **Återställ** — tar bort utfällda noder. Utfällda noder sparas per svar och
+  nollställs automatiskt vid nytt svar.
+- **Dokumentlänkar** — grafens dokumentnoder som klickbara länkar; öppnar
+  PDF:en lokalt via samma `?pdf=`-mekanism som citatlänkarna i svaret.
+
+Grafen är frivillig: är Neo4j nere eller LLM-konfig saknas visas en kort notis
+i stället, och sidofältets toggle "Visa kunskapsgraf" (på som standard)
+stänger av hela steget. Entitetslistorna cachas per svar i session state, så
+klick på PDF-knappar triggar inga nya LLM-anrop.
+
 ## Kunskapsgraf (Neo4j)
 
 Utöver vektorsökningen kan arkivet byggas upp som en kunskapsgraf: en LLM
@@ -402,14 +436,14 @@ plats eller organisation så ritas dess nätverk (relationer + dokument som
 nämner den) som en interaktiv graf, och källdokumenten listas med
 PDF-knappar. Kräver att Neo4j är igång (`./neo4j.sh`) och grafen laddad
 (`./load_graph.sh`) — saknas det visar sidan en uppmaning i stället för fel.
+Utöver grafsidan visas också ett ego-nätverk automatiskt under varje svar på
+frågesidan (se *Kunskapsgraf till svaret* ovan).
 
-**Fäll ut noder:** välj en grannod i sidofältet och klicka *Fäll ut noden* för
-att lägga till dess nätverk i grafen — så går det att vandra utåt från den
-sökta noden. Utfällda center ritas större och inramade; *Återställ till sökt
-nod* fäller ihop igen. (Utfällning sker via en sidofältskontroll, inte genom
-klick i canvasen, eftersom pyvis-grafen renderas i en iframe utan återkanal till
-Streamlit.) Återkommer en relation i flera dokument kollapsas den till en kant
-märkt `×N`.
+**Fäll ut noder:** dubbelklicka på en entitetsnod i grafen för att lägga till
+dess nätverk — så går det att vandra utåt från den sökta noden. Dubbelklick på
+en dokumentnod öppnar PDF:en. Centernoder (sökta + utfällda) märks med ★;
+*Återställ till sökt nod* i sidofältet fäller ihop igen. Återkommer en
+relation i flera dokument kollapsas den till en kant märkt `×N`.
 
 ### Namnvarianter (entity resolution)
 
@@ -488,7 +522,8 @@ Snabbaste sättet att se eller byta vald LLM utan att starta Streamlit:
 | `extract_entities.sh` → `src/graph/extract_entities.py` | Entitets-/relationsextraktion till `doc_entities` i state.db (Claude Haiku) |
 | `load_graph.sh` → `src/graph/load_neo4j.py` | Ladda kunskapsgrafen från state.db till Neo4j |
 | `neo4j.sh` | Starta/stoppa Neo4j via podman (genererar lösenord → `neo4j/.password`) |
-| `src/graph/viz.py` | Bygg ego-nätverk (flera center) + pyvis-rendering för grafsidan |
+| `src/graph/viz.py` | Bygg ego-nätverk (flera center) + Cytoscape-konvertering för grafvyerna |
+| `src/graph/answer_entities.py` | LLM (Claude Haiku) listar nyckelentiteter ur ett RAG-svar — driver inline-grafen i webui |
 | `src/pages/1_Graf.py` | Streamlit-grafsida: sök entitet → interaktivt nätverk, fäll ut noder |
 | `neo4j/docker-compose.yml` | Neo4j 5 för kunskapsgrafen med Docker (Browser på :7474) |
 | `web.sh` | Wrapper för Streamlit-servern |
@@ -519,7 +554,8 @@ Testerna täcker: `score_text` (quality), `chunk_text` (ingest), `extract_drive_
 LLM-korrektionslogiken (llm_correct), re-ingest-flödet (ingest), state-databasen inkl.
 delta-urval och `text_mtime`-stämpling (db, ocr_db_helper, normalize, quality),
 citatuppslag/-länkning (citations), RRF-hybridsökningen (ask) och `get_page` (mcp_server),
-entitetsextraktion (extract_entities) och graf-laddning (load_neo4j).
+entitetsextraktion (extract_entities), graf-laddning (load_neo4j) och
+nyckelentiteter ur svar (answer_entities).
 Fixturen som genererar en mini-PDF med pymupdf skipas gracefully om pymupdf inte är installerat.
 
 ## Felloggning

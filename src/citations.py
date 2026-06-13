@@ -87,6 +87,17 @@ def extract_cited_sources(answer: str, mapping: dict[str, Path]) -> list[dict]:
     return list(seen.values())
 
 
+def pdf_anchor(pdf: Path, label: str, title: str = "Öppna PDF") -> str:
+    """HTML-länk som öppnar en PDF lokalt via ?pdf=<base64>-handlern högst upp
+    i webui-scriptet (laddas i den gömda pdf_opener-iframen). ``label`` ska
+    redan vara HTML-säker."""
+    token = base64.urlsafe_b64encode(str(pdf).encode()).decode().rstrip("=")
+    return (
+        f'<a href="?pdf={token}" target="pdf_opener" '
+        f'style="{_LINK_STYLE}" title="{html.escape(title, quote=True)}">{label}</a>'
+    )
+
+
 def linkify_citations(
     text: str,
     mapping: dict[str, Path],
@@ -102,11 +113,7 @@ def linkify_citations(
     """
 
     def _anchor(pdf: Path, label: str, title: str) -> str:
-        token = base64.urlsafe_b64encode(str(pdf).encode()).decode().rstrip("=")
-        return (
-            f'<a href="?pdf={token}" target="pdf_opener" '
-            f'style="{_LINK_STYLE}" title="{html.escape(title, quote=True)}">{label}</a>'
-        )
+        return pdf_anchor(pdf, label, title)
 
     def repl(m: re.Match) -> str:
         nr = m.group(1)
