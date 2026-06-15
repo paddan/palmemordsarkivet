@@ -479,15 +479,26 @@ Webgränssnittet sparar valt backend i `generated/llm_config.json` och laddar de
 
 ### Visa/ändra konfigen utan webui (`llm_config.sh`)
 
-Snabbaste sättet att se eller byta vald LLM utan att starta Streamlit:
+Snabbaste sättet att se eller byta vald LLM utan att starta Streamlit.
+
+Kör utan argument i en terminal startas en **interaktiv meny** där backend och
+modell väljs ur samma katalog som webui:s sidofält (Claude / OpenAI / DeepSeek /
+Ollama / OpenAI-kompatibel). För OpenAI-kompatibla providers hämtas modell-listan
+live från `/v1/models` (faller tillbaka på en inbyggd lista om endpoint eller
+nyckel saknas), och konfigurerbara backends frågar efter endpoint-URL och en
+valfri API-nyckel. Körs skriptet utan terminal (pipe/skript) skrivs i stället den
+aktuella konfigurationen ut.
 
 ```bash
-./llm_config.sh                                              # visa aktuell konfig
+./llm_config.sh                                              # interaktiv meny (terminal); annars visa konfig
 ./llm_config.sh --model claude-haiku-4-5-20251001            # byt modell (samma provider)
 ./llm_config.sh --provider openai                            # byt provider, modell återställs till providerns default
 ./llm_config.sh --provider openai --model gpt-4o --base-url https://api.deepseek.com/v1
 ./llm_config.sh --reset                                      # ta bort sparad konfig, tillbaka till defaults
 ```
+
+Backend-katalogen (namn, modell-listor, endpoints) bor i `src/backends.py` och
+delas mellan webui och `llm_config.sh` så att valen alltid är identiska.
 
 ## Filer
 
@@ -514,7 +525,8 @@ Snabbaste sättet att se eller byta vald LLM utan att starta Streamlit:
 | `src/rag/mcp_server.py` | MCP-server med `search_archive` och `get_page` (startas av ask.py/webui.py) |
 | `generated/llm_config.json` | Sparad LLM-konfiguration (backend, modell, URL) — se ovan |
 | `src/config.py` | Läser/skriver `generated/llm_config.json` (delas av webui och llm_correct) |
-| `llm_config.sh` → `src/llm_config_cli.py` | Visa/ändra `generated/llm_config.json` utan webui |
+| `src/backends.py` | Delad backend-katalog (Claude/OpenAI/DeepSeek/Ollama/custom) + `fetch_models`/`available_models` — delas av webui och `llm_config.sh` |
+| `llm_config.sh` → `src/llm_config_cli.py` | Visa/ändra `generated/llm_config.json` utan webui (interaktiv meny i terminal) |
 | `src/citations.py` | Slår upp `[Nr X, sida Y]`-citat mot PDF:er och renderar citatlänkar |
 | `src/webui.py` | Streamlit-webgränssnitt för frågor (RAG + MCP-toggle) |
 | `migrate_to_db.sh` → `src/migrate_to_db.py` | Engångsmigrering av legacy filmarkörer → `state.db` |

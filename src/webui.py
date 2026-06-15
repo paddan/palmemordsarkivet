@@ -18,6 +18,7 @@ from pathlib import Path
 MCP_SERVER = Path(__file__).resolve().parent / "rag" / "mcp_server.py"
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import backends as _backends  # noqa: E402
 import citations as _citations  # noqa: E402
 import config as _llm_config  # noqa: E402
 from errors_log import log_error  # noqa: E402
@@ -89,29 +90,8 @@ def find_pdf(source_txt: str) -> Path | None:
 
 @st.cache_data(ttl=30, show_spinner=False)
 def _fetch_models(base_url: str, api_key: str) -> list[str]:
-    """Hämta tillgängliga modeller från en OpenAI-kompatibel /v1/models-endpoint."""
-    import json as _json
-
-    url = base_url.rstrip("/") + "/models"
-    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
-    try:
-        import httpx
-        resp = httpx.get(url, headers=headers, timeout=5.0)
-        resp.raise_for_status()
-        data = resp.json()
-    except ImportError:
-        import urllib.request
-        req = urllib.request.Request(url)
-        for k, v in headers.items():
-            req.add_header(k, v)
-        try:
-            with urllib.request.urlopen(req, timeout=5) as r:
-                data = _json.loads(r.read())
-        except Exception:
-            return []
-    except Exception:
-        return []
-    return sorted(m["id"] for m in data.get("data", []))
+    """Cachad wrapper runt backends.fetch_models (cachen är streamlit-specifik)."""
+    return _backends.fetch_models(base_url, api_key)
 
 
 def find_txt(source_txt: str) -> Path | None:
@@ -145,45 +125,13 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+# Backend-katalogen bor i src/backends.py (delas med llm_config_cli). Claude-
+# defaulten knyts lokalt till ask.CLAUDE_MODEL så webui:s val följer den modell
+# RAG-svaren faktiskt körs med, även om katalogens default skulle divergera.
+# Värdena sammanfaller idag; override:n görs utan att mutera den delade dicten.
 BACKENDS = {
-    "Claude": {
-        "kind": "claude",
-        "model": CLAUDE_MODEL,
-        "models": [
-            "claude-opus-4-8",
-            "claude-opus-4-7",
-            "claude-sonnet-4-6",
-            "claude-haiku-4-5-20251001",
-        ],
-    },
-    "OpenAI": {
-        "kind": "openai",
-        "model": "gpt-4o",
-        "models": ["gpt-5", "gpt-5-mini", "gpt-4.1", "gpt-4.1-mini", "gpt-4o", "gpt-4o-mini", "o3", "o3-pro", "o4-mini"],
-        "base_url": "https://api.openai.com/v1",
-        "env": "OPENAI_API_KEY",
-    },
-    "DeepSeek": {
-        "kind": "openai",
-        "model": "deepseek-chat",
-        "models": ["deepseek-chat", "deepseek-reasoner"],
-        "base_url": "https://api.deepseek.com/v1",
-        "env": "DEEPSEEK_API_KEY",
-    },
-    "Ollama (lokal)": {
-        "kind": "openai",
-        "model": "gemma3:12b",
-        "base_url": "http://localhost:11434/v1",
-        "env": None,
-        "configurable": True,
-    },
-    "OpenAI-kompatibel (custom)": {
-        "kind": "openai",
-        "model": "llama3.1:8b",
-        "base_url": "http://localhost:1234/v1",
-        "env": None,
-        "configurable": True,
-    },
+    **_backends.BACKENDS,
+    "Claude": {**_backends.BACKENDS["Claude"], "model": CLAUDE_MODEL},
 }
 
 _saved_llm = _llm_config.load()
@@ -278,18 +226,8 @@ with st.sidebar:
     _is_saved = backend_name == _saved_llm.get("backend_name")
     if "models" in backend and not backend.get("configurable"):
         _cur_model = _saved_llm.get("model") if _is_saved else backend["model"]
-        _model_list = backend["models"]
-        if backend.get("base_url") and backend.get("env"):
-            _api_key = os.environ.get(backend["env"], "")
-            _fetched = _fetch_models(backend["base_url"], _api_key)
-            _skip = {
-                "embedding", "tts", "whisper", "dall", "instruct",
-                "realtime", "audio", "transcription", "moderation",
-                "babbage", "davinci", "search",
-            }
-            _fetched = [m for m in _fetched if not any(s in m.lower() for s in _skip)]
-            if _fetched:
-                _model_list = _fetched
+        _api_key = os.environ.get(backend["env"], "") if backend.get("env") else ""
+        _model_list = _backends.available_models(backend, _api_key, fetcher=_fetch_models)
         _model_idx = _model_list.index(_cur_model) if _cur_model in _model_list else 0
         backend = {
             **backend,

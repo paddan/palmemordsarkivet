@@ -55,7 +55,18 @@ def _resolve_api_key(provider: str, base_url: str, explicit_key: str) -> str:
             print("Sätt OPENAI_API_KEY.", file=sys.stderr)
             sys.exit(1)
         return key
-    return ""  # custom base_url → ingen validering
+    # Custom base_url: lokala servrar (Ollama/LM Studio) körs utan nyckel, men
+    # kända fjärr-providers kräver sin egen env-nyckel. Matcha på host.
+    host = base_url.lower()
+    for needle, env in (("deepseek.com", "DEEPSEEK_API_KEY"),
+                        ("openai.com", "OPENAI_API_KEY")):
+        if needle in host:
+            key = os.environ.get(env, "")
+            if not key:
+                print(f"Sätt {env}.", file=sys.stderr)
+                sys.exit(1)
+            return key
+    return ""  # lokal/okänd server → ingen validering
 
 
 _SYSTEM = """\
@@ -320,4 +331,10 @@ def main() -> None:
 
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        # Idempotent: korrigerade sidor skrivs löpande, så ett avbrott är säkert
+        # och behöver inget felspår.
+        print('\nAvbrutet.', file=sys.stderr)
+        sys.exit(130)

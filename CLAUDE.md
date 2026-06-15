@@ -39,7 +39,8 @@ src/
   build_user_words.py  # Generera Tesseract user-words från OCR-text
   errors_log.py        # Centraliserad felloggning (tab-separerad)
   config.py            # Delad LLM-konfiguration (generated/llm_config.json)
-  llm_config_cli.py    # CLI för att visa/ändra llm_config.json utan webui
+  backends.py          # Delad backend-katalog (Claude/OpenAI/DeepSeek/Ollama/custom) + fetch_models/available_models — delas av webui och llm_config_cli
+  llm_config_cli.py    # CLI för att visa/ändra llm_config.json utan webui (interaktiv meny i terminal)
   citations.py         # [Nr X, sida Y]-uppslag mot PDF:er + länkrendering (Streamlit-fritt)
   webui.py             # Streamlit-gränssnitt
   rag/
@@ -85,7 +86,8 @@ Data-kataloger (gitignored):
 ./detect_redactions.sh               # Redaktionsdetektering på befintliga text/OCR-par
 ./quality.sh [--top 30] [--per-page]
 ./llm_correct.sh [--threshold 60]    # Claude Haiku korrigerar dåliga sidor
-./llm_config.sh [--model X] [--provider claude|openai] [--reset]  # visa/ändra llm_config.json utan webui
+./llm_config.sh                                              # interaktiv meny (terminal) för backend/modell; utan TTY visas konfig
+./llm_config.sh [--model X] [--provider claude|openai] [--reset]  # icke-interaktivt: visa/ändra llm_config.json utan webui
 ./merge_pages.sh --all               # Slå ihop text_pages/ → text/
 ./build_user_words.sh                # Bygg tessdata/swe.user-words.auto från text/*.txt
 ./ingest.sh [--rebuild] [--reindex-since 2026-05-01]

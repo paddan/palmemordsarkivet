@@ -100,12 +100,15 @@ personer, platser, organisationer och relationer. Det kan därför ta tid och
 kosta API-tokens. Skriptet använder normalt samma sparade LLM-val som
 webgränssnittet och `llm_correct.sh`.
 
-Visa aktuell konfiguration och välj exempelvis Claude Haiku eller OpenAI:
+Kör `./llm_config.sh` utan argument i terminalen för en **interaktiv meny** där
+du väljer backend och modell ur samma lista som webgränssnittet (Claude / OpenAI /
+DeepSeek / Ollama / OpenAI-kompatibel). Vill du hellre sätta värdena direkt går
+det med flaggor:
 
 ```bash
-./llm_config.sh
+./llm_config.sh                                  # interaktiv meny: välj backend + modell
 
-# Sparat val: används även av framtida körningar och webgränssnittet
+# Eller sätt direkt (sparas och används av framtida körningar och webgränssnittet)
 export CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...  # eller ANTHROPIC_API_KEY
 ./llm_config.sh --provider claude --model claude-haiku-4-5-20251001
 

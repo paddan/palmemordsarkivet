@@ -7,7 +7,47 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
+import asyncio
+
+import graph.extract_entities as ee
 from graph.extract_entities import parse_extraction
+
+
+class _FakeAsyncOpenAI:
+    """Minimal AsyncOpenAI-stub som registrerar om klienten stängs."""
+
+    def __init__(self, **kwargs) -> None:
+        self.closed = False
+        _FakeAsyncOpenAI.last = self
+
+        async def _create(**_kw):
+            class _Msg:
+                content = '{"entiteter": [], "relationer": []}'
+
+            class _Choice:
+                message = _Msg()
+
+            class _Resp:
+                choices = [_Choice()]
+
+            return _Resp()
+
+        self.chat = type("Chat", (), {"completions": type("C", (), {"create": staticmethod(_create)})()})()
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc) -> None:
+        self.closed = True
+
+
+def test_openai_call_closes_client(monkeypatch) -> None:
+    monkeypatch.setattr(ee, "AsyncOpenAI", _FakeAsyncOpenAI)
+    out = asyncio.run(
+        ee._openai_call("text", "deepseek-chat", "https://api.deepseek.com/v1", "key")
+    )
+    assert out == '{"entiteter": [], "relationer": []}'
+    assert _FakeAsyncOpenAI.last.closed is True
 
 
 def test_parse_valid_json() -> None:

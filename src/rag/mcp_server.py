@@ -117,4 +117,8 @@ def get_page(
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    mcp.run()
+    try:
+        mcp.run()
+    except KeyboardInterrupt:
+        # Stdio-server: avsluta tyst när föräldraprocessen stänger ned.
+        pass

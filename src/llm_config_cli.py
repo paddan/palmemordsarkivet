@@ -3,16 +3,22 @@ utan att starta webgränssnittet. Konsumeras av webui, llm_correct och
 graph/extract_entities.
 
 Kör:
-    ./llm_config.sh                        # visa aktuell konfig
+    ./llm_config.sh                        # interaktiv meny (TTY); annars visa konfig
     ./llm_config.sh --model claude-haiku-4-5-20251001
     ./llm_config.sh --provider openai --base-url https://api.deepseek.com/v1 --model deepseek-chat
     ./llm_config.sh --reset                # tillbaka till defaults
+
+Utan argument från en terminal startas en meny där backend och modell väljs ur
+samma katalog som webui:s sidofält (src/backends.py). Körs utan TTY (pipe/skript)
+skrivs den aktuella konfigurationen ut, precis som tidigare.
 """
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 
+import backends
 import config
 
 # Default-modeller per provider när man byter provider utan att ange --model.
@@ -37,6 +43,91 @@ def _print_config(cfg: dict, *, missing_file: bool) -> None:
     print(f"  base_url:  {base_url}")
     if missing_file:
         print("  (ingen sparad konfig — visar defaults)")
+
+
+def _prompt_choice(out, read, title, options, *, default=None, allow_custom=False) -> str:
+    """Visa en numrerad lista och returnera det valda värdet.
+
+    Tomt svar → default (om satt). ``allow_custom`` lägger till ett extra val som
+    läser ett fritt namn (för modeller som inte finns i listan).
+    """
+    out(title)
+    for i, opt in enumerate(options, 1):
+        marker = "  (nuvarande)" if opt == default else ""
+        out(f"  {i}. {opt}{marker}")
+    custom_n = len(options) + 1
+    if allow_custom:
+        out(f"  {custom_n}. (skriv eget namn)")
+    suffix = f" [{default}]" if default is not None else ""
+    while True:
+        raw = read(f"Val{suffix}: ").strip()
+        if not raw and default is not None:
+            return default
+        if raw.isdigit():
+            n = int(raw)
+            if 1 <= n <= len(options):
+                return options[n - 1]
+            if allow_custom and n == custom_n:
+                name = read("Modellnamn: ").strip()
+                if name:
+                    return name
+        out("Ogiltigt val, försök igen.")
+
+
+def run_menu(read=input, out=print) -> int:
+    """Interaktiv meny för att välja backend och modell (speglar webui:s sidofält)."""
+    try:
+        return _run_menu(read, out)
+    except (EOFError, KeyboardInterrupt):
+        out("")
+        out("Avbrutet.")
+        return 1
+
+
+def _run_menu(read, out) -> int:
+    cfg = config.load()
+    out("Aktuell LLM-konfiguration:")
+    _print_config(cfg, missing_file=not config.CONFIG_FILE.exists())
+    out("")
+
+    names = list(backends.BACKENDS)
+    cur_backend = cfg.get("backend_name") if cfg.get("backend_name") in names else names[0]
+    backend_name = _prompt_choice(out, read, "Välj backend:", names, default=cur_backend)
+    backend = backends.BACKENDS[backend_name]
+
+    base_url = backend.get("base_url", "")
+    api_key = ""
+    if backend.get("configurable"):
+        default_url = cfg.get("base_url") or backend.get("base_url", "")
+        entered = read(f"Endpoint-URL [{default_url}]: ").strip()
+        base_url = entered or default_url
+        api_key = read("API-nyckel (valfritt, Enter för ingen): ").strip()
+        backend = {**backend, "base_url": base_url}
+    elif backend.get("env"):
+        api_key = os.environ.get(backend["env"], "")
+
+    models = backends.available_models(backend, api_key)
+    if backend_name == cfg.get("backend_name") and cfg.get("model") in models:
+        default_model = cfg["model"]
+    elif backend.get("model") in models:
+        default_model = backend["model"]
+    else:
+        default_model = models[0] if models else backend.get("model", "")
+    model = _prompt_choice(
+        out, read, "Välj modell:", models, default=default_model, allow_custom=True
+    )
+
+    new_cfg = {
+        "backend_name": backend_name,
+        "provider": backend["kind"],
+        "model": model,
+        "base_url": base_url,
+    }
+    config.save(new_cfg)
+    out("")
+    out("Sparad konfiguration:")
+    _print_config(new_cfg, missing_file=False)
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -69,6 +160,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if not set_flags:
+        if sys.stdin.isatty():
+            return run_menu()
         cfg = config.load()
         _print_config(cfg, missing_file=not config.CONFIG_FILE.exists())
         return 0
@@ -97,4 +190,8 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except KeyboardInterrupt:
+        print("\nAvbrutet.", file=sys.stderr)
+        raise SystemExit(130)

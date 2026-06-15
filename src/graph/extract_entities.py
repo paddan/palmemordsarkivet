@@ -148,18 +148,22 @@ async def _openai_call(text: str, model: str, base_url: str, api_key: str) -> st
     """Skicka en sidtext till en OpenAI-kompatibel modell, returnera råsvaret."""
     if AsyncOpenAI is None:
         raise RuntimeError("openai-paketet saknas — kör: pip install openai")
-    client = AsyncOpenAI(
+    # Stäng klienten inom samma event-loop. extract_doc körs via asyncio.run()
+    # per dokument; en oslutsen AsyncOpenAI/httpx-klient städas annars av GC långt
+    # senare och dess finalizer kraschar mot en redan stängd loop
+    # ("RuntimeError: Event loop is closed").
+    async with AsyncOpenAI(
         api_key=api_key or "local",
         base_url=base_url or None,
-    )
-    response = await client.chat.completions.create(
-        model=model,
-        messages=[
-            {"role": "system", "content": _SYSTEM},
-            {"role": "user", "content": text},
-        ],
-        max_tokens=4096,
-    )
+    ) as client:
+        response = await client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": _SYSTEM},
+                {"role": "user", "content": text},
+            ],
+            max_tokens=4096,
+        )
     return response.choices[0].message.content or ""
 
 
@@ -319,4 +323,10 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        # Allt arbete är idempotent (doc_entities spåras per sida) — redan
+        # extraherade sidor är sparade, så ett avbrott behöver inget felspår.
+        print("\nAvbrutet.", file=sys.stderr)
+        sys.exit(130)

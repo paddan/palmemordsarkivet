@@ -57,6 +57,27 @@ def test_explicit_key_overrides_env(monkeypatch):
     assert result == "my-key"
 
 
+def test_deepseek_base_url_reads_deepseek_env(monkeypatch):
+    # DeepSeek har custom base_url MEN kräver nyckel — ska läsas ur DEEPSEEK_API_KEY.
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "ds-key")
+    result = _resolve_api_key("openai", base_url="https://api.deepseek.com/v1", explicit_key="")
+    assert result == "ds-key"
+
+
+def test_localhost_base_url_stays_keyless_even_with_deepseek_env(monkeypatch):
+    # Lokal server (Ollama) ska fortsatt köra utan nyckel, även om DEEPSEEK_API_KEY råkar vara satt.
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "ds-key")
+    result = _resolve_api_key("openai", base_url="http://localhost:11434/v1", explicit_key="")
+    assert result == ""
+
+
+def test_deepseek_base_url_missing_key_raises(monkeypatch):
+    # Känd fjärr-provider utan sin env-nyckel ska avbryta med vägledning, inte tyst tom sträng.
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    with pytest.raises(SystemExit):
+        _resolve_api_key("openai", base_url="https://api.deepseek.com/v1", explicit_key="")
+
+
 def test_openai_returns_corrected_text():
     mock_response = MagicMock()
     mock_response.choices = [MagicMock()]
