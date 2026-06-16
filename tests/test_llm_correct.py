@@ -189,3 +189,67 @@ def test_correct_all_dispatches_to_openai(tmp_path, monkeypatch):
             dry_run=False,
         ))
     mock_openai.assert_called_once()
+
+
+def test_correct_all_runs_pages_concurrently(tmp_path, monkeypatch):
+    # jobs=3 ska köra tre sidor samtidigt: räkna max antal överlappande anrop.
+    monkeypatch.setenv("STATE_DB", str(tmp_path / "state.db"))
+    txt_dir = tmp_path / "text"
+    txt_dir.mkdir()
+    (txt_dir / "testdok.txt").write_text("a\fb\fc", encoding="utf-8")
+
+    provider_cfg = {"provider": "claude", "model": "m", "base_url": "", "api_key": ""}
+
+    inflight = 0
+    peak = 0
+
+    async def fake_claude(text, model):
+        nonlocal inflight, peak
+        inflight += 1
+        peak = max(peak, inflight)
+        await asyncio.sleep(0.02)
+        inflight -= 1
+        return "rättad"
+
+    with patch("llm_correct._claude", new=fake_claude), \
+         patch("merge_pages.merge_one"):
+        asyncio.run(_correct_all(
+            bad={"testdok.txt": [1, 2, 3]},
+            txt_dir=txt_dir,
+            provider_cfg=provider_cfg,
+            dry_run=False,
+            jobs=3,
+        ))
+    assert peak == 3
+
+
+def test_correct_all_semaphore_caps_concurrency(tmp_path, monkeypatch):
+    # jobs=1 ska serialisera anropen även om flera sidor är dåliga.
+    monkeypatch.setenv("STATE_DB", str(tmp_path / "state.db"))
+    txt_dir = tmp_path / "text"
+    txt_dir.mkdir()
+    (txt_dir / "testdok.txt").write_text("a\fb\fc", encoding="utf-8")
+
+    provider_cfg = {"provider": "claude", "model": "m", "base_url": "", "api_key": ""}
+
+    inflight = 0
+    peak = 0
+
+    async def fake_claude(text, model):
+        nonlocal inflight, peak
+        inflight += 1
+        peak = max(peak, inflight)
+        await asyncio.sleep(0.01)
+        inflight -= 1
+        return "rättad"
+
+    with patch("llm_correct._claude", new=fake_claude), \
+         patch("merge_pages.merge_one"):
+        asyncio.run(_correct_all(
+            bad={"testdok.txt": [1, 2, 3]},
+            txt_dir=txt_dir,
+            provider_cfg=provider_cfg,
+            dry_run=False,
+            jobs=1,
+        ))
+    assert peak == 1

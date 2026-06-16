@@ -182,9 +182,14 @@ Idempotent: sidor som redan korrigerats spåras via `llm_corrections`-tabellen o
 ```bash
 ./llm_correct.sh                     # rätta sidor med score < 50
 ./llm_correct.sh --threshold 60      # striktare tröskel
+./llm_correct.sh --jobs 8            # 8 parallella LLM-anrop (default 4)
 ./llm_correct.sh --dry-run           # visa vad som skulle rättas
 ./llm_correct.sh --help              # alla flaggor
 ```
+
+Sidorna är oberoende, så flera rättas samtidigt via en delad semafor
+(`--jobs N`, default 4 eller env `JOBS`). DB-skrivningarna sker synkront i
+event loop-tråden, så den delade sqlite-anslutningen är säker.
 
 Kostnad: Claude Haiku är billig (~$0,25/M tokens). En typisk OCR-sida
 är ~600–1 000 tokens — om 5 % av ~47 000 sidor är dåliga är totalkostnaden

@@ -175,7 +175,12 @@ async def _correct_all(
     txt_dir: Path,
     provider_cfg: dict,
     dry_run: bool,
+    jobs: int = 1,
 ) -> None:
+    """Rätta alla dåliga sidor. ``jobs`` styr hur många LLM-anrop som körs
+    samtidigt via en delad semafor; sidorna är oberoende av varandra och
+    DB-skrivningarna sker synkront i event loop-tråden, så delad sqlite-conn
+    är säker. ``merge_one`` körs per fil efter att filens sidor är klara."""
     from merge_pages import merge_one  # noqa: PLC0415
 
     total = sum(len(v) for v in bad.values())
@@ -185,41 +190,53 @@ async def _correct_all(
     conn = state_db.connect()
     state_db.init_schema(conn)
 
-    for txt_name, pages in bad.items():
+    semaphore = asyncio.Semaphore(max(1, jobs))
+
+    def progress(stem: str, p: int, suffix: str) -> None:
+        nonlocal done
+        done += 1
+        elapsed = time.monotonic() - t0
+        rate = done / elapsed if elapsed else 0
+        eta = int((total - done) / rate) if rate else 0
+        eta_s = f'{eta // 60}m{eta % 60:02d}s'
+        print(f'  [{done}/{total}] {stem} sida {p}{suffix}  eta {eta_s}', flush=True)
+
+    async def handle_file(txt_name: str, pages: list[int]) -> None:
         stem = txt_name[:-4] if txt_name.endswith('.txt') else txt_name
         txt_path = txt_dir / f'{stem}.txt'
         if not txt_path.exists():
             print(f'  SAKNAS: {txt_path}', file=sys.stderr)
-            continue
+            return
 
         full_text = txt_path.read_text(encoding='utf-8', errors='replace')
         page_texts = full_text.split('\f')
-
         file_changed = False
-        for p in sorted(set(pages)):
+
+        async def handle_page(p: int) -> None:
+            nonlocal file_changed
             idx = p - 1
             if idx < 0 or idx >= len(page_texts):
                 print(f'  [skip] {stem} sida {p}: utanför range '
                       f'(dokumentet har {len(page_texts)} sidor)')
-                continue
+                return
 
-            done += 1
             page_text = normalize(page_texts[idx])
-            elapsed = time.monotonic() - t0
-            rate = done / elapsed if elapsed else 0
-            eta = int((total - done) / rate) if rate else 0
-            eta_s = f'{eta // 60}m{eta % 60:02d}s'
             if not page_text.strip():
-                print(f'  [{done}/{total}] {stem} sida {p}: tom — hoppar  eta {eta_s}')
+                progress(stem, p, ': tom — hoppar')
                 if not dry_run:
                     state_db.mark_llm_corrected(conn, stem, p)
-                continue
+                return
 
-            print(f'  [{done}/{total}] {stem} sida {p} ({len(page_text)} tecken)  eta {eta_s}')
             if dry_run:
-                continue
+                progress(stem, p, f' ({len(page_text)} tecken)')
+                return
 
-            corrected = normalize(await _correct_text(page_text, provider_cfg))
+            async with semaphore:
+                try:
+                    corrected = normalize(await _correct_text(page_text, provider_cfg))
+                except Exception as e:  # noqa: BLE001
+                    print(f'  [fel] {stem} sida {p}: {e}', file=sys.stderr)
+                    return
             state_db.record_page(
                 conn,
                 pdf_stem=stem,
@@ -230,12 +247,19 @@ async def _correct_all(
             )
             state_db.mark_llm_corrected(conn, stem, p)
             file_changed = True
+            progress(stem, p, f' ({len(page_text)} tecken)')
+
+        await asyncio.gather(*(handle_page(p) for p in sorted(set(pages))))
 
         if file_changed and not dry_run:
             try:
                 merge_one(stem, txt_dir)
             except Exception as e:  # noqa: BLE001
                 print(f'  [merge-fel] {stem}: {e}', file=sys.stderr)
+
+    await asyncio.gather(
+        *(handle_file(name, pages) for name, pages in bad.items())
+    )
 
 
 def main() -> None:
@@ -256,6 +280,8 @@ def main() -> None:
     ap.add_argument('--txt', default='',
                     help='text-katalog (default: <root>/text)')
     ap.add_argument('--root', default='', help='projektrot')
+    ap.add_argument('--jobs', type=int, default=int(os.environ.get('JOBS', '4')),
+                    help='antal parallella LLM-anrop (default: env JOBS eller 4)')
     ap.add_argument('--dry-run', action='store_true',
                     help='visa vad som skulle rättas utan att göra det')
     ap.add_argument('--test', metavar='FIL',
@@ -319,11 +345,11 @@ def main() -> None:
 
     print(f'Rättar {total} sidor i {len(bad)} filer'
           + (f' ({skipped} redan rättade hoppas över)' if skipped else '')
-          + f' med {provider}/{model}.')
+          + f' med {provider}/{model} ({max(1, args.jobs)} parallella).')
     if args.dry_run:
         print('[dry-run — inga filer skrivs]')
 
-    asyncio.run(_correct_all(bad, txt_dir, provider_cfg, args.dry_run))
+    asyncio.run(_correct_all(bad, txt_dir, provider_cfg, args.dry_run, jobs=args.jobs))
 
     if not args.dry_run:
         print('\nKlart. Kör ./quality.sh för att se förbättringen.')

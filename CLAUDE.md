@@ -85,7 +85,7 @@ Data-kataloger (gitignored):
 ./ocr_tesseract.sh                   # Bara Tesseract-steget
 ./detect_redactions.sh               # Redaktionsdetektering på befintliga text/OCR-par
 ./quality.sh [--top 30] [--per-page]
-./llm_correct.sh [--threshold 60]    # Claude Haiku korrigerar dåliga sidor
+./llm_correct.sh [--threshold 60] [--jobs 8]   # Claude Haiku korrigerar dåliga sidor (parallellt, default 4 jobb)
 ./llm_config.sh                                              # interaktiv meny (terminal) för backend/modell; utan TTY visas konfig
 ./llm_config.sh [--model X] [--provider claude|openai] [--reset]  # icke-interaktivt: visa/ändra llm_config.json utan webui
 ./merge_pages.sh --all               # Slå ihop text_pages/ → text/

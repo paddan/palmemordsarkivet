@@ -23,6 +23,7 @@ Wrapper-flaggor:
 
 Skickas vidare till src/llm_correct.py (alla okända flaggor passerar igenom):
   --threshold N           score-tröskel (default: 50)
+  --jobs N                antal parallella LLM-anrop (default: env JOBS eller 4)
   --provider PROVIDER     claude (default) eller openai
   --model MODEL           modellnamn (default: claude-haiku-4-5-20251001 / gpt-4o-mini)
   --base-url URL          override API-URL, t.ex. https://api.deepseek.com/v1
