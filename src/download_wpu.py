@@ -27,6 +27,8 @@ from tenacity import (
     wait_random_exponential,
 )
 
+import db as state_db
+
 ROOT = Path(__file__).resolve().parents[1]
 OUT_DIR = ROOT / "downloaded" / "wpu_files"
 WPU_API = "https://wpu.nu/api.php"
@@ -144,6 +146,29 @@ def _download(session: requests.Session, url: str, dest: Path) -> None:
         raise
 
 
+def _display_out_dir(out_dir: Path) -> str:
+    try:
+        return str(out_dir.relative_to(ROOT)) + "/"
+    except ValueError:
+        return str(out_dir) + "/"
+
+
+def _record_wpu_download(conn, file_info: dict, dest: Path) -> None:
+    state_db.record_download(
+        conn,
+        source="wpu",
+        url=file_info["url"],
+        filename=file_info["name"],
+        bytes_=file_info.get("size"),
+    )
+    state_db.upsert_pdf_file(
+        conn,
+        pdf_stem=dest.stem,
+        source="wpu",
+        pdf_path=str(dest),
+    )
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -168,9 +193,14 @@ def main() -> int:
 
     out_dir = Path(args.out)
     if not args.dry_run:
-        out_dir.mkdir(exist_ok=True)
+        out_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"Laddar ned wpu.nu-PDF:er → {out_dir.relative_to(ROOT)}/")
+    conn = None
+    if not args.dry_run:
+        conn = state_db.connect()
+        state_db.init_schema(conn)
+
+    print(f"Laddar ned wpu.nu-PDF:er → {_display_out_dir(out_dir)}")
     print("Hämtar fillista från wpu.nu…")
     all_wpu = fetch_all_wpu_files()
     pdfs = [f for f in all_wpu if f["name"].lower().endswith(".pdf")]
@@ -179,10 +209,17 @@ def main() -> int:
         pdfs = pdfs[:args.limit]
         print(f"Test-läge: begränsar till {args.limit} filer")
 
-    already_local = (
-        {f.name.lower() for f in out_dir.iterdir() if f.is_file() and f.suffix.lower() == ".pdf"}
-        if out_dir.is_dir() else set()
+    local_pdfs = (
+        {f.name.lower(): f for f in out_dir.iterdir() if f.is_file() and f.suffix.lower() == ".pdf"}
+        if out_dir.is_dir() else {}
     )
+    already_local = set(local_pdfs)
+
+    if conn is not None and not args.rebuild:
+        for f in pdfs:
+            local = local_pdfs.get(f["name"].lower())
+            if local is not None:
+                _record_wpu_download(conn, f, local)
 
     to_download = [
         f for f in pdfs
@@ -223,6 +260,8 @@ def main() -> int:
         )
         try:
             _download(session, f["url"], dest)
+            if conn is not None:
+                _record_wpu_download(conn, f, dest)
             done += 1
             print()
         except Exception as e:

@@ -18,7 +18,7 @@ Kommandon:
   list-failed                          → skriv en stem per rad (alla tesseract_failed=1)
   list-blacklisted                     → skriv en stem per rad (alla tesseract_blacklisted_at IS NOT NULL)
 
-Engångsmigrering av legacy .ocr-done/.ocr-failed-markörfiler sköts av migrate_to_db.py.
+Legacy .ocr-done/.ocr-failed-markörfiler läses inte längre; state.db är källan.
 """
 
 from __future__ import annotations

@@ -18,7 +18,7 @@ Sammansatt ``<out_dir>/<stem>.txt`` skrivs på slutet, sidor separerade med ``\f
 Engines:
     tesseract  — subprocess till `tesseract`
     vision     — subprocess till `ocrit` (macOS Vision Framework)
-    surya      — Surya-modeller, samma stack som ocr_surya.py
+    surya      — Surya-modeller via helpers i den här modulen
 
 Kör:
     python ocr_pages.py --in path/to/foo.pdf --out-dir text_pages

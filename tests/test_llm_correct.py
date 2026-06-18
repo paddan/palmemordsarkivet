@@ -14,6 +14,26 @@ sys.path.insert(0, str(ROOT / "src"))
 from llm_correct import _correct_all, _openai, _resolve_api_key
 
 
+class _FakeAsyncOpenAIClient:
+    def __init__(self, response: MagicMock) -> None:
+        self.chat = MagicMock()
+        self.chat.completions.create = AsyncMock(return_value=response)
+        self.closed = False
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        self.closed = True
+
+
+def _openai_response(content: str) -> MagicMock:
+    mock_response = MagicMock()
+    mock_response.choices = [MagicMock()]
+    mock_response.choices[0].message.content = content
+    return mock_response
+
+
 def test_claude_reads_anthropic_key(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
@@ -79,12 +99,7 @@ def test_deepseek_base_url_missing_key_raises(monkeypatch):
 
 
 def test_openai_returns_corrected_text():
-    mock_response = MagicMock()
-    mock_response.choices = [MagicMock()]
-    mock_response.choices[0].message.content = "rättad text"
-
-    mock_client = AsyncMock()
-    mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
+    mock_client = _FakeAsyncOpenAIClient(_openai_response("rättad text"))
 
     with patch("llm_correct.AsyncOpenAI", return_value=mock_client):
         result = asyncio.run(_openai(
@@ -94,15 +109,11 @@ def test_openai_returns_corrected_text():
             api_key="sk-test",
         ))
     assert result == "rättad text"
+    assert mock_client.closed
 
 
 def test_openai_fallback_on_empty_response():
-    mock_response = MagicMock()
-    mock_response.choices = [MagicMock()]
-    mock_response.choices[0].message.content = ""
-
-    mock_client = AsyncMock()
-    mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
+    mock_client = _FakeAsyncOpenAIClient(_openai_response(""))
 
     with patch("llm_correct.AsyncOpenAI", return_value=mock_client):
         result = asyncio.run(_openai(
@@ -112,15 +123,11 @@ def test_openai_fallback_on_empty_response():
             api_key="sk-test",
         ))
     assert result == "original text"
+    assert mock_client.closed
 
 
 def test_openai_uses_local_as_fallback_api_key():
-    mock_response = MagicMock()
-    mock_response.choices = [MagicMock()]
-    mock_response.choices[0].message.content = "svar"
-
-    mock_client = AsyncMock()
-    mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
+    mock_client = _FakeAsyncOpenAIClient(_openai_response("svar"))
 
     captured_kwargs = {}
 
@@ -137,6 +144,7 @@ def test_openai_uses_local_as_fallback_api_key():
         ))
     assert captured_kwargs["api_key"] == "local"
     assert captured_kwargs["base_url"] == "http://localhost:11434/v1"
+    assert mock_client.closed
 
 
 def test_correct_all_dispatches_to_claude(tmp_path, monkeypatch):

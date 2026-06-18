@@ -12,7 +12,14 @@ import sys
 from pathlib import Path
 
 import streamlit as st
-from st_link_analysis import EdgeStyle, NodeStyle, st_link_analysis
+
+try:
+    from st_link_analysis import EdgeStyle, NodeStyle, st_link_analysis
+except ImportError:  # pragma: no cover — optional extra
+    st.set_page_config(page_title="Palmemordsarkivet — Graf", layout="wide")
+    st.title("Kunskapsgraf")
+    st.warning("Installera grafstödet med `pip install -e .[graph]`.")
+    st.stop()
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))

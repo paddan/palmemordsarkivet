@@ -6,7 +6,7 @@
 # rekursivt sig själv (./ocr.sh --redo --mode pages).
 #
 # --redo-läge: kör om OCR på filer/sidor som ligger under en kvalitetströskel.
-#   --mode files  — ocrmypdf --redo-ocr på hela filer från quality.csv
+#   --mode files  — ocrmypdf --redo-ocr på hela filer från quality-tabellen
 #   --mode pages  — Surya på enstaka sidor från quality_pages-tabellen (default)
 #
 # Användning:
@@ -34,7 +34,7 @@ Default-läge (full pipeline):
   5. ./quality.sh --per-page                  # quality + quality_pages (db)
   6. ./ocr.sh --redo --mode pages             # Surya på sidor under tröskeln
                                               # (palme + kvarvarande wpu)
-  7. ./quality.sh                             # uppdaterad quality.csv
+  7. ./quality.sh --per-page                  # uppdaterad quality + quality_pages
 
 Steg 6 hoppas över om --skip-redo eller om Surya inte är installerat.
 
@@ -45,7 +45,7 @@ Flaggor (default visas inom parentes):
   --redo                  hoppa direkt till redo-logiken (steg 3 ovan)
   --mode files|pages      bara med --redo (pages)
                             files = ocrmypdf --redo-ocr på hela filer från
-                                    quality.csv
+                                    quality-tabellen
                             pages = Surya på enstaka sidor från
                                     quality_pages-tabellen i db
   --threshold N           score-tröskel för om-OCR (50)
@@ -55,11 +55,9 @@ Flaggor (default visas inom parentes):
   --in DIR                ingångskatalog med PDF:er (\$ROOT/downloaded/files)
   --ocr DIR               output-katalog för OCR-PDF:er (\$ROOT/generated/ocr)
   --txt DIR               output-katalog för .txt (\$ROOT/generated/text)
-  --csv FILE              DEPRECATED — quality läses nu från db.quality-tabellen
-  --pages-jsonl FILE      DEPRECATED — bad pages läses nu från db.quality_pages
   --pages-out DIR         output-katalog för per-sida (\$ROOT/generated/text_pages)
   --from-list FILE        --redo --mode files: läs filnamn från textfil (en per
-                          rad) istället för att filtrera quality.csv. Användbart
+                          rad) istället för att filtrera quality-tabellen. Användbart
                           för att om-OCR:a filer som ingest.py flaggade som
                           'inga användbara chunks' (skrivs till generated/unusable.txt).
   --no-update-pdf         hoppa PDF-textlager-patchen efter Surya per sida
@@ -82,8 +80,6 @@ PER_FILE_JOBS=${PER_FILE_JOBS:-2}
 IN=${IN:-}
 OCR=${OCR:-}
 TXT=${TXT:-}
-CSV=${CSV:-}
-PAGES_JSONL=${PAGES_JSONL:-}
 PAGES_OUT=${PAGES_OUT:-}
 FROM_LIST=${FROM_LIST:-}
 RETRY_FAILED=${RETRY_FAILED:-0}
@@ -102,8 +98,6 @@ while [ $# -gt 0 ]; do
     --in)              IN="$2"; shift 2 ;;
     --ocr)             OCR="$2"; shift 2 ;;
     --txt)             TXT="$2"; shift 2 ;;
-    --csv)             CSV="$2"; shift 2 ;;
-    --pages-jsonl)     PAGES_JSONL="$2"; shift 2 ;;
     --pages-out)       PAGES_OUT="$2"; shift 2 ;;
     --from-list)       FROM_LIST="$2"; shift 2 ;;
     --retry-failed)    RETRY_FAILED=1; shift ;;
@@ -115,8 +109,6 @@ done
 IN=${IN:-$ROOT/downloaded/files}
 OCR=${OCR:-$ROOT/generated/ocr}
 TXT=${TXT:-$ROOT/generated/text}
-CSV=${CSV:-$ROOT/generated/quality.csv}
-PAGES_JSONL=${PAGES_JSONL:-$ROOT/generated/quality_pages.jsonl}
 PAGES_OUT=${PAGES_OUT:-$ROOT/generated/text_pages}
 
 if ! printf '%s' "$THRESHOLD" | grep -qE '^[0-9]+(\.[0-9]+)?$'; then
@@ -176,7 +168,7 @@ if [ "$REDO_ONLY" = "0" ]; then
     ./ocr.sh --redo --mode pages --threshold "$THRESHOLD" --jobs "$JOBS" --per-file-jobs "$PER_FILE_JOBS" ${redo_extra[@]+"${redo_extra[@]}"}
 
     step "7/7  Uppdaterad kvalitetsbedömning"
-    ./quality.sh
+    ./quality.sh --per-page
   fi
 
   t1=$(date +%s)
@@ -345,7 +337,7 @@ PYEOF
   exit 0
 fi
 
-# MODE=files: plocka filnamnen ur CSV (eller --from-list).
+# MODE=files: plocka filnamnen ur quality-tabellen (eller --from-list).
 PYBIN="$ROOT/.venv/bin/python"
 [ -x "$PYBIN" ] || PYBIN="python3"
 
@@ -403,7 +395,7 @@ PYEOF
     [ "$NO_UPDATE_PDF" = "1" ] && redo_extra+=(--no-update-pdf)
     ./ocr.sh --redo --mode pages --threshold "$THRESHOLD" --jobs "$JOBS" \
              --per-file-jobs "$PER_FILE_JOBS" ${redo_extra[@]+"${redo_extra[@]}"}
-    ./quality.sh --files-from "$FROM_LIST"
+    ./quality.sh --per-page --files-from "$FROM_LIST"
   fi
 
   t1=$(date +%s)

@@ -26,7 +26,6 @@ Pipeline: download → OCR (Tesseract + optional Surya) → detect redactions �
 ```
 src/
   db.py                # SQLite-state: schema + CRUD + delta-queries för hela pipelinen
-  migrate_to_db.py     # Engångsmigrering: legacy filstate → generated/db/state.db
   download.py          # Google Drive PDF downloader (state via db.py)
   quality.py           # OCR quality scoring (0–100 heuristics + optional hunspell)
   ocr_pages.py         # Per-page OCR pipeline (Tesseract/Surya) + redaktionsdetektering

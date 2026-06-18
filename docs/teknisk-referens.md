@@ -10,7 +10,7 @@ snabbstart, se [Kom igång](kom-igang.md).
 Alla pipeline-markörer och status lagras i SQLite (`generated/db/state.db`).
 Inspektera med t.ex. `sqlite3 generated/db/state.db`. Tabellerna:
 
-- `downloads` — Drive- och wpu-nedladdningar (drive_id, sha1, filename)
+- `downloads` — palmemordsarkivet- och wpu-nedladdningar (Drive-ID eller URL, sha1 där det finns, filename, bytes)
 - `pdf_files` — per-PDF-status (redaction_checked_at, merged_at, normalized_at, text_mtime, tesseract_done_at, tesseract_failed, tesseract_blacklisted_at)
 - `pdf_pages` — per-sida OCR-resultat (text, engine, score)
 - `quality` / `quality_pages` — kvalitetspoäng per fil och sida
@@ -115,7 +115,7 @@ du delarna direkt:
 ./ocr_tesseract.sh               # Tesseract på alla nya filer
 ./quality.sh --per-page          # bedöm + skriv per-sida-poäng till state.db (tabellerna quality/quality_pages)
 ./ocr.sh --redo --mode pages     # Surya på sidor under tröskeln
-./quality.sh                     # uppdaterad bedömning
+./quality.sh --per-page          # uppdaterad fil- och per-sida-bedömning
 ```
 
 ```bash
@@ -195,8 +195,9 @@ Kostnad: Claude Haiku är billig (~$0,25/M tokens). En typisk OCR-sida
 är ~600–1 000 tokens — om 5 % av ~47 000 sidor är dåliga är totalkostnaden
 ~$25–40 för hela arkivet.
 
-Kör sedan `./ingest.sh` för att re-indexera ändrade filer (mtime-detektering
-fångar dem automatiskt).
+Kör sedan `./quality.sh --per-page` och därefter `./ingest.sh` för att uppdatera
+per-sida-poängen och re-indexera ändrade filer. `run_pipeline.sh --with-llm`
+gör båda stegen automatiskt.
 
 ### 3. Indexera i vektor-DB
 
@@ -534,8 +535,6 @@ delas mellan webui och `llm_config.sh` så att valen alltid är identiska.
 | `llm_config.sh` → `src/llm_config_cli.py` | Visa/ändra `generated/llm_config.json` utan webui (interaktiv meny i terminal) |
 | `src/citations.py` | Slår upp `[Nr X, sida Y]`-citat mot PDF:er och renderar citatlänkar |
 | `src/webui.py` | Streamlit-webgränssnitt för frågor (RAG + MCP-toggle) |
-| `migrate_to_db.sh` → `src/migrate_to_db.py` | Engångsmigrering av legacy filmarkörer → `state.db` |
-| `cleanup_legacy_state.sh` | Ta bort kvarvarande legacy-markörfiler efter migrering |
 | `extract_entities.sh` → `src/graph/extract_entities.py` | Entitets-/relationsextraktion till `doc_entities` i state.db (Claude Haiku) |
 | `load_graph.sh` → `src/graph/load_neo4j.py` | Ladda kunskapsgrafen från state.db till Neo4j |
 | `neo4j.sh` | Starta/stoppa Neo4j via podman (genererar lösenord → `neo4j/.password`) |

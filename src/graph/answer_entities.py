@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+from urllib.parse import urlparse
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -89,11 +90,29 @@ def resolve_entity_cfg(saved: dict) -> dict | None:
                 "base_url": "", "api_key": ""}
     if saved.get("provider") == "openai":
         base_url = saved.get("base_url", "")
-        api_key = os.environ.get("OPENAI_API_KEY", "")
+        api_key = _api_key_for_openai_base_url(base_url)
+        if base_url and _required_env_for_openai_base_url(base_url) and not api_key:
+            return None
         if base_url or api_key:
             return {"provider": "openai",
                     "model": saved.get("model") or OPENAI_DEFAULT_MODEL,
                     "base_url": base_url, "api_key": api_key}
+    return None
+
+
+def _api_key_for_openai_base_url(base_url: str) -> str:
+    env = _required_env_for_openai_base_url(base_url)
+    if env:
+        return os.environ.get(env, "")
+    return os.environ.get("OPENAI_API_KEY", "")
+
+
+def _required_env_for_openai_base_url(base_url: str) -> str | None:
+    host = (urlparse(base_url).hostname or "").lower()
+    if "deepseek.com" in host:
+        return "DEEPSEEK_API_KEY"
+    if "openai.com" in host:
+        return "OPENAI_API_KEY"
     return None
 
 
@@ -119,15 +138,15 @@ async def _openai_call(text: str, model: str, base_url: str, api_key: str) -> st
     """Skicka svarstexten till en OpenAI-kompatibel modell, returnera råsvaret."""
     if AsyncOpenAI is None:
         raise RuntimeError("openai-paketet saknas — kör: pip install openai")
-    client = AsyncOpenAI(api_key=api_key or "local", base_url=base_url or None)
-    response = await client.chat.completions.create(
-        model=model,
-        messages=[
-            {"role": "system", "content": _SYSTEM},
-            {"role": "user", "content": text},
-        ],
-        max_tokens=512,
-    )
+    async with AsyncOpenAI(api_key=api_key or "local", base_url=base_url or None) as client:
+        response = await client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": _SYSTEM},
+                {"role": "user", "content": text},
+            ],
+            max_tokens=512,
+        )
     return response.choices[0].message.content or ""
 
 

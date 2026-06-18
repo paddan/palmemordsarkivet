@@ -41,6 +41,88 @@ def test_run_pipeline_resumes_pending_steps_without_new_downloads(tmp_path: Path
     assert "ingest.sh" in calls
 
 
+def test_run_pipeline_refreshes_quality_after_llm(tmp_path: Path) -> None:
+    project_root = Path(__file__).resolve().parents[1]
+    script = tmp_path / "run_pipeline.sh"
+    script.write_text(
+        (project_root / "run_pipeline.sh").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+
+    for name in ("download.sh", "ocr.sh", "llm_correct.sh", "quality.sh", "ingest.sh"):
+        _stub(tmp_path, name)
+
+    result = subprocess.run(
+        [str(script), "--skip-wpu", "--with-llm", "--skip-redo"],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    calls = (tmp_path / "calls").read_text(encoding="utf-8").splitlines()
+    assert calls.index("llm_correct.sh") < calls.index("quality.sh") < calls.index("ingest.sh")
+
+
+def test_ocr_refreshes_per_page_quality_after_surya() -> None:
+    project_root = Path(__file__).resolve().parents[1]
+    text = (project_root / "ocr.sh").read_text(encoding="utf-8")
+    after_surya = text.split('step "7/7  Uppdaterad kvalitetsbedömning"', 1)[1]
+    assert "./quality.sh --per-page" in after_surya
+
+
+def test_quality_help_mentions_state_db_not_legacy_files() -> None:
+    project_root = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        [str(project_root / "quality.sh"), "--help"],
+        cwd=project_root,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0
+    assert "state.db" in result.stdout
+    assert "quality.csv" not in result.stdout
+    assert "quality_pages.jsonl" not in result.stdout
+    assert "--out FILE" not in result.stdout
+    assert "--pages-out FILE" not in result.stdout
+
+
+def test_download_wpu_help_only_lists_supported_flags() -> None:
+    project_root = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        [str(project_root / "download_wpu.sh"), "--help"],
+        cwd=project_root,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0
+    assert "--dry-run" in result.stdout
+    assert "--limit" in result.stdout
+    assert "id-only" not in result.stdout
+    assert "da-only" not in result.stdout
+
+
+def test_legacy_migration_files_are_removed() -> None:
+    project_root = Path(__file__).resolve().parents[1]
+    for path in (
+        project_root / "src" / "migrate_to_db.py",
+        project_root / "migrate_to_db.sh",
+        project_root / "cleanup_legacy_state.sh",
+    ):
+        assert not path.exists(), f"{path} ska vara borttagen"
+
+
+def test_graph_page_handles_missing_link_analysis_import() -> None:
+    project_root = Path(__file__).resolve().parents[1]
+    text = (project_root / "src" / "pages" / "1_Graf.py").read_text(encoding="utf-8")
+    assert "except ImportError" in text
+    assert "st-link-analysis" in text
+
+
 # ---------------------------------------------------------------------------
 # ocr_db_helper.py — text_mtime-stämpling
 # ---------------------------------------------------------------------------

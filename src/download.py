@@ -105,6 +105,7 @@ def build_filename(values: dict[str, str], maxlen: int = 180) -> str:
 
 
 _TRANSIENT_STATUS = {408, 429, 500, 502, 503, 504}
+_RETRYABLE_FAILURE_NOTES = {"failed:html-response"}
 
 
 def _is_transient(exc: BaseException) -> bool:
@@ -114,6 +115,23 @@ def _is_transient(exc: BaseException) -> bool:
         resp = getattr(exc, "response", None)
         return resp is not None and resp.status_code in _TRANSIENT_STATUS
     return False
+
+
+def _permanent_failure_note(exc: BaseException) -> str | None:
+    """Returnera state.db-note för fel som säkert ska hoppas över framöver.
+
+    Drive kan svara med HTML både vid borttagna filer och throttling/rate limit.
+    De RuntimeError-fallen ska därför inte registreras permanent: hellre ett
+    nytt försök i nästa körning än att arkivet tappar ett dokument för gott.
+    """
+    if not isinstance(exc, requests.HTTPError) or _is_transient(exc):
+        return None
+    status = getattr(getattr(exc, "response", None), "status_code", "?")
+    return f"failed:{status}"
+
+
+def _is_retryable_failure_note(note: str | None) -> bool:
+    return note in _RETRYABLE_FAILURE_NOTES
 
 
 @retry(
@@ -258,24 +276,25 @@ def main() -> int:
         todo = todo[:args.limit]
         print(f"Test-läge: begränsar till {args.limit} filer")
 
+    download_rows = list(conn.execute(
+        "SELECT drive_id, sha1, filename, note FROM downloads WHERE source=?",
+        (source,),
+    ))
     manifest_ids = {
-        r["drive_id"] for r in conn.execute(
-            "SELECT drive_id FROM downloads WHERE source=? AND drive_id IS NOT NULL",
-            (source,),
-        )
+        r["drive_id"] for r in download_rows
+        if r["drive_id"] is not None and not _is_retryable_failure_note(r["note"])
     }
     perm_failed_ids = {
-        r["drive_id"] for r in conn.execute(
-            "SELECT drive_id FROM downloads"
-            " WHERE source=? AND note LIKE 'failed:%' AND drive_id IS NOT NULL",
-            (source,),
+        r["drive_id"] for r in download_rows
+        if (
+            r["drive_id"] is not None
+            and (r["note"] or "").startswith("failed:")
+            and not _is_retryable_failure_note(r["note"])
         )
     }
     manifest_sha1s = {
-        r["sha1"]: r["filename"] for r in conn.execute(
-            "SELECT sha1, filename FROM downloads WHERE source=? AND sha1 IS NOT NULL",
-            (source,),
-        )
+        r["sha1"]: r["filename"] for r in download_rows
+        if r["sha1"] is not None
     }
 
     # Filnamns-stem-fallback för befintliga nedladdningar (pre-manifest)
@@ -384,17 +403,9 @@ def main() -> int:
                 except OSError:
                     pass
             # Permanenta fel registreras i state.db så att filen hoppas över
-            # vid nästa körning. Två fall:
-            # 1. HTTP-fel som inte är transienta (t.ex. 404).
-            # 2. RuntimeError från drive_download när Drive svarar med HTML
-            #    (borttagen fil eller oväntat svar).
-            if isinstance(e, requests.HTTPError) and not _is_transient(e):
-                status = getattr(getattr(e, "response", None), "status_code", "?")
-                note = f"failed:{status}"
-            elif isinstance(e, RuntimeError):
-                note = "failed:html-response"
-            else:
-                note = None
+            # vid nästa körning. HTML-svar från Drive är avsiktligt retrybara:
+            # de kan vara rate-limit lika gärna som borttagna filer.
+            note = _permanent_failure_note(e)
             if note:
                 state_db.record_download(
                     conn, source=source, drive_id=file_id,

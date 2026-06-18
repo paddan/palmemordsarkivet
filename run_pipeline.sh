@@ -7,6 +7,7 @@
 #   3. ocr.sh                    — Tesseract → detect_redactions → normalize →
 #                                  quality → ev. Surya → quality
 #   4. llm_correct.sh            — LLM-korrigering av dåliga sidor (kräver --with-llm)
+#      quality.sh --per-page     — uppdatera quality/quality_pages efter LLM
 #   5. ingest.sh                 — indexera till LanceDB
 #
 # Användning:
@@ -97,6 +98,8 @@ ocr_flags=()
 if [ "$WITH_LLM" = "1" ]; then
   step "4/5  LLM-korrigering av låga sidor (./llm_correct.sh)"
   ./llm_correct.sh
+  step "4b/5  Uppdaterad kvalitetsbedömning efter LLM (./quality.sh --per-page)"
+  ./quality.sh --per-page
 else
   echo
   echo "━━━━━ Hoppar steg 4 (llm_correct — lägg till --with-llm för att aktivera) ━━━━━"

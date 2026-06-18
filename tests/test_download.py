@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from download import extract_drive_id, sniff_extension
+import requests
+
+from download import (
+    _is_retryable_failure_note,
+    _permanent_failure_note,
+    extract_drive_id,
+    sniff_extension,
+)
 
 
 def test_extract_drive_id_from_d_url() -> None:
@@ -41,3 +48,28 @@ def test_sniff_extension_unknown(tmp_path: Path) -> None:
     # filetype kan returnera "" för okänt
     ext = sniff_extension(p)
     assert ext == "" or ext.startswith(".")
+
+
+def test_html_runtime_error_is_retryable_not_permanent() -> None:
+    err = RuntimeError("fick HTML i andra svaret också (rate limit eller borttagen fil)")
+    assert _permanent_failure_note(err) is None
+
+
+def test_non_transient_http_error_is_permanent() -> None:
+    response = requests.Response()
+    response.status_code = 404
+    err = requests.HTTPError("HTTP 404", response=response)
+    assert _permanent_failure_note(err) == "failed:404"
+
+
+def test_transient_http_error_is_retryable_not_permanent() -> None:
+    response = requests.Response()
+    response.status_code = 503
+    err = requests.HTTPError("HTTP 503", response=response)
+    assert _permanent_failure_note(err) is None
+
+
+def test_legacy_html_failure_note_is_retryable() -> None:
+    assert _is_retryable_failure_note("failed:html-response")
+    assert not _is_retryable_failure_note("failed:404")
+    assert not _is_retryable_failure_note(None)

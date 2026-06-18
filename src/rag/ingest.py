@@ -307,9 +307,9 @@ def main() -> int:
     state_db.init_schema(state_conn)
     # Källa till sanning för "vad har indexerats sedan när": ingest-tabellen.
     # LanceDB-mtime behålls för bakåtkompat men läses inte längre.
-    # OBS: efter migreringen byggs `already` från `ingest`-tabellen. Om någon
-    # raderar state.db utan att köra migrate_to_db.py kommer LanceDB-tabellen
-    # att re-indexeras helt vid nästa körning (säkert, men slösigt).
+    # `already` byggs från `ingest`-tabellen. Om någon raderar state.db medan
+    # LanceDB-tabellen finns kvar re-indexeras tabellen helt vid nästa körning
+    # (säkert, men slösigt).
     already: dict[str, float] = {
         row["pdf_stem"] + ".txt": row["text_mtime"]
         for row in state_conn.execute(

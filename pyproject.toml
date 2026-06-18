@@ -58,14 +58,22 @@ ignore_missing_imports = true
 
 [tool.setuptools]
 py-modules = [
+    "backends",
+    "citations",
+    "config",
+    "db",
     "download",
+    "download_wpu",
     "quality",
-    "ocr_surya",
     "ocr_pages",
+    "ocr_db_helper",
     "build_user_words",
     "errors_log",
+    "llm_config_cli",
     "normalize_text",
     "llm_correct",
+    "merge_pages",
+    "merge_wpu",
     "webui",
 ]
 
@@ -74,4 +82,4 @@ py-modules = [
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["rag*"]
+include = ["rag*", "graph*"]

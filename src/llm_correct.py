@@ -98,18 +98,18 @@ async def _claude(text: str, model: str) -> str:
 async def _openai(text: str, model: str, base_url: str, api_key: str) -> str:
     if AsyncOpenAI is None:
         raise RuntimeError("openai-paketet saknas — kör: pip install openai")
-    client = AsyncOpenAI(
+    async with AsyncOpenAI(
         api_key=api_key or "local",
         base_url=base_url or None,
-    )
-    response = await client.chat.completions.create(
-        model=model,
-        messages=[
-            {"role": "system", "content": _SYSTEM},
-            {"role": "user", "content": text},
-        ],
-        max_tokens=4096,
-    )
+    ) as client:
+        response = await client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": _SYSTEM},
+                {"role": "user", "content": text},
+            ],
+            max_tokens=4096,
+        )
     return response.choices[0].message.content or text
 
 
@@ -352,7 +352,7 @@ def main() -> None:
     asyncio.run(_correct_all(bad, txt_dir, provider_cfg, args.dry_run, jobs=args.jobs))
 
     if not args.dry_run:
-        print('\nKlart. Kör ./quality.sh för att se förbättringen.')
+        print('\nKlart. Kör ./quality.sh --per-page för att se förbättringen.')
         print('Kör ./ingest.sh för att re-indexera ändrade filer.')
 
 

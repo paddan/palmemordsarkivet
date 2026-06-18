@@ -2,12 +2,30 @@
 from __future__ import annotations
 
 import sys
+import asyncio
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
 from graph.answer_entities import parse_entity_list
+
+
+class _FakeAsyncOpenAIClient:
+    def __init__(self, content: str) -> None:
+        response = MagicMock()
+        response.choices = [MagicMock()]
+        response.choices[0].message.content = content
+        self.chat = MagicMock()
+        self.chat.completions.create = AsyncMock(return_value=response)
+        self.closed = False
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        self.closed = True
 
 
 def test_parse_valid_list() -> None:
@@ -74,6 +92,36 @@ def test_resolve_entity_cfg_falls_back_to_openai(monkeypatch) -> None:
                    "base_url": "", "api_key": "sk-x"}
 
 
+def test_resolve_entity_cfg_uses_deepseek_key(monkeypatch) -> None:
+    from graph.answer_entities import resolve_entity_cfg
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "ds-x")
+    cfg = resolve_entity_cfg({
+        "provider": "openai",
+        "model": "deepseek-chat",
+        "base_url": "https://api.deepseek.com/v1",
+    })
+    assert cfg == {"provider": "openai", "model": "deepseek-chat",
+                   "base_url": "https://api.deepseek.com/v1",
+                   "api_key": "ds-x"}
+
+
+def test_resolve_entity_cfg_skips_deepseek_without_key(monkeypatch) -> None:
+    from graph.answer_entities import resolve_entity_cfg
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    cfg = resolve_entity_cfg({
+        "provider": "openai",
+        "model": "deepseek-chat",
+        "base_url": "https://api.deepseek.com/v1",
+    })
+    assert cfg is None
+
+
 def test_resolve_entity_cfg_local_base_url_needs_no_key(monkeypatch) -> None:
     from graph.answer_entities import resolve_entity_cfg
     monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
@@ -90,3 +138,14 @@ def test_resolve_entity_cfg_no_usable_llm(monkeypatch) -> None:
         monkeypatch.delenv(var, raising=False)
     assert resolve_entity_cfg({"provider": "claude"}) is None
     assert resolve_entity_cfg({"provider": "openai", "base_url": ""}) is None
+
+
+def test_openai_call_closes_client(monkeypatch) -> None:
+    from graph import answer_entities as ae
+    client = _FakeAsyncOpenAIClient('["Olof Palme"]')
+    monkeypatch.setattr(ae, "AsyncOpenAI", lambda **_kwargs: client)
+
+    raw = asyncio.run(ae._openai_call("svar", "gpt-4o-mini", "", "sk-x"))
+
+    assert raw == '["Olof Palme"]'
+    assert client.closed

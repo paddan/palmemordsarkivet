@@ -463,35 +463,35 @@ async def stream_openai(user_msg: str, placeholder, parts: list[str], cfg) -> No
     )
     base_url = cfg["base_url"]
     model = cfg["model"]
-    client = AsyncOpenAI(api_key=api_key or "ollama", base_url=base_url)
-    try:
-        stream = await client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_msg},
-            ],
-            stream=True,
-        )
-    except NotFoundError as exc:
-        hint = ""
-        if "page not found" in str(exc).lower() or "404" in str(exc):
-            hint = f"\n\n**Tips:** Kontrollera att endpoint-URL:en är rätt (`{base_url}`). Ollamas standard är `http://localhost:11434/v1`."
-        elif "not found" in str(exc).lower():
-            hint = f"\n\n**Tips:** Modellen `{model}` finns inte. Kör `ollama pull {model}` eller välj ett annat modellnamn."
-        st.error(f"404 från {base_url}: {exc}{hint}")
-        return
-    async for chunk in stream:
-        if not chunk.choices:
-            continue
-        delta = chunk.choices[0].delta.content
-        if delta is None:
-            continue
-        parts.append(delta)
-        placeholder.markdown("".join(parts))
-        if chunk.choices[0].finish_reason == "length":
-            parts.append("\n\n*[svar avklippt — öka kontextgränsen]*")
+    async with AsyncOpenAI(api_key=api_key or "ollama", base_url=base_url) as client:
+        try:
+            stream = await client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_msg},
+                ],
+                stream=True,
+            )
+        except NotFoundError as exc:
+            hint = ""
+            if "page not found" in str(exc).lower() or "404" in str(exc):
+                hint = f"\n\n**Tips:** Kontrollera att endpoint-URL:en är rätt (`{base_url}`). Ollamas standard är `http://localhost:11434/v1`."
+            elif "not found" in str(exc).lower():
+                hint = f"\n\n**Tips:** Modellen `{model}` finns inte. Kör `ollama pull {model}` eller välj ett annat modellnamn."
+            st.error(f"404 från {base_url}: {exc}{hint}")
+            return
+        async for chunk in stream:
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta.content
+            if delta is None:
+                continue
+            parts.append(delta)
             placeholder.markdown("".join(parts))
+            if chunk.choices[0].finish_reason == "length":
+                parts.append("\n\n*[svar avklippt — öka kontextgränsen]*")
+                placeholder.markdown("".join(parts))
 
 
 async def stream_to_string(hits, q, cfg, placeholder=None) -> str:
@@ -573,54 +573,53 @@ async def stream_openai_mcp(
     api_key = cfg.get("api_key_override") or (
         os.environ.get(cfg["env"]) if cfg.get("env") else "ollama"
     )
-    client = AsyncOpenAI(api_key=api_key or "ollama", base_url=cfg["base_url"])
-
     tool_count = 0
     try:
-        for _turn in range(10):
-            response = await client.chat.completions.create(
-                model=cfg["model"],
-                messages=messages,
-                tools=OPENAI_TOOLS,
-            )
-            choice = response.choices[0]
-            msg = choice.message
-
-            if choice.finish_reason == "tool_calls" and msg.tool_calls:
-                messages.append(
-                    {
-                        "role": "assistant",
-                        "content": msg.content,
-                        "tool_calls": [tc.model_dump() for tc in msg.tool_calls],
-                    }
+        async with AsyncOpenAI(api_key=api_key or "ollama", base_url=cfg["base_url"]) as client:
+            for _turn in range(10):
+                response = await client.chat.completions.create(
+                    model=cfg["model"],
+                    messages=messages,
+                    tools=OPENAI_TOOLS,
                 )
-                for tc in msg.tool_calls:
-                    args = json.loads(tc.function.arguments)
-                    tool_count += 1
-                    if tc.function.name == "search_archive":
-                        label = f'search_archive: "{args.get("query", "")}"'
-                    else:
-                        label = f'get_page: {args.get("source", "")}, sida {args.get("page", "")}'
-                    status_box.write(label)
-                    result = _run_tool(tc.function.name, args)
+                choice = response.choices[0]
+                msg = choice.message
+
+                if choice.finish_reason == "tool_calls" and msg.tool_calls:
                     messages.append(
                         {
-                            "role": "tool",
-                            "content": result,
-                            "tool_call_id": tc.id,
+                            "role": "assistant",
+                            "content": msg.content,
+                            "tool_calls": [tc.model_dump() for tc in msg.tool_calls],
                         }
                     )
+                    for tc in msg.tool_calls:
+                        args = json.loads(tc.function.arguments)
+                        tool_count += 1
+                        if tc.function.name == "search_archive":
+                            label = f'search_archive: "{args.get("query", "")}"'
+                        else:
+                            label = f'get_page: {args.get("source", "")}, sida {args.get("page", "")}'
+                        status_box.write(label)
+                        result = _run_tool(tc.function.name, args)
+                        messages.append(
+                            {
+                                "role": "tool",
+                                "content": result,
+                                "tool_call_id": tc.id,
+                            }
+                        )
+                else:
+                    final = msg.content or ""
+                    parts.append(final)
+                    text_placeholder.markdown(final)
+                    messages.append({"role": "assistant", "content": final})
+                    break
             else:
-                final = msg.content or ""
-                parts.append(final)
-                text_placeholder.markdown(final)
-                messages.append({"role": "assistant", "content": final})
-                break
-        else:
-            msg = "*[Svar avklippt — modellen nådde gränsen för antal verktygsanrop.]*"
-            parts.append(msg)
-            text_placeholder.markdown(msg)
-            messages.append({"role": "assistant", "content": msg})
+                msg = "*[Svar avklippt — modellen nådde gränsen för antal verktygsanrop.]*"
+                parts.append(msg)
+                text_placeholder.markdown(msg)
+                messages.append({"role": "assistant", "content": msg})
     except Exception as exc:
         error_msg = f"*Fel vid anrop till {cfg['model']}: {exc}*"
         parts.append(error_msg)
@@ -1063,4 +1062,3 @@ if ss.hits and not mcp_mode and not (submitted and q.strip()):
     if show_graph:
         _render_answer_graph(ss.answer_centers, "rag")
     _render_rag_sources(ss.hits, "cached")
-

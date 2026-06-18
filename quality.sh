@@ -1,10 +1,10 @@
 #!/bin/bash
-# Bedöm OCR-kvalitet på text/*.txt och skriv quality.csv (samt ev. quality_pages.jsonl).
+# Bedöm OCR-kvalitet på text/*.txt och skriv resultat till state.db.
 #
 # Användning:
-#   ./quality.sh                            # alla filer -> quality.csv
+#   ./quality.sh                            # alla filer -> quality-tabellen
 #   ./quality.sh --top 30                   # visa även värsta 30 i terminalen
-#   ./quality.sh --per-page                 # skriv även quality_pages.jsonl
+#   ./quality.sh --per-page                 # skriv även quality_pages-tabellen
 #   ./quality.sh --root DIR -- --limit 50   # alla quality.py-flaggor efter --
 #
 # Alla okända flaggor skickas vidare till quality.py.
@@ -21,13 +21,11 @@ Wrapper-flaggor:
 
 Skickas vidare till quality.py (alla okända flaggor passerar igenom):
   --top N                 visa även värsta N i terminalen
-  --out FILE              output-CSV (default: quality.csv)
   --limit N               bara N första filerna (för testkörning)
-  --per-page              skriv även quality_pages.jsonl
-  --pages-out FILE        sökväg för per-sida-output
+  --per-page              skriv även per-sida-poäng till state.db
   --text-dir DIR          katalog med .txt-filer att bedöma (default: generated/text/)
   --files-dir DIR         katalog med original-PDF:er (default: downloaded/files/)
-  --rebuild               ignorera stämpelfil och kör om alla filer
+  --rebuild               ignorera state.db-delta och kör om alla filer
 
 För full quality.py-hjälp: ./quality.sh -- --help
 EOF
