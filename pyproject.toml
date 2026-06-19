@@ -59,7 +59,9 @@ ignore_missing_imports = true
 [tool.setuptools]
 py-modules = [
     "Utredning",
+    "archive_browser",
     "backends",
+    "casebook_export",
     "casebook_ui",
     "citations",
     "config",
@@ -76,6 +78,7 @@ py-modules = [
     "llm_correct",
     "merge_pages",
     "merge_wpu",
+    "search_workbench",
 ]
 
 [tool.setuptools.package-dir]

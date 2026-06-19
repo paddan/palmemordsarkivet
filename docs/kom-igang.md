@@ -78,12 +78,22 @@ faktafrågor) och **MCP/utredningsläge** (autonomt, bättre täckning på kompl
 frågor). Toggla i sidofältet. Detaljer i
 [Teknisk referens](teknisk-referens.md#4-ställ-frågor).
 
+Fliken **Källor** låter dig bläddra och söka bland OCR-textdokumenten direkt.
+Varje träff visar en kort förhandsvisning och knappar för PDF, text och
+bokmärkning.
+
+Fliken **Sökverkstad** är till för manuell retrieval-granskning innan AI-svaret:
+testa söktermer, jämför vektor/hybrid/rerank, läs utdrag och bokmärk källor som
+är värda att ta vidare.
+
 När du hittar något intressant kan du spara svaret i fliken **Utredningspärm**.
 Sparade spår visas som kollapsade poster med kort rubrik; öppna posten för att
 se frågan, svaret, källkort med PDF/text-knappar, modellvalet och eventuella
 grafentiteter. Grafentiteterna kan öppnas som en länk som återskapar grafen i
 Graf-fliken. Du kan också bokmärka enskilda källor från källistan för att
-snabbt komma tillbaka till samma PDF eller sida senare.
+snabbt komma tillbaka till samma PDF eller sida senare. På Utredningspärm-sidan
+kan du dessutom ladda ner hela pärmen som Markdown eller JSON, till exempel för
+att dela anteckningar eller fortsätta arbetet i ett annat verktyg.
 
 ## Kunskapsgraf (valfritt)
 

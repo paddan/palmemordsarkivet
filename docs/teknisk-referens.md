@@ -320,6 +320,30 @@ lokalt (via `open`) i en gömd iframe så huvudsidan inte laddas om. Om samma
 dokument-ID delas av flera filer (t.ex. en palme- och en wpu-version) och svaret
 inte entydigt pekar ut vilken, visas en knapp per fil märkt med titeldelen.
 
+#### Källor-fliken
+
+Webgränssnittet har en fristående flik, **Källor**, för att bläddra, söka,
+förhandsvisa och bokmärka källdokument utan att först ställa en AI-fråga.
+Listan byggs från `generated/text/*.txt`; matchande PDF hittas i
+`generated/ocr`, `downloaded/files` eller `downloaded/wpu_files`. Sidan använder
+`src/archive_browser.py` för testbar listning, filtrering och preview-logik och
+renderar samma PDF/text-/bokmärkningsknappar som övriga källkort.
+
+#### Sökverkstad-fliken
+
+**Sökverkstad** är en fristående Streamlit-sida för manuell retrieval-inspektion
+innan något LLM-svar formuleras. Den laddar samma LanceDB-tabell och
+embedding-modell som Utredning-fliken, och återanvänder `search`,
+`search_hybrid` och `rerank` från `src/rag/ask.py`. I sidebaren väljer du
+sökfråga, vektor- eller hybrid/BM25-sökning, om cross-encoder-reranking ska
+användas samt `Top-K` och `Top-N`. Resultaten renderas som kort med stabil
+källa/sida/chunk-nyckel, rubrik och kollapsat utdrag via `src/search_workbench.py`.
+
+Sidan anropar ingen LLM. Den är till för att testa söktermer, jämföra
+vektor/hybrid/rerank och bokmärka källor innan du låter Utredning-fliken skriva
+ett svar. Källkort och bokmärken renderas med samma `casebook_ui.render_source_cards`
+som övriga webgränssnittet.
+
 #### Utredningspärm och bokmärken
 
 Webgränssnittet har en egen flik, **Utredningspärm**, för återupptagbart
@@ -340,6 +364,10 @@ Källlistorna i både RAG- och MCP-läget har dessutom knappen **Bokmärk**. Den
 sparar eller uppdaterar källan i `source_bookmarks`, deduplicerat på
 `source` + `page` (okänd sida lagras som 0 internt men visas som tom sida i UI).
 Bokmärkena visas på Utredningspärm-sidan och kan öppna matchande PDF lokalt.
+Samma sida har också nedladdningsknappar för hela pärmen som Markdown och JSON.
+Exporten görs i `src/casebook_export.py` utan schemaändring: Markdown-formatet
+är ett läsbart lokalt arbetsdokument, medan JSON-formatet bevarar `entries` och
+`bookmarks` med indenterad UTF-8-vänlig standard-JSON för vidare bearbetning.
 
 #### Kunskapsgraf till svaret
 
@@ -558,8 +586,13 @@ delas mellan Utredning-fliken och `llm_config.sh` så att valen alltid är ident
 | `llm_config.sh` → `src/llm_config_cli.py` | Visa/ändra `generated/llm_config.json` utan webgränssnittet (interaktiv meny i terminal) |
 | `src/citations.py` | Slår upp `[Nr X, sida Y]`-citat mot PDF:er och renderar citatlänkar |
 | `src/Utredning.py` | Streamlit-flik för frågor (RAG + MCP-toggle), svarsgraf, sparknapp och källbokmärken |
+| `src/archive_browser.py` | Ren logik för Källor-fliken: dokumentmetadata, sortering, filtrering och textförhandsvisning |
+| `src/casebook_export.py` | Markdown/JSON-export av sparade svar och källbokmärken |
 | `src/casebook_ui.py` | Delade Streamlit-komponenter för utredningspärm och källbokmärken |
+| `src/search_workbench.py` | Ren formatteringslogik för Sökverkstadens träffnycklar, rubriker och utdrag |
+| `src/pages/1_Källor.py` | Streamlit-sida för att bläddra, söka, öppna och bokmärka källdokument |
 | `src/pages/2_Utredningspärm.py` | Streamlit-sida för sparade fråga/svar-spår och bokmärkta källor |
+| `src/pages/4_Sökverkstad.py` | Streamlit-sida för manuell vektor-/hybridsökning, rerank-granskning och källbokmärken |
 | `extract_entities.sh` → `src/graph/extract_entities.py` | Entitets-/relationsextraktion till `doc_entities` i state.db (Claude Haiku) |
 | `load_graph.sh` → `src/graph/load_neo4j.py` | Ladda kunskapsgrafen från state.db till Neo4j |
 | `neo4j.sh` | Starta/stoppa Neo4j via podman (genererar lösenord → `neo4j/.password`) |
@@ -595,8 +628,11 @@ Testerna täcker: `score_text` (quality), `chunk_text` (ingest), `extract_drive_
 LLM-korrektionslogiken (llm_correct), re-ingest-flödet (ingest), state-databasen inkl.
 delta-urval och `text_mtime`-stämpling (db, ocr_db_helper, normalize, quality),
 citatuppslag/-länkning (citations), RRF-hybridsökningen (ask) och `get_page` (mcp_server),
-entitetsextraktion (extract_entities), graf-laddning (load_neo4j) och
-nyckelentiteter ur svar (answer_entities).
+entitetsextraktion (extract_entities), graf-laddning (load_neo4j),
+nyckelentiteter ur svar (answer_entities), källbläddrarens filter/preview
+(archive_browser), Sökverkstadens träffformatterare (search_workbench),
+utredningspärmens UI-hjälpare och Markdown/JSON-export (casebook_ui,
+casebook_export).
 Fixturen som genererar en mini-PDF med pymupdf skipas gracefully om pymupdf inte är installerat.
 
 ## Felloggning

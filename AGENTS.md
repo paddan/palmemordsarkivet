@@ -17,7 +17,7 @@ När du gör förändringar i projektet ska du **alltid** uppdatera den använda
 
 ## Project Overview
 
-**palmemordsarkivet** laddar ner, OCR-processar och gör 3 762 palme-PDF:er + 7 155 wpu-PDF:er (~47 000 sidor, 8 665 sökbara dokument efter merge) från palmemordsarkivet.se och wpu.nu sökbara via RAG + Codex Opus 4.7, med Streamlit-flikarna Utredning, Utredningspärm och Graf. Alla kommentarer och docstrings är på svenska.
+**palmemordsarkivet** laddar ner, OCR-processar och gör 3 762 palme-PDF:er + 7 155 wpu-PDF:er (~47 000 sidor, 8 665 sökbara dokument efter merge) från palmemordsarkivet.se och wpu.nu sökbara via RAG + Codex Opus 4.7, med Streamlit-flikarna Utredning, Källor, Utredningspärm, Graf och Sökverkstad. Alla kommentarer och docstrings är på svenska.
 
 Pipeline: download → OCR (Tesseract + optional Surya) → detect redactions → normalize → quality scoring → LanceDB ingest → RAG query → Streamlit UI.
 
@@ -35,10 +35,15 @@ src/
   build_user_words.py  # Generera Tesseract user-words från OCR-text
   errors_log.py        # Centraliserad felloggning (tab-separerad)
   Utredning.py         # Streamlit-frågesida (RAG/MCP, svarsgraf, sparknapp, bokmärken)
+  archive_browser.py   # Ren logik för Källor-fliken: listning, filter och preview
+  casebook_export.py   # Markdown/JSON-export av utredningspärm och källbokmärken
   casebook_ui.py       # Delade Streamlit-komponenter för utredningspärm + bokmärken
+  search_workbench.py  # Formattering för Sökverkstadens träffnycklar, rubriker och utdrag
   pages/
+    1_Källor.py        # Bläddra, sök, öppna och bokmärk källdokument
     2_Utredningspärm.py # Sparade fråga/svar-spår och källbokmärken
     3_Graf.py          # Fristående grafsida
+    4_Sökverkstad.py   # Manuell vektor-/hybridsökning och källgranskning
   rag/
     ingest.py          # LanceDB vector index builder
     ask.py             # RAG query + Codex integration
@@ -47,7 +52,7 @@ src/
     load_neo4j.py       # Ladda doc_entities → Neo4j (MERGE, idempotent) + namnkanonisering
     viz.py              # Ego-nätverk för flera center (Cypher → noder/kanter, dedup) + Cytoscape-konvertering
     answer_entities.py  # LLM (Haiku) listar nyckelentiteter ur ett RAG-svar → inline-grafen i Utredning
-tests/                 # pytest (test_quality, test_chunk, test_download, test_merge_pages, test_detect_redactions, test_reingest, test_normalize_text, test_answer_entities)
+tests/                 # pytest (test_quality, test_chunk, test_download, test_merge_pages, test_detect_redactions, test_reingest, test_normalize_text, test_answer_entities, test_archive_browser, test_search_workbench, test_casebook_export)
 *.sh                   # Bash-wrappers (aktiverar .venv, läser API-nycklar, vidarebefordrar flaggor)
 tessdata/              # swe_best.traineddata, swe.user-words, tesseract.config
 ```
@@ -107,11 +112,20 @@ lever också här i `casebook_entries` och `source_bookmarks`. Inkrementell logi
 bygger på att jämföra `pdf_files.text_mtime` mot `normalized_at`/`scored_at`/etc.
 `--rebuild` tvingar omkörning. Modulen `src/db.py` exponerar alla CRUD- och delta-queries; konsumenter skriver aldrig egen SQL.
 
-**Utredningspärm → Graf**: sparade svar i Utredningspärmen visas kollapsade.
+**Utredningspärm → Graf/export**: sparade svar i Utredningspärmen visas kollapsade.
 När en post öppnas renderas källor som källkort med PDF/text-knappar och
 grafentiteter som en länk till Graf-sidan. Länken kodar sparade center-entiteter
 i query-parametern `centers`; `src/pages/3_Graf.py` läser den och återskapar
-startgrafen utan ny sökning.
+startgrafen utan ny sökning. Utredningspärmen kan exporteras till Markdown och
+JSON via `src/casebook_export.py`, utan databas-migrering.
+
+**Källor och Sökverkstad**: `src/pages/1_Källor.py` bläddrar i
+`generated/text/*.txt` via `src/archive_browser.py` och återanvänder källkort
+för PDF/text/bokmärken. `src/pages/4_Sökverkstad.py` är en fristående
+Streamlit-flik för manuell retrieval-inspektion. Den återanvänder `search`,
+`search_hybrid` och `rerank` från `src/rag/ask.py`, formaterar träffar via
+`src/search_workbench.py` och renderar bokmärkningsbara källkort via
+`casebook_ui.render_source_cards`. Den ska inte anropa någon LLM.
 
 **mtime-tracking (ingest.py)**: Varje `.txt`-fil jämförs mot mtime som lagras i `ingest`-tabellen i state.db (auktoritativt); nyare fil → re-ingest. LanceDB-tabellen har fortfarande en `mtime`-kolumn men den läses inte längre för delta-beslut. Om ingest-state saknas men källan finns i LanceDB behandlas filen som re-indexering, så gamla chunks ersätts i stället för att dupliceras. Legacy-rader med sentinel-mtime `0.0` re-indexeras bara med `--reindex-since`.
 

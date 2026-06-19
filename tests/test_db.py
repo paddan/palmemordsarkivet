@@ -294,7 +294,7 @@ def test_source_bookmarks_upsert_and_delete(tmp_path):
         page=28,
         nr="100",
         title="Skandia",
-        note="Kontrollera tidslinjen",
+        note="Kontrollera källan",
     )
     again = record_source_bookmark(
         conn,

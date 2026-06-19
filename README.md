@@ -14,9 +14,10 @@ kunskapsgraf och utforskas visuellt.
 
 ## Web-gränssnitt
 
-Efter nedladdning och OCR-scanning finns ett webgränssnitt (`./web.sh`) med tre
-flikar: **Utredning** för frågor, **Utredningspärm** för sparade spår och
-**Graf** för relationer.
+Efter nedladdning och OCR-scanning finns ett webgränssnitt (`./web.sh`) med
+flikar för **Utredning** (frågor), **Källor** (bläddring i dokument),
+**Utredningspärm** (sparade spår), **Graf** (relationer), **Sökverkstad**
+(manuell sökgranskning).
 
 ### Utredning
 
@@ -41,6 +42,12 @@ på komplexa flerstegs-frågor, men långsammare (~1–3 min).
 
 ![Web-gränssnitt — MCP-läge](utredningsläge.png)
 
+### Källor
+
+Fliken **Källor** låter dig bläddra och söka i OCR-textdokumenten utan att först
+ställa en AI-fråga. Varje träff visar en kort textförhandsvisning och samma
+PDF/text-/bokmärkningsknappar som källkorten i Utredning och Utredningspärm.
+
 ### Utredningspärm
 
 I fliken **Utredningspärm** visas fråga/svar-spår som sparats från både RAG- och
@@ -49,7 +56,16 @@ svaret, källorna, modellvalet, grafentiteterna och eventuell egen anteckning.
 Källorna visas som klickbara källkort med PDF/text-knappar, och sparade
 grafentiteter har en länk som återskapar grafen i Graf-fliken. Källor i svarens
 källista kan också bokmärkas separat så att du snabbt hittar tillbaka till
-viktiga PDF:er och sidor.
+viktiga PDF:er och sidor. Hela pärmen kan laddas ner som Markdown eller JSON
+för att dela anteckningar eller fortsätta arbetet utanför Streamlit.
+
+### Sökverkstad
+
+I **Sökverkstad** kan du köra manuella vektor- eller hybridsökningar, slå på och
+av reranking, granska utdragen innan något AI-svar formuleras och bokmärka
+källor direkt. Den är användbar när du vill testa söktermer, jämföra
+retrieval-inställningar eller samla källor till en fråga innan du går vidare
+till Utredning-fliken.
 
 ### Graf
 

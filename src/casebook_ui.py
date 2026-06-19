@@ -9,6 +9,7 @@ import re
 import subprocess
 from pathlib import Path
 
+import casebook_export as _casebook_export
 import citations as _citations
 import db as _state_db
 import streamlit as st
@@ -226,6 +227,23 @@ def render_casebook_page(root: Path, conn) -> None:
     entries = _state_db.list_casebook_entries(conn, limit=100)
     bookmarks = _state_db.list_source_bookmarks(conn, limit=200)
     st.caption(f"{len(entries)} sparade svar · {len(bookmarks)} bokmärken")
+    export_cols = st.columns(2)
+    with export_cols[0]:
+        st.download_button(
+            "Ladda ner Markdown",
+            data=_casebook_export.casebook_to_markdown(entries, bookmarks),
+            file_name="utredningsparm.md",
+            mime="text/markdown",
+            use_container_width=True,
+        )
+    with export_cols[1]:
+        st.download_button(
+            "Ladda ner JSON",
+            data=_casebook_export.casebook_to_json(entries, bookmarks),
+            file_name="utredningsparm.json",
+            mime="application/json",
+            use_container_width=True,
+        )
 
     tab_entries, tab_bookmarks = st.tabs(["Sparade svar", "Bokmärken"])
     with tab_entries:
