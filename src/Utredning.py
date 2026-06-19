@@ -3,7 +3,7 @@
 Kör med:
     ./web.sh
 eller manuellt:
-    .venv/bin/streamlit run webui.py
+    .venv/bin/streamlit run src/Utredning.py
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ MCP_SERVER = Path(__file__).resolve().parent / "rag" / "mcp_server.py"
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import backends as _backends  # noqa: E402
+import casebook_ui as _casebook_ui  # noqa: E402
 import citations as _citations  # noqa: E402
 import config as _llm_config  # noqa: E402
 from errors_log import log_error  # noqa: E402
@@ -101,6 +102,9 @@ def find_txt(source_txt: str) -> Path | None:
     return p if p.is_file() else None
 
 
+casebook_conn = _casebook_ui.state_conn()
+
+
 def extract_cited_sources(answer: str) -> list[dict]:
     """Bygg källlista ur ett MCP-svar genom att parsa unika Nr-citat."""
     return _citations.extract_cited_sources(answer, build_nr_to_pdf())
@@ -126,7 +130,7 @@ st.markdown(
 )
 
 # Backend-katalogen bor i src/backends.py (delas med llm_config_cli). Claude-
-# defaulten knyts lokalt till ask.CLAUDE_MODEL så webui:s val följer den modell
+# defaulten knyts lokalt till ask.CLAUDE_MODEL så Utredning-sidans val följer den modell
 # RAG-svaren faktiskt körs med, även om katalogens default skulle divergera.
 # Värdena sammanfaller idag; override:n görs utan att mutera den delade dicten.
 BACKENDS = {
@@ -522,7 +526,7 @@ async def stream_mcp_to_string(q: str, resume_id: str | None) -> tuple[str, str 
         if any(k in err_str.lower() for k in ("authenticate", "403", "exit code 1", "unauthorized")):
             msg = (
                 "*Fel: Claude Code är inte inloggad. "
-                "Kör `claude auth login` i terminalen och starta om webui.*"
+                "Kör `claude auth login` i terminalen och starta om webgränssnittet.*"
             )
         else:
             msg = f"*Fel i utredningsläget: {exc}*"
@@ -710,7 +714,7 @@ def _compute_answer_centers(answer: str) -> list[dict]:
         with driver.session() as s:
             return _viz.lookup_centers(s, names)
     except Exception as exc:  # noqa: BLE001
-        log_error("webui.graph", answer[:60], str(exc))
+        log_error("utredning.graph", answer[:60], str(exc))
         return []
 
 
@@ -865,7 +869,7 @@ def _render_answer_graph(centers: list[dict], state_key: str) -> None:
                 for d in docs:
                     all_docs.append({**d, "center_norm": c["norm"]})
     except Exception as exc:  # noqa: BLE001
-        log_error("webui.graph", centers[0]["namn"], str(exc))
+        log_error("utredning.graph", centers[0]["namn"], str(exc))
         st.caption("Kunskapsgraf otillgänglig — starta Neo4j med `./neo4j.sh`.")
         return
 
@@ -890,50 +894,22 @@ def _render_answer_graph(centers: list[dict], state_key: str) -> None:
 
 def _render_rag_sources(hits: list, key_prefix: str) -> None:
     with st.expander(f"Källor ({len(hits)})", expanded=False):
-        for i, h in enumerate(hits):
-            pdf = find_pdf(h["source"])
-            txt = find_txt(h["source"])
-            stem = h["source"][:-4] if h["source"].endswith(".txt") else h["source"]
-            with st.container(border=True):
-                cols = st.columns([5, 2, 2])
-                with cols[0]:
-                    st.markdown(f"**{stem}**")
-                    if h.get("page"):
-                        st.caption(f"sida {h['page']}")
-                with cols[1]:
-                    if pdf and st.button(
-                        "Öppna PDF", key=f"{key_prefix}_pdf_{i}", use_container_width=True
-                    ):
-                        try:
-                            subprocess.Popen(["open", str(pdf)])
-                        except OSError as e:
-                            st.error(f"Kan inte öppna fil: {e}")
-                with cols[2]:
-                    if txt and st.button(
-                        "Öppna text", key=f"{key_prefix}_txt_{i}", use_container_width=True
-                    ):
-                        try:
-                            subprocess.Popen(["open", str(txt)])
-                        except OSError as e:
-                            st.error(f"Kan inte öppna fil: {e}")
+        _casebook_ui.render_source_cards(
+            ROOT,
+            hits,
+            casebook_conn,
+            key_prefix=f"{key_prefix}_source",
+        )
 
 
 def _render_chat_sources(srcs: list, key_prefix: str) -> None:
     with st.expander(f"Källor ({len(srcs)})", expanded=False):
-        for i, h in enumerate(srcs):
-            pdf = find_pdf(h["source"])
-            stem = h["source"][:-4] if h["source"].endswith(".txt") else h["source"]
-            with st.container(border=True):
-                cols = st.columns([5, 2])
-                with cols[0]:
-                    st.markdown(f"**{stem}**")
-                with cols[1]:
-                    if pdf and st.button("Öppna PDF", key=f"{key_prefix}_{i}",
-                                         use_container_width=True):
-                        try:
-                            subprocess.Popen(["open", str(pdf)])
-                        except OSError as e:
-                            st.error(f"Kan inte öppna fil: {e}")
+        _casebook_ui.render_source_cards(
+            ROOT,
+            srcs,
+            casebook_conn,
+            key_prefix=f"{key_prefix}_source",
+        )
 
 
 def _render_chat_turn(turn: dict, turn_idx: int) -> None:
@@ -944,6 +920,21 @@ def _render_chat_turn(turn: dict, turn_idx: int) -> None:
         centers = turn.get("centers") or []
         if turn["role"] == "assistant" and show_graph and centers:
             _render_answer_graph(centers, f"turn_{turn_idx}")
+        if turn["role"] == "assistant":
+            prev_q = ""
+            if turn_idx > 0 and ss.chat_history[turn_idx - 1]["role"] == "user":
+                prev_q = ss.chat_history[turn_idx - 1]["text"]
+            _casebook_ui.render_casebook_save(
+                casebook_conn,
+                question=prev_q,
+                answer=turn["text"],
+                mode="mcp",
+                backend_name=backend_name,
+                model=backend["model"],
+                sources=turn.get("sources") or [],
+                centers=centers,
+                key=f"chat_casebook_{turn_idx}",
+            )
         srcs = turn.get("sources") or []
         if srcs:
             _render_chat_sources(srcs, f"chat_pdf_{turn_idx}")
@@ -1053,6 +1044,17 @@ else:
                 with st.spinner("Bygger kunskapsgraf…"):
                     ss.answer_centers = _compute_answer_centers(ss.answer)
                 _render_answer_graph(ss.answer_centers, "rag")
+        _casebook_ui.render_casebook_save(
+            casebook_conn,
+            question=q,
+            answer=ss.answer,
+            mode="rag",
+            backend_name=backend_name,
+            model=backend["model"],
+            sources=hits,
+            centers=ss.answer_centers,
+            key="rag_current",
+        )
 
 # Rendera resultat från session_state vid rerun från PDF-knappar (ej ny sökning).
 # Bara i RAG-läget — MCP-chatten renderar sina källor inline per tur.
@@ -1061,4 +1063,15 @@ if ss.hits and not mcp_mode and not (submitted and q.strip()):
     st.markdown(ss.answer, unsafe_allow_html=True)
     if show_graph:
         _render_answer_graph(ss.answer_centers, "rag")
+    _casebook_ui.render_casebook_save(
+        casebook_conn,
+        question=ss.question,
+        answer=ss.answer,
+        mode="rag",
+        backend_name=backend_name,
+        model=backend["model"],
+        sources=ss.hits,
+        centers=ss.answer_centers,
+        key="rag_cached",
+    )
     _render_rag_sources(ss.hits, "cached")

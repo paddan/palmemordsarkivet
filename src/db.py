@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 DEFAULT_DB: Path = Path(os.environ.get("STATE_DB", str(ROOT / "generated" / "db" / "state.db")))
 
-SCHEMA_VERSION: int = 1
+SCHEMA_VERSION: int = 2
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -121,6 +121,35 @@ CREATE TABLE IF NOT EXISTS doc_entities (
     extracted_at TEXT NOT NULL,
     PRIMARY KEY (pdf_stem, page_num)
 );
+
+CREATE TABLE IF NOT EXISTS casebook_entries (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    question      TEXT NOT NULL,
+    answer        TEXT NOT NULL,
+    mode          TEXT NOT NULL,
+    backend       TEXT,
+    model         TEXT,
+    sources_json  TEXT NOT NULL,
+    entities_json TEXT NOT NULL,
+    note          TEXT,
+    created_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_casebook_entries_created
+    ON casebook_entries(created_at DESC, id DESC);
+
+CREATE TABLE IF NOT EXISTS source_bookmarks (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    source     TEXT NOT NULL,
+    page       INTEGER NOT NULL DEFAULT 0,
+    nr         TEXT,
+    title      TEXT,
+    note       TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(source, page)
+);
+CREATE INDEX IF NOT EXISTS idx_source_bookmarks_updated
+    ON source_bookmarks(updated_at DESC, id DESC);
 """
 
 
@@ -679,6 +708,189 @@ def iter_doc_entities(conn: sqlite3.Connection) -> list[dict]:
             "ORDER BY pdf_stem, page_num"
         )
     ]
+
+
+# --- casebook / bokmärken --------------------------------------------
+
+def _json_list(value: list[dict] | None) -> str:
+    """Serialisera listdata kompakt men läsbart i state-db."""
+    return json.dumps(value or [], ensure_ascii=False, default=str)
+
+
+def _parse_json_list(raw: str | None) -> list:
+    """Tolka JSON-listor från state-db. Trasigt innehåll blir tom lista."""
+    if not raw:
+        return []
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    return value if isinstance(value, list) else []
+
+
+def record_casebook_entry(
+    conn: sqlite3.Connection,
+    *,
+    question: str,
+    answer: str,
+    mode: str,
+    backend: str | None = None,
+    model: str | None = None,
+    sources: list[dict] | None = None,
+    entities: list[dict] | None = None,
+    note: str | None = None,
+) -> int:
+    """Spara ett fråga/svar-spår i utredningspärmen och returnera rad-id."""
+    if not question.strip():
+        raise ValueError("question får inte vara tom")
+    if not answer.strip():
+        raise ValueError("answer får inte vara tom")
+    cur = conn.execute(
+        """
+        INSERT INTO casebook_entries(
+            question, answer, mode, backend, model, sources_json,
+            entities_json, note, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            question.strip(),
+            answer,
+            mode.strip() or "okänt",
+            backend,
+            model,
+            _json_list(sources),
+            _json_list(entities),
+            note.strip() if note and note.strip() else None,
+            now(),
+        ),
+    )
+    conn.commit()
+    return int(cur.lastrowid)
+
+
+def list_casebook_entries(
+    conn: sqlite3.Connection, *, limit: int = 20
+) -> list[dict]:
+    """Lista sparade fråga/svar-spår, nyast först."""
+    rows = conn.execute(
+        """
+        SELECT id, question, answer, mode, backend, model, sources_json,
+               entities_json, note, created_at
+        FROM casebook_entries
+        ORDER BY id DESC
+        LIMIT ?
+        """,
+        (limit,),
+    )
+    return [
+        {
+            "id": row["id"],
+            "question": row["question"],
+            "answer": row["answer"],
+            "mode": row["mode"],
+            "backend": row["backend"],
+            "model": row["model"],
+            "sources": _parse_json_list(row["sources_json"]),
+            "entities": _parse_json_list(row["entities_json"]),
+            "note": row["note"],
+            "created_at": row["created_at"],
+        }
+        for row in rows
+    ]
+
+
+def delete_casebook_entry(conn: sqlite3.Connection, entry_id: int) -> bool:
+    """Radera ett sparat fråga/svar-spår. Returnerar True om något togs bort."""
+    cur = conn.execute("DELETE FROM casebook_entries WHERE id=?", (entry_id,))
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def _stored_bookmark_page(page: int | None) -> int:
+    """Spara okänd sida som 0 så UNIQUE(source, page) fungerar även utan sida."""
+    return int(page) if page is not None else 0
+
+
+def _public_bookmark_page(page: int) -> int | None:
+    return page if page > 0 else None
+
+
+def record_source_bookmark(
+    conn: sqlite3.Connection,
+    *,
+    source: str,
+    page: int | None = None,
+    nr: str | None = None,
+    title: str | None = None,
+    note: str | None = None,
+) -> int:
+    """Spara eller uppdatera ett källbokmärke och returnera rad-id."""
+    if not source.strip():
+        raise ValueError("source får inte vara tom")
+    stored_page = _stored_bookmark_page(page)
+    stamp = now()
+    conn.execute(
+        """
+        INSERT INTO source_bookmarks(
+            source, page, nr, title, note, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(source, page) DO UPDATE SET
+            nr         = excluded.nr,
+            title      = excluded.title,
+            note       = excluded.note,
+            updated_at = excluded.updated_at
+        """,
+        (
+            source.strip(),
+            stored_page,
+            nr,
+            title,
+            note.strip() if note and note.strip() else None,
+            stamp,
+            stamp,
+        ),
+    )
+    row = conn.execute(
+        "SELECT id FROM source_bookmarks WHERE source=? AND page=?",
+        (source.strip(), stored_page),
+    ).fetchone()
+    conn.commit()
+    return int(row["id"])
+
+
+def list_source_bookmarks(
+    conn: sqlite3.Connection, *, limit: int = 50
+) -> list[dict]:
+    """Lista källbokmärken, senast uppdaterade först."""
+    rows = conn.execute(
+        """
+        SELECT id, source, page, nr, title, note, created_at, updated_at
+        FROM source_bookmarks
+        ORDER BY updated_at DESC, id DESC
+        LIMIT ?
+        """,
+        (limit,),
+    )
+    return [
+        {
+            "id": row["id"],
+            "source": row["source"],
+            "page": _public_bookmark_page(row["page"]),
+            "nr": row["nr"],
+            "title": row["title"],
+            "note": row["note"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+        for row in rows
+    ]
+
+
+def delete_source_bookmark(conn: sqlite3.Connection, bookmark_id: int) -> bool:
+    """Radera ett källbokmärke. Returnerar True om något togs bort."""
+    cur = conn.execute("DELETE FROM source_bookmarks WHERE id=?", (bookmark_id,))
+    conn.commit()
+    return cur.rowcount > 0
 
 
 # --- delta-queries (inkrementell logik) -------------------------------

@@ -118,9 +118,17 @@ def test_legacy_migration_files_are_removed() -> None:
 
 def test_graph_page_handles_missing_link_analysis_import() -> None:
     project_root = Path(__file__).resolve().parents[1]
-    text = (project_root / "src" / "pages" / "1_Graf.py").read_text(encoding="utf-8")
+    text = (project_root / "src" / "pages" / "3_Graf.py").read_text(encoding="utf-8")
     assert "except ImportError" in text
     assert "st-link-analysis" in text
+
+
+def test_graph_page_accepts_casebook_centers_query_param() -> None:
+    project_root = Path(__file__).resolve().parents[1]
+    text = (project_root / "src" / "pages" / "3_Graf.py").read_text(encoding="utf-8")
+    assert "decode_graph_centers_param" in text
+    assert 'st.query_params.get("centers")' in text
+    assert "linked_centers" in text
 
 
 # ---------------------------------------------------------------------------

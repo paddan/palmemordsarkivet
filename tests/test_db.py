@@ -18,6 +18,8 @@ from db import (
     mark_tesseract_failed, mark_tesseract_blacklisted, retry_tesseract_blacklisted,
     clear_tesseract_blacklisted,
     is_tesseract_blacklisted,
+    record_casebook_entry, list_casebook_entries, delete_casebook_entry,
+    record_source_bookmark, list_source_bookmarks, delete_source_bookmark,
     files_needing_normalize, files_needing_quality, files_needing_ingest,
 )
 
@@ -225,6 +227,94 @@ def test_wpu_decisions(tmp_path):
     mark_wpu_decided(conn, "s1")  # idempotent
     n = conn.execute("SELECT COUNT(*) FROM wpu_decisions").fetchone()[0]
     assert n == 1
+
+
+def test_casebook_entries_roundtrip_with_sources_and_entities(tmp_path):
+    conn = _fresh(tmp_path)
+    entry_id = record_casebook_entry(
+        conn,
+        question="Vem nämner Skandia?",
+        answer="Skandia nämns i flera förhör.",
+        mode="rag",
+        backend="Claude",
+        model="claude-sonnet-4-6",
+        sources=[
+            {"source": "100 — Skandia.txt", "page": 28, "nr": "100", "titel": "Skandia"},
+            {"source": "865 — Brev.txt", "page": 1, "nr": "865", "titel": "Brev"},
+        ],
+        entities=[
+            {"namn": "Skandia", "label": "Organisation", "norm": "skandia"},
+        ],
+        note="Arbetsspår",
+    )
+
+    entries = list_casebook_entries(conn)
+
+    assert len(entries) == 1
+    assert entries[0]["id"] == entry_id
+    assert entries[0]["question"] == "Vem nämner Skandia?"
+    assert entries[0]["mode"] == "rag"
+    assert entries[0]["sources"][0]["source"] == "100 — Skandia.txt"
+    assert entries[0]["entities"][0]["namn"] == "Skandia"
+    assert entries[0]["note"] == "Arbetsspår"
+
+
+def test_casebook_entries_are_newest_first_and_deletable(tmp_path):
+    conn = _fresh(tmp_path)
+    first = record_casebook_entry(
+        conn,
+        question="Första frågan",
+        answer="Första svaret",
+        mode="mcp",
+        backend="Claude",
+        model="claude-sonnet-4-6",
+        sources=[],
+    )
+    second = record_casebook_entry(
+        conn,
+        question="Andra frågan",
+        answer="Andra svaret",
+        mode="rag",
+        backend="OpenAI",
+        model="gpt-4o-mini",
+        sources=[],
+    )
+
+    assert [e["id"] for e in list_casebook_entries(conn)] == [second, first]
+    assert delete_casebook_entry(conn, first) is True
+    assert delete_casebook_entry(conn, first) is False
+    assert [e["id"] for e in list_casebook_entries(conn)] == [second]
+
+
+def test_source_bookmarks_upsert_and_delete(tmp_path):
+    conn = _fresh(tmp_path)
+    first = record_source_bookmark(
+        conn,
+        source="100 — Skandia.txt",
+        page=28,
+        nr="100",
+        title="Skandia",
+        note="Kontrollera tidslinjen",
+    )
+    again = record_source_bookmark(
+        conn,
+        source="100 — Skandia.txt",
+        page=28,
+        nr="100",
+        title="Skandia",
+        note="Viktigare än först tänkt",
+    )
+
+    bookmarks = list_source_bookmarks(conn)
+
+    assert again == first
+    assert len(bookmarks) == 1
+    assert bookmarks[0]["source"] == "100 — Skandia.txt"
+    assert bookmarks[0]["page"] == 28
+    assert bookmarks[0]["note"] == "Viktigare än först tänkt"
+    assert delete_source_bookmark(conn, first) is True
+    assert delete_source_bookmark(conn, first) is False
+    assert list_source_bookmarks(conn) == []
 
 
 def test_tesseract_blacklist(tmp_path):

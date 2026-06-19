@@ -17,7 +17,7 @@ När du gör förändringar i projektet ska du **alltid** uppdatera den använda
 
 ## Project Overview
 
-**palmemordsarkivet** laddar ner, OCR-processar och gör 3 762 palme-PDF:er + 7 155 wpu-PDF:er (~47 000 sidor, 8 665 sökbara dokument efter merge) från palmemordsarkivet.se och wpu.nu sökbara via RAG + Claude Opus 4.8. Alla kommentarer och docstrings är på svenska.
+**palmemordsarkivet** laddar ner, OCR-processar och gör 3 762 palme-PDF:er + 7 155 wpu-PDF:er (~47 000 sidor, 8 665 sökbara dokument efter merge) från palmemordsarkivet.se och wpu.nu sökbara via RAG + Codex Opus 4.7, med Streamlit-flikarna Utredning, Utredningspärm och Graf. Alla kommentarer och docstrings är på svenska.
 
 Pipeline: download → OCR (Tesseract + optional Surya) → detect redactions → normalize → quality scoring → LanceDB ingest → RAG query → Streamlit UI.
 
@@ -25,36 +25,29 @@ Pipeline: download → OCR (Tesseract + optional Surya) → detect redactions �
 
 ```
 src/
-  db.py                # SQLite-state: schema + CRUD + delta-queries för hela pipelinen
-  migrate_to_db.py     # Engångsmigrering: legacy filstate → generated/db/state.db
+  db.py                # SQLite-state: schema + CRUD + delta-queries för pipeline + utredningspärm
   download.py          # Google Drive PDF downloader (state via db.py)
-  download_wpu.py      # wpu.nu-nedladdare + dokument-ID-parsning (wpu/palme-nycklar)
-  merge_wpu.py         # Jämför wpu- vs palme-text per dokument-ID, raderar förloraren
   quality.py           # OCR quality scoring (0–100 heuristics + optional hunspell)
   ocr_pages.py         # Per-page OCR pipeline (Tesseract/Surya) + redaktionsdetektering
-  ocr_db_helper.py     # CLI-hjälpare för ocr_tesseract.sh: tesseract-status + text_mtime i state.db
   normalize_text.py    # Rule-based OCR normalization (ligatures, whitespace). Inkrementellt via state.db.
-  llm_correct.py       # LLM post-correction av dåliga OCR-sidor via Claude Haiku
-  merge_pages.py       # Slå ihop text_pages/<stem>/page-*.txt → text/<stem>.txt
+  llm_correct.py       # LLM post-correction av dåliga OCR-sidor via Codex Haiku
+  merge_pages.py       # Slå ihop per-sida-text från state.db → text/<stem>.txt
   build_user_words.py  # Generera Tesseract user-words från OCR-text
   errors_log.py        # Centraliserad felloggning (tab-separerad)
-  config.py            # Delad LLM-konfiguration (generated/llm_config.json)
-  backends.py          # Delad backend-katalog (Claude/OpenAI/DeepSeek/Ollama/custom) + fetch_models/available_models — delas av webui och llm_config_cli
-  llm_config_cli.py    # CLI för att visa/ändra llm_config.json utan webui (interaktiv meny i terminal)
-  citations.py         # [Nr X, sida Y]-uppslag mot PDF:er + länkrendering (Streamlit-fritt)
-  webui.py             # Streamlit-gränssnitt
+  Utredning.py         # Streamlit-frågesida (RAG/MCP, svarsgraf, sparknapp, bokmärken)
+  casebook_ui.py       # Delade Streamlit-komponenter för utredningspärm + bokmärken
+  pages/
+    2_Utredningspärm.py # Sparade fråga/svar-spår och källbokmärken
+    3_Graf.py          # Fristående grafsida
   rag/
     ingest.py          # LanceDB vector index builder
-    ask.py             # RAG query + Claude integration
-    mcp_server.py      # MCP-server: search_archive + get_page (startas av ask/webui)
+    ask.py             # RAG query + Codex integration
   graph/
-    extract_entities.py # Per-sida entitets-/relationsextraktion via Claude Haiku → doc_entities i state.db
+    extract_entities.py # Per-sida entitets-/relationsextraktion via LLM → doc_entities i state.db
     load_neo4j.py       # Ladda doc_entities → Neo4j (MERGE, idempotent) + namnkanonisering
     viz.py              # Ego-nätverk för flera center (Cypher → noder/kanter, dedup) + Cytoscape-konvertering
-    answer_entities.py  # LLM (Haiku) listar nyckelentiteter ur ett RAG-svar → inline-grafen i webui
-  pages/
-    1_Graf.py           # Streamlit multipage-sida: sök entitet → interaktiv graf, fäll ut grannoder (kräver Neo4j)
-tests/                 # pytest — en testfil per modul (test_db, test_quality, test_chunk, test_download, test_merge_pages, test_merge_wpu, test_detect_redactions, test_reingest, test_normalize_text, test_llm_correct, test_migrate_to_db, test_scripts, test_citations, test_ask, test_mcp_server, test_extract_entities, test_answer_entities, test_load_neo4j)
+    answer_entities.py  # LLM (Haiku) listar nyckelentiteter ur ett RAG-svar → inline-grafen i Utredning
+tests/                 # pytest (test_quality, test_chunk, test_download, test_merge_pages, test_detect_redactions, test_reingest, test_normalize_text, test_answer_entities)
 *.sh                   # Bash-wrappers (aktiverar .venv, läser API-nycklar, vidarebefordrar flaggor)
 tessdata/              # swe_best.traineddata, swe.user-words, tesseract.config
 ```
@@ -63,7 +56,7 @@ Data-kataloger (gitignored):
 - `downloaded/files/`, `downloaded/wpu_files/` — PDF:er
 - `generated/text/` — OCR-text, `generated/text_pages/` — per-sida-artefakter
 - `generated/lancedb/` — vektorindex
-- `generated/db/state.db` — SQLite-databas med all pipeline-state (markörer, kvalitet, ingest-mtime). WAL-filer (`state.db-wal`, `state.db-shm`) ligger bredvid.
+- `generated/db/state.db` — SQLite-databas med pipeline-state (markörer, kvalitet, ingest-mtime) samt Utredningspärm och källbokmärken. WAL-filer (`state.db-wal`, `state.db-shm`) ligger bredvid.
 - `generated/errors.log` — fellog
 
 ## Commands
@@ -73,7 +66,7 @@ Data-kataloger (gitignored):
 .venv/bin/pytest tests/
 
 # Setup
-./install.sh                         # Installera pipeline/webui (brew, Python-paket, tessdata)
+./install.sh                         # Installera pipeline/webgränssnitt (brew, Python-paket, tessdata)
 
 # Workflow
 ./run_pipeline.sh                    # Hela pipelinen i ett: download → OCR → ingest
@@ -85,10 +78,8 @@ Data-kataloger (gitignored):
 ./ocr_tesseract.sh                   # Bara Tesseract-steget
 ./detect_redactions.sh               # Redaktionsdetektering på befintliga text/OCR-par
 ./quality.sh [--top 30] [--per-page]
-./llm_correct.sh [--threshold 60] [--jobs 8]   # Claude Haiku korrigerar dåliga sidor (parallellt, default 4 jobb)
-./llm_config.sh                                              # interaktiv meny (terminal) för backend/modell; utan TTY visas konfig
-./llm_config.sh [--model X] [--provider claude|openai] [--reset]  # icke-interaktivt: visa/ändra llm_config.json utan webui
-./merge_pages.sh --all               # Slå ihop text_pages/ → text/
+./llm_correct.sh [--threshold 60]    # Codex Haiku korrigerar dåliga sidor
+./merge_pages.sh --all               # Slå ihop per-sida-text från state.db → text/
 ./build_user_words.sh                # Bygg tessdata/swe.user-words.auto från text/*.txt
 ./ingest.sh [--rebuild] [--reindex-since 2026-05-01]
 ./ask.sh "fråga" [--hybrid] [--no-rerank]
@@ -98,87 +89,37 @@ Data-kataloger (gitignored):
 ./download_wpu.sh && ./merge_wpu.sh
 
 # Kunskapsgraf (valfritt; installera först podman + Python-extra .[graph])
-./extract_entities.sh [--limit N] [--dry-run] [--jobs N] [--timeout SEC]  # entiteter/relationer → doc_entities (LLM från llm_config.json, default Haiku)
-./neo4j.sh                                     # starta Neo4j via podman (lösenord → neo4j/.password)
-./load_graph.sh                                # ladda doc_entities → Neo4j (lösenordet plockas upp automatiskt)
-# (Docker-alternativ: cd neo4j && NEO4J_PASSWORD=... docker compose up -d)
+./extract_entities.sh [--limit N] [--dry-run]
+./neo4j.sh
+./load_graph.sh
 ```
 
 Env-variabler: `CLAUDE_CODE_OAUTH_TOKEN` (Pro/Max, räknas mot prenumeration) eller `ANTHROPIC_API_KEY`. Valfritt: `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`.
 
 ## Non-obvious Design Decisions
 
-**MCP-läge (webui.py)**: Konversationskontinuitet uppnås genom att fånga `session_id` från `ResultMessage` och skicka tillbaka det som `ClaudeAgentOptions(resume=...)` på nästa fråga. "Ny konversation" nollställer `chat_history` + `mcp_session_id`.
-
-**Citatlänkar (webui.py)**: `[Nr X, sida Y]` linkas till PDF via `resolve_nr_all` som matchar `X` mot filstammar. Modellen förkortar långa WPU-nr (klipper titel-suffixet), så uppslaget faller tillbaka på prefix-matchning. Delar flera filer samma dokument-ID-prefix renderas en länk per fil; i RAG-läge skickas faktiskt hämtade källor (`known_sources`) in för att särskilja till en enda länk. MCP-läget saknar den infon och visar därför flera knappar.
+**MCP-läge (Utredning.py)**: Konversationskontinuitet uppnås genom att fånga `session_id` från `ResultMessage` och skicka tillbaka det som `ClaudeAgentOptions(resume=...)` på nästa fråga. "Ny konversation" nollställer `chat_history` + `mcp_session_id`.
 
 **SQLite-state (`generated/db/state.db`)**: all operativ pipeline-state lever här —
 downloads, per-PDF-status (redaktion/merge/normalize), per-sida OCR-resultat,
-kvalitetspoäng, LLM-korrigeringar och ingest-tracking. Inkrementell logik
+kvalitetspoäng, LLM-korrigeringar och ingest-tracking. Utredningspärmen
+lever också här i `casebook_entries` och `source_bookmarks`. Inkrementell logik
 bygger på att jämföra `pdf_files.text_mtime` mot `normalized_at`/`scored_at`/etc.
 `--rebuild` tvingar omkörning. Modulen `src/db.py` exponerar alla CRUD- och delta-queries; konsumenter skriver aldrig egen SQL.
 
-**mtime-tracking (ingest.py)**: Varje `.txt`-fil jämförs mot mtime som lagras i `ingest`-tabellen i state.db (auktoritativt); nyare fil → re-ingest. LanceDB-tabellen har fortfarande en `mtime`-kolumn men den läses inte längre för delta-beslut. Legacy-rader (där `ingest`-tabellen saknar mtime) re-indexeras inte automatiskt — använd `--reindex-since`.
+**Utredningspärm → Graf**: sparade svar i Utredningspärmen visas kollapsade.
+När en post öppnas renderas källor som källkort med PDF/text-knappar och
+grafentiteter som en länk till Graf-sidan. Länken kodar sparade center-entiteter
+i query-parametern `centers`; `src/pages/3_Graf.py` läser den och återskapar
+startgrafen utan ny sökning.
+
+**mtime-tracking (ingest.py)**: Varje `.txt`-fil jämförs mot mtime som lagras i `ingest`-tabellen i state.db (auktoritativt); nyare fil → re-ingest. LanceDB-tabellen har fortfarande en `mtime`-kolumn men den läses inte längre för delta-beslut. Om ingest-state saknas men källan finns i LanceDB behandlas filen som re-indexering, så gamla chunks ersätts i stället för att dupliceras. Legacy-rader med sentinel-mtime `0.0` re-indexeras bara med `--reindex-since`.
 
 **Redaktionsdetektering (ocr_pages.py)**: Hittar svarta maskeringsblock i bilder och infogar `[MASKAD]` i texten. På som standard; `--no-detect-redactions` stänger av. Idempotens spåras via `pdf_files.redaction_checked_at` i state.db — `.redact`-markörfilerna är borttagna. `detect_redactions.sh` förfiltrerar listan baserat på databasen så filer som redan kollats spawnar inga subprocesser alls.
 
-**Per-dokument-cleanup (ocr.sh + Surya)**: Efter att `ocr_pages.py` är klar kör `ocr.sh` automatiskt `merge_pages.merge_one` + `normalize_text.process_file`, raderar `page-NNN.txt`/`.png`/`.json`. Idempotens för per-sida-OCR spåras i `pdf_pages`-tabellen i state.db — `page-NNN.json`-markörerna existerar inte längre.
+**Per-dokument-cleanup (ocr.sh + Surya)**: Efter att `ocr_pages.py` är klar kör `ocr.sh` automatiskt `merge_pages.merge_one` + `normalize_text.process_file`. Idempotens och per-sida-text spåras i `pdf_pages`-tabellen i state.db — `page-NNN.txt`/`.json`-markörerna existerar inte längre.
 
-**Tesseract-idempotens (ocr_tesseract.sh)**: Avgörs av `pdf_files.tesseract_done_at`/`tesseract_failed`/`tesseract_blacklisted_at` i state.db — `.ocr-done`/`.ocr-failed`-markörfilerna existerar inte längre. `merge_wpu` raderar bara förlorarens `text/`+`ocr/`-filer (DB-raden behåller `tesseract_done_at`, så filen körs inte om). `ocr.sh --from-list` nollställer dessa kolumner i DB för att tvinga om-OCR.
-
-**text_mtime måste stämplas när text skrivs (db.touch_text_mtime)**: normalize/quality-deltat kräver `pdf_files.text_mtime IS NOT NULL`. All kod som skriver `text/<stem>.txt` utanför merge_pages-spåret måste stämpla mtime: `ocr_tesseract.sh` skickar txt-sökvägen till `ocr_db_helper mark-done`, `ocr.sh --redo --mode files` kör `ocr_db_helper touch-mtime` efter pdftotext. Normalize och quality tar dessutom defensivt med rader vars `text_mtime` är NULL (historiska Tesseract-filer som annars aldrig bearbetas).
-
-**Kunskapsgrafen (src/graph/)**: ett separat lager ovanpå pipelinen — LanceDB
-fortsätter sköta retrieval/RAG, Neo4j sköter relationer/visualisering. De två
-delar nyckeln `pdf_stem`. `extract_entities.py` extraherar per sida via den
-LLM som är konfigurerad i `generated/llm_config.json` (samma config som
-webui/`llm_correct.py`; default Claude Haiku, override via
-`--provider`/`--model`/`--base-url`/`--api-key`) och skriver till
-`doc_entities` i state.db, vilket är den auktoritativa källan; `load_neo4j.py`
-laddar (MERGE, idempotent) detta till Neo4j, så Neo4j-grafen kan alltid byggas
-om från grunden från `doc_entities` med `load_graph.sh`. Uppskattad kostnad
-för hela arkivet (~40 000 sidor, bildsidor hoppas över): ~$60–120 i
-Haiku-tokens.
-
-I webui visas dessutom en inline-graf till varje svar (RAG- och MCP-läge) som
-en hopfälld toggle-sektion i fullbredd mellan svaret och källorna (medvetet
-inte st.expander: Cytoscape-komponenten blir tom om den monteras i en dold
-container — ingen resize-hantering i bundeln; toggle-gaten renderar grafen
-först när den är synlig och hoppar över Neo4j-frågorna när den är stängd):
-`answer_entities.py` (Haiku) listar svarets nyckelentiteter →
-`viz.lookup_centers` slår upp dem i Neo4j → `viz.to_cytoscape_elements`
-konverterar → grafen ritas med **st-link-analysis** (Cytoscape; samma motor
-på grafsidan `pages/1_Graf.py` — pyvis är borttaget). Grundgrafen visar
-endast svarets entiteter + relationer mellan dem (grannskap/dokument
-filtreras bort efter fetch_ego); dubbelklick fäller ut en nods grannskap
-respektive öppnar dokumentnoders PDF; expand-event dedupas på
-timestamp eftersom komponentvärdet består över reruns; höjden bakas in i
-komponentnyckeln då den bara läses vid mount; centernoder märks med ★ i
-namnet (NodeStyle kan bara styla per typ-grupp). Sektionen har en sidopanel
-(`_render_graph_panel`) med höjdreglage, legend, återställning (extranoder i
-session state per `state_key`, nollställs vid nytt svar) och dokumentnoder
-som PDF-länkar via `citations.pdf_anchor` (samma `?pdf=`-mekanism som
-citatlänkarna). Degraderar tyst (notis) om Neo4j/LLM-konfig/st-link-analysis
-saknas; sidofältstoggeln "Visa kunskapsgraf" (på som standard) stänger av
-steget, och entitetslistan cachas per svar i session state.
-
-Namnkanonisering (entity resolution) hålls medvetet konservativ och
-deterministisk i `load_neo4j`, i två steg:
-1. **Comma-inversion** (`normalize_name`/`display_name`): `Efternamn, Förnamn`
-   → `Förnamn Efternamn`, hoppas över vid siffror/flera kommatecken så
-   adresser lämnas.
-2. **Dokument-scopad efternamnsuppslagning** (`build_surname_map`): ett ensamt
-   efternamn (`Engström`) slås ihop med fullnamnet (`Stig Engström`) *bara om
-   exakt ett* fullnamn i samma dokument slutar på det efternamnet. Materialet
-   har flera personer med samma efternamn (Palme, Andersson …); scopet +
-   entydighetskravet gör att tvetydiga fall (dokument med både Olof och
-   Lisbeth Palme) lämnas orörda. Ingen fuzzy-matchning.
-Mellannamnsvarianter (`Yvonne Nieminen` vs `Yvonne Anita Nieminen`) slås inte
-ihop. Återstående fragmentering motas vid källan av prompt-regeln i `_SYSTEM`
-som kräver konsekvent `Förnamn Efternamn`-form (gäller nya extraktioner).
-Grafen byggs alltid om från `doc_entities` — `load_graph.sh` är idempotent men
-nya regler kräver att grafen töms först (`MATCH (n) DETACH DELETE n`) eftersom
-gamla norm-nycklar annars ligger kvar.
+**Pipeline-resume (`run_pipeline.sh`)**: OCR- och ingest-stegen körs alltid, även när download inte hittade nya PDF:er. Stegen är idempotenta och detta gör att en tidigare avbruten körning kan slutföras.
 
 ## Common Gotchas
 

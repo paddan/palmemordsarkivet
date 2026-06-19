@@ -15,11 +15,11 @@ detaljer om varje steg, se [Teknisk referens](teknisk-referens.md).
 ## 1. Installera
 
 ```bash
-./install.sh           # installera pipeline/webui (brew, Python-paket, tessdata)
+./install.sh           # installera pipeline/webgränssnitt (brew, Python-paket, tessdata)
 ./install.sh --no-surya  # snabbare install utan Surya-OCR
 ```
 
-`install.sh` sköter pipeline- och webui-beroendena via Homebrew och pip — se
+`install.sh` sköter pipeline- och webgränssnittsberoendena via Homebrew och pip — se
 [Vad install.sh gör](teknisk-referens.md#vad-installsh-gör) för detaljer.
 
 ## 2. Sätt en API-nyckel
@@ -73,9 +73,17 @@ hittar nya filer, så väntande arbete från en tidigare avbruten körning slutf
 ./web.sh   # Starta Streamlit-webgränssnittet
 ```
 
-Två lägen: **RAG** (snabbt, deterministiskt — bra för faktafrågor) och
-**MCP/utredningsläge** (autonomt, bättre täckning på komplexa frågor). Toggla i
-sidofältet. Detaljer i [Teknisk referens](teknisk-referens.md#4-ställ-frågor).
+Fliken **Utredning** har två lägen: **RAG** (snabbt, deterministiskt — bra för
+faktafrågor) och **MCP/utredningsläge** (autonomt, bättre täckning på komplexa
+frågor). Toggla i sidofältet. Detaljer i
+[Teknisk referens](teknisk-referens.md#4-ställ-frågor).
+
+När du hittar något intressant kan du spara svaret i fliken **Utredningspärm**.
+Sparade spår visas som kollapsade poster med kort rubrik; öppna posten för att
+se frågan, svaret, källkort med PDF/text-knappar, modellvalet och eventuella
+grafentiteter. Grafentiteterna kan öppnas som en länk som återskapar grafen i
+Graf-fliken. Du kan också bokmärka enskilda källor från källistan för att
+snabbt komma tillbaka till samma PDF eller sida senare.
 
 ## Kunskapsgraf (valfritt)
 

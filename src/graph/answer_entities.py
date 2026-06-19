@@ -1,8 +1,8 @@
-"""LLM-extraktion av nyckelentiteter ur ett RAG-svar — för inline-grafen i webui.
+"""LLM-extraktion av nyckelentiteter ur ett RAG-svar — för inline-grafen i Utredning.
 
 Isolerad från Streamlit och Neo4j: ren parser + ett LLM-anrop som återanvänder
 anropsmönstret i ``graph.extract_entities``. Felhantering/degradering sköts av
-anroparen (webui)."""
+anroparen (Utredning-sidan)."""
 from __future__ import annotations
 
 import json
@@ -84,7 +84,7 @@ def resolve_entity_cfg(saved: dict) -> dict | None:
     Default Claude Haiku — snabb, billig mikrouppgift, oberoende av vilken
     modell som genererade svaret. Saknas Claude-creds används openai-providern
     i llm_config om den är körbar (nyckel eller lokal base_url), annars None
-    (anroparen degraderar tyst — webui får aldrig krascha på grafen)."""
+    (anroparen degraderar tyst — Utredning-sidan får aldrig krascha på grafen)."""
     if os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") or os.environ.get("ANTHROPIC_API_KEY"):
         return {"provider": "claude", "model": DEFAULT_CLAUDE_MODEL,
                 "base_url": "", "api_key": ""}

@@ -17,7 +17,7 @@ När du gör förändringar i projektet ska du **alltid** uppdatera den använda
 
 ## Project Overview
 
-**palmemordsarkivet** laddar ner, OCR-processar och gör 3 762 palme-PDF:er + 7 155 wpu-PDF:er (~47 000 sidor, 8 665 sökbara dokument efter merge) från palmemordsarkivet.se och wpu.nu sökbara via RAG + Codex Opus 4.7. Alla kommentarer och docstrings är på svenska.
+**palmemordsarkivet** laddar ner, OCR-processar och gör 3 762 palme-PDF:er + 7 155 wpu-PDF:er (~47 000 sidor, 8 665 sökbara dokument efter merge) från palmemordsarkivet.se och wpu.nu sökbara via RAG + Codex Opus 4.7, med Streamlit-flikarna Utredning, Utredningspärm och Graf. Alla kommentarer och docstrings är på svenska.
 
 Pipeline: download → OCR (Tesseract + optional Surya) → detect redactions → normalize → quality scoring → LanceDB ingest → RAG query → Streamlit UI.
 
@@ -25,7 +25,7 @@ Pipeline: download → OCR (Tesseract + optional Surya) → detect redactions �
 
 ```
 src/
-  db.py                # SQLite-state: schema + CRUD + delta-queries för hela pipelinen
+  db.py                # SQLite-state: schema + CRUD + delta-queries för pipeline + utredningspärm
   download.py          # Google Drive PDF downloader (state via db.py)
   quality.py           # OCR quality scoring (0–100 heuristics + optional hunspell)
   ocr_pages.py         # Per-page OCR pipeline (Tesseract/Surya) + redaktionsdetektering
@@ -34,7 +34,11 @@ src/
   merge_pages.py       # Slå ihop per-sida-text från state.db → text/<stem>.txt
   build_user_words.py  # Generera Tesseract user-words från OCR-text
   errors_log.py        # Centraliserad felloggning (tab-separerad)
-  webui.py             # Streamlit-gränssnitt
+  Utredning.py         # Streamlit-frågesida (RAG/MCP, svarsgraf, sparknapp, bokmärken)
+  casebook_ui.py       # Delade Streamlit-komponenter för utredningspärm + bokmärken
+  pages/
+    2_Utredningspärm.py # Sparade fråga/svar-spår och källbokmärken
+    3_Graf.py          # Fristående grafsida
   rag/
     ingest.py          # LanceDB vector index builder
     ask.py             # RAG query + Codex integration
@@ -42,7 +46,7 @@ src/
     extract_entities.py # Per-sida entitets-/relationsextraktion via LLM → doc_entities i state.db
     load_neo4j.py       # Ladda doc_entities → Neo4j (MERGE, idempotent) + namnkanonisering
     viz.py              # Ego-nätverk för flera center (Cypher → noder/kanter, dedup) + Cytoscape-konvertering
-    answer_entities.py  # LLM (Haiku) listar nyckelentiteter ur ett RAG-svar → inline-grafen i webui
+    answer_entities.py  # LLM (Haiku) listar nyckelentiteter ur ett RAG-svar → inline-grafen i Utredning
 tests/                 # pytest (test_quality, test_chunk, test_download, test_merge_pages, test_detect_redactions, test_reingest, test_normalize_text, test_answer_entities)
 *.sh                   # Bash-wrappers (aktiverar .venv, läser API-nycklar, vidarebefordrar flaggor)
 tessdata/              # swe_best.traineddata, swe.user-words, tesseract.config
@@ -52,7 +56,7 @@ Data-kataloger (gitignored):
 - `downloaded/files/`, `downloaded/wpu_files/` — PDF:er
 - `generated/text/` — OCR-text, `generated/text_pages/` — per-sida-artefakter
 - `generated/lancedb/` — vektorindex
-- `generated/db/state.db` — SQLite-databas med all pipeline-state (markörer, kvalitet, ingest-mtime). WAL-filer (`state.db-wal`, `state.db-shm`) ligger bredvid.
+- `generated/db/state.db` — SQLite-databas med pipeline-state (markörer, kvalitet, ingest-mtime) samt Utredningspärm och källbokmärken. WAL-filer (`state.db-wal`, `state.db-shm`) ligger bredvid.
 - `generated/errors.log` — fellog
 
 ## Commands
@@ -62,7 +66,7 @@ Data-kataloger (gitignored):
 .venv/bin/pytest tests/
 
 # Setup
-./install.sh                         # Installera pipeline/webui (brew, Python-paket, tessdata)
+./install.sh                         # Installera pipeline/webgränssnitt (brew, Python-paket, tessdata)
 
 # Workflow
 ./run_pipeline.sh                    # Hela pipelinen i ett: download → OCR → ingest
@@ -94,13 +98,20 @@ Env-variabler: `CLAUDE_CODE_OAUTH_TOKEN` (Pro/Max, räknas mot prenumeration) el
 
 ## Non-obvious Design Decisions
 
-**MCP-läge (webui.py)**: Konversationskontinuitet uppnås genom att fånga `session_id` från `ResultMessage` och skicka tillbaka det som `ClaudeAgentOptions(resume=...)` på nästa fråga. "Ny konversation" nollställer `chat_history` + `mcp_session_id`.
+**MCP-läge (Utredning.py)**: Konversationskontinuitet uppnås genom att fånga `session_id` från `ResultMessage` och skicka tillbaka det som `ClaudeAgentOptions(resume=...)` på nästa fråga. "Ny konversation" nollställer `chat_history` + `mcp_session_id`.
 
 **SQLite-state (`generated/db/state.db`)**: all operativ pipeline-state lever här —
 downloads, per-PDF-status (redaktion/merge/normalize), per-sida OCR-resultat,
-kvalitetspoäng, LLM-korrigeringar och ingest-tracking. Inkrementell logik
+kvalitetspoäng, LLM-korrigeringar och ingest-tracking. Utredningspärmen
+lever också här i `casebook_entries` och `source_bookmarks`. Inkrementell logik
 bygger på att jämföra `pdf_files.text_mtime` mot `normalized_at`/`scored_at`/etc.
 `--rebuild` tvingar omkörning. Modulen `src/db.py` exponerar alla CRUD- och delta-queries; konsumenter skriver aldrig egen SQL.
+
+**Utredningspärm → Graf**: sparade svar i Utredningspärmen visas kollapsade.
+När en post öppnas renderas källor som källkort med PDF/text-knappar och
+grafentiteter som en länk till Graf-sidan. Länken kodar sparade center-entiteter
+i query-parametern `centers`; `src/pages/3_Graf.py` läser den och återskapar
+startgrafen utan ny sökning.
 
 **mtime-tracking (ingest.py)**: Varje `.txt`-fil jämförs mot mtime som lagras i `ingest`-tabellen i state.db (auktoritativt); nyare fil → re-ingest. LanceDB-tabellen har fortfarande en `mtime`-kolumn men den läses inte längre för delta-beslut. Om ingest-state saknas men källan finns i LanceDB behandlas filen som re-indexering, så gamla chunks ersätts i stället för att dupliceras. Legacy-rader med sentinel-mtime `0.0` re-indexeras bara med `--reindex-since`.
 

@@ -1,9 +1,9 @@
-"""Bygg ego-nätverk ur kunskapsgrafen för webui:s grafvyer.
+"""Bygg ego-nätverk ur kunskapsgrafen för Streamlit-grafvyerna.
 
 Neo4j-frågorna hålls tunna; transformationen rad→noder/kanter och
 Cytoscape-konverteringen är rena funktioner (testbara utan Neo4j).
-Renderingen sker med st-link-analysis i ``webui.py`` (svarsgrafen) och
-``src/pages/1_Graf.py`` (grafsidan).
+Renderingen sker med st-link-analysis i ``Utredning.py`` (svarsgrafen) och
+``src/pages/3_Graf.py`` (grafsidan).
 """
 from __future__ import annotations
 
@@ -233,4 +233,3 @@ def to_cytoscape_elements(nodes: list[dict], edges: list[dict]) -> dict:
             "label": "REL", "name": name,
         }})
     return {"nodes": cy_nodes, "edges": cy_edges}
-

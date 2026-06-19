@@ -18,6 +18,8 @@ Inspektera med t.ex. `sqlite3 generated/db/state.db`. Tabellerna:
 - `llm_corrections` — vilka sidor som LLM-korrigerats
 - `wpu_decisions` — vilka wpu-stems `merge_wpu` redan fattat beslut för
 - `doc_entities` — extraherade entiteter/relationer per sida (kunskapsgrafen)
+- `casebook_entries` — sparade fråga/svar-spår från webgränssnittets utredningspärm
+- `source_bookmarks` — bokmärkta källor från källlistorna i webgränssnittet
 
 **Livscykel:** radera inte `generated/db/state.db` mitt under en pågående
 pipeline-körning — befintliga processer fortsätter skriva mot den unlinkade inoden
@@ -27,11 +29,11 @@ LanceDB-källor och ersätts i stället för att dupliceras.
 
 ## Vad install.sh gör
 
-`install.sh` sköter pipeline- och webui-beroendena via Homebrew och pip:
+`install.sh` sköter pipeline- och webgränssnittsberoendena via Homebrew och pip:
 
 - `ocrmypdf`, `tesseract-lang`, `poppler`, `unpaper`, `hunspell` via brew
 - sv_SE-ordlista länkad till `~/Library/Spelling/` (för qualitets-scoring)
-- `.venv/` med `pip install -e .[webui]`
+- `.venv/` med `pip install -e .[web]`
 - Laddar ner `swe_best.traineddata` (~12 MB) via `setup_tessdata.sh`
 
 Surya-OCR ingår som standard. Hoppa över det (snabbare install) med:
@@ -279,13 +281,13 @@ Enkla faktafrågor  → RAG-läge (snabbt, deterministiskt)
 Komplexa utredningsfrågor  → MCP-läge (--mcp, autonomt, bättre täckning)
 ```
 
-Webgränssnittet (Claude-backend) har en "Utredningsläge (MCP)"-toggle i sidebaren.
+Fliken **Utredning** (Claude-backend) har en "Utredningsläge (MCP)"-toggle i sidebaren.
 I MCP-läget får du en chatt där Claude minns tidigare frågor i konversationen
 (implementerat via Claude Agent SDK:s `resume`-fält — `session_id` från senaste
 svaret skickas med nästa fråga). Sidebar-knappen "Ny konversation" nollställer
 historiken och startar en ny session.
 
-#### Webgränssnittet
+#### Utredning-fliken
 
 Stödjer flera AI-backends via en väljare i sidebaren:
 
@@ -317,6 +319,27 @@ Citat i svaret renderas som små inline-knappar — klick öppnar original-PDF:e
 lokalt (via `open`) i en gömd iframe så huvudsidan inte laddas om. Om samma
 dokument-ID delas av flera filer (t.ex. en palme- och en wpu-version) och svaret
 inte entydigt pekar ut vilken, visas en knapp per fil märkt med titeldelen.
+
+#### Utredningspärm och bokmärken
+
+Webgränssnittet har en egen flik, **Utredningspärm**, för återupptagbart
+grävarbete. Varje RAG-svar och varje assistentsvar i MCP-chatten kan sparas
+från Utredning-fliken med frågan, svaret, källistan, backend/modell, eventuella
+inline-grafentiteter och en kort egen anteckning. Poster sparas i
+`casebook_entries` i `generated/db/state.db` och visas nyast först på
+Utredningspärm-sidan. Sparade svar renderas som stängda expanders med en kort
+rubrik byggd från anteckningen om den finns, annars från frågan; fullständigt
+svar och metadata visas först när posten öppnas. Källorna i en öppnad post
+renderas som samma typ av källkort som i Utredning-fliken, med knappar för
+matchande PDF och extraherad text när filerna finns lokalt. Sparade
+grafentiteter renderas inte som en passiv lista, utan som en länk till
+Graf-fliken; länken skickar de sparade center-entiteterna i query-parametern
+`centers` och Graf-sidan återskapar då samma flerkärniga startgraf.
+
+Källlistorna i både RAG- och MCP-läget har dessutom knappen **Bokmärk**. Den
+sparar eller uppdaterar källan i `source_bookmarks`, deduplicerat på
+`source` + `page` (okänd sida lagras som 0 internt men visas som tom sida i UI).
+Bokmärkena visas på Utredningspärm-sidan och kan öppna matchande PDF lokalt.
 
 #### Kunskapsgraf till svaret
 
@@ -361,7 +384,7 @@ ersättning — LanceDB sköter fortfarande all sökning, medan Neo4j ger
 relationsfrågor och visualisering. De två lagren delar nyckeln `pdf_stem`.
 
 Extraktionen använder samma LLM som är konfigurerad i `generated/llm_config.json`
-(samma config som webui/`llm_correct.sh`); finns ingen config används Claude
+(samma config som Utredning-fliken/`llm_correct.sh`); finns ingen config används Claude
 Haiku som default. Flaggorna `--provider`, `--model`, `--base-url` och
 `--api-key` skriver över den sparade konfigurationen för just denna körning.
 
@@ -401,7 +424,7 @@ NEO4J_PASSWORD=... ./load_graph.sh     # ladda grafen till Neo4j
 > Podman-maskinen behöver ≥4 GiB minne för Neo4j:s 2G-heap:
 > `podman machine set --memory 4096` (en gång, med maskinen stoppad).
 
-> Om webui har sparat en dyrare modell (t.ex. Opus) i `llm_config.json`, kör
+> Om Utredning-fliken har sparat en dyrare modell (t.ex. Opus) i `llm_config.json`, kör
 > `./extract_entities.sh --model claude-haiku-4-5-20251001` för att tvinga
 > Haiku och hålla kostnaden nere.
 
@@ -483,12 +506,12 @@ Webgränssnittet sparar valt backend i `generated/llm_config.json` och laddar de
 | `base_url` | Tomt för molntjänster; URL för lokal endpoint (`http://localhost:11434/v1` för Ollama) |
 | `backend_name` | Visningsnamn i gränssnittet (valfritt) |
 
-### Visa/ändra konfigen utan webui (`llm_config.sh`)
+### Visa/ändra konfigen utan webgränssnitt (`llm_config.sh`)
 
 Snabbaste sättet att se eller byta vald LLM utan att starta Streamlit.
 
 Kör utan argument i en terminal startas en **interaktiv meny** där backend och
-modell väljs ur samma katalog som webui:s sidofält (Claude / OpenAI / DeepSeek /
+modell väljs ur samma katalog som Utredning-flikens sidofält (Claude / OpenAI / DeepSeek /
 Ollama / OpenAI-kompatibel). För OpenAI-kompatibla providers hämtas modell-listan
 live från `/v1/models` (faller tillbaka på en inbyggd lista om endpoint eller
 nyckel saknas), och konfigurerbara backends frågar efter endpoint-URL och en
@@ -504,13 +527,13 @@ aktuella konfigurationen ut.
 ```
 
 Backend-katalogen (namn, modell-listor, endpoints) bor i `src/backends.py` och
-delas mellan webui och `llm_config.sh` så att valen alltid är identiska.
+delas mellan Utredning-fliken och `llm_config.sh` så att valen alltid är identiska.
 
 ## Filer
 
 | Fil | Vad |
 |---|---|
-| `install.sh` | Installera pipeline/webui via Homebrew och pip (Python-paket, tessdata, hunspell) |
+| `install.sh` | Installera pipeline/webgränssnitt via Homebrew och pip (Python-paket, tessdata, hunspell) |
 | `run_pipeline.sh` | Kör hela pipelinen i ett kommando: download → OCR → ingest (flaggor: `--skip-wpu`, `--skip-redo`, `--with-llm`, `--jobs N`, `--test N`) |
 | `download.sh` → `src/download.py` | Hämta PDF:er från Drive |
 | `download_wpu.sh` → `src/download_wpu.py` | Ladda ner alla PDF:er från wpu.nu → `downloaded/wpu_files/` |
@@ -527,23 +550,25 @@ delas mellan webui och `llm_config.sh` så att valen alltid är identiska.
 | `llm_correct.sh` → `src/llm_correct.py` | LLM-korrektion av dåliga OCR-sidor via Claude Haiku |
 | `detect_redactions.sh` → `src/ocr_pages.py` | Kör redaktionsdetektering på befintliga text/OCR-par |
 | `ingest.sh` → `src/rag/ingest.py` | Bygg vektorindex (LanceDB + BM25 FTS) |
-| `src/rag/ask.py` | Frågefunktioner — RAG-läge och MCP-läge (importeras av webui och mcp_server) |
-| `src/rag/mcp_server.py` | MCP-server med `search_archive` och `get_page` (startas av ask.py/webui.py) |
+| `src/rag/ask.py` | Frågefunktioner — RAG-läge och MCP-läge (importeras av Utredning-sidan och mcp_server) |
+| `src/rag/mcp_server.py` | MCP-server med `search_archive` och `get_page` (startas av ask.py/Utredning.py) |
 | `generated/llm_config.json` | Sparad LLM-konfiguration (backend, modell, URL) — se ovan |
-| `src/config.py` | Läser/skriver `generated/llm_config.json` (delas av webui och llm_correct) |
-| `src/backends.py` | Delad backend-katalog (Claude/OpenAI/DeepSeek/Ollama/custom) + `fetch_models`/`available_models` — delas av webui och `llm_config.sh` |
-| `llm_config.sh` → `src/llm_config_cli.py` | Visa/ändra `generated/llm_config.json` utan webui (interaktiv meny i terminal) |
+| `src/config.py` | Läser/skriver `generated/llm_config.json` (delas av Utredning-sidan och llm_correct) |
+| `src/backends.py` | Delad backend-katalog (Claude/OpenAI/DeepSeek/Ollama/custom) + `fetch_models`/`available_models` — delas av Utredning-sidan och `llm_config.sh` |
+| `llm_config.sh` → `src/llm_config_cli.py` | Visa/ändra `generated/llm_config.json` utan webgränssnittet (interaktiv meny i terminal) |
 | `src/citations.py` | Slår upp `[Nr X, sida Y]`-citat mot PDF:er och renderar citatlänkar |
-| `src/webui.py` | Streamlit-webgränssnitt för frågor (RAG + MCP-toggle) |
+| `src/Utredning.py` | Streamlit-flik för frågor (RAG + MCP-toggle), svarsgraf, sparknapp och källbokmärken |
+| `src/casebook_ui.py` | Delade Streamlit-komponenter för utredningspärm och källbokmärken |
+| `src/pages/2_Utredningspärm.py` | Streamlit-sida för sparade fråga/svar-spår och bokmärkta källor |
 | `extract_entities.sh` → `src/graph/extract_entities.py` | Entitets-/relationsextraktion till `doc_entities` i state.db (Claude Haiku) |
 | `load_graph.sh` → `src/graph/load_neo4j.py` | Ladda kunskapsgrafen från state.db till Neo4j |
 | `neo4j.sh` | Starta/stoppa Neo4j via podman (genererar lösenord → `neo4j/.password`) |
 | `src/graph/viz.py` | Bygg ego-nätverk (flera center) + Cytoscape-konvertering för grafvyerna |
-| `src/graph/answer_entities.py` | LLM (Claude Haiku) listar nyckelentiteter ur ett RAG-svar — driver inline-grafen i webui |
-| `src/pages/1_Graf.py` | Streamlit-grafsida: sök entitet → interaktivt nätverk, fäll ut noder |
+| `src/graph/answer_entities.py` | LLM (Claude Haiku) listar nyckelentiteter ur ett RAG-svar — driver inline-grafen i Utredning-fliken |
+| `src/pages/3_Graf.py` | Streamlit-grafsida: sök entitet → interaktivt nätverk, fäll ut noder |
 | `neo4j/docker-compose.yml` | Neo4j 5 för kunskapsgrafen med Docker (Browser på :7474) |
 | `web.sh` | Wrapper för Streamlit-servern |
-| `src/db.py` | SQLite-state: schema + CRUD + delta-queries (importeras av övriga skript) |
+| `src/db.py` | SQLite-state: schema + CRUD + delta-queries, inklusive utredningspärm och källbokmärken |
 | `tessdata/swe.user-words` | Palme-specifika ord (committat) |
 | `tessdata/tesseract.config` | `preserve_interword_spaces 1` (committat) |
 

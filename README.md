@@ -14,10 +14,13 @@ kunskapsgraf och utforskas visuellt.
 
 ## Web-gränssnitt
 
-Efter nedladdning och OCR-scanning finns ett webgränssnitt (`./web.sh`) där du
-ställer frågor i två lägen — och en grafsida för att utforska relationer.
+Efter nedladdning och OCR-scanning finns ett webgränssnitt (`./web.sh`) med tre
+flikar: **Utredning** för frågor, **Utredningspärm** för sparade spår och
+**Graf** för relationer.
 
-### RAG (standard)
+### Utredning
+
+#### RAG (standard)
 
 En fast pipeline: frågan
 embedas och matchas mot vektorindexet, de bästa utdragen rerankas, och de
@@ -27,7 +30,7 @@ söksteg räcker.
 
 ![Web-gränssnitt — RAG-läge](cross-encoder.png)
 
-### MCP (utredningsläge)
+#### MCP (utredningsläge)
 
 AI söker *autonomt* via
 [Model Context Protocol](https://modelcontextprotocol.io). Istället för en
@@ -37,6 +40,16 @@ upp intressanta träffar och läser hela sidor för mer kontext. Bättre täckni
 på komplexa flerstegs-frågor, men långsammare (~1–3 min).
 
 ![Web-gränssnitt — MCP-läge](utredningsläge.png)
+
+### Utredningspärm
+
+I fliken **Utredningspärm** visas fråga/svar-spår som sparats från både RAG- och
+MCP-läget som kollapsade poster med kort rubrik; öppna en post för att läsa
+svaret, källorna, modellvalet, grafentiteterna och eventuell egen anteckning.
+Källorna visas som klickbara källkort med PDF/text-knappar, och sparade
+grafentiteter har en länk som återskapar grafen i Graf-fliken. Källor i svarens
+källista kan också bokmärkas separat så att du snabbt hittar tillbaka till
+viktiga PDF:er och sidor.
 
 ### Graf
 

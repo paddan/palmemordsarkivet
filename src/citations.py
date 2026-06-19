@@ -1,6 +1,6 @@
 """Citatuppslag: matcha [Nr X, sida Y]-citat mot PDF:er och rendera länkar.
 
-Ren logik utan Streamlit-beroenden — webui.py wrappar funktionerna med
+Ren logik utan Streamlit-beroenden — Utredning.py wrappar funktionerna med
 st.cache_resource och tillhandahåller den cachade nr→PDF-mappingen.
 """
 
@@ -89,7 +89,7 @@ def extract_cited_sources(answer: str, mapping: dict[str, Path]) -> list[dict]:
 
 def pdf_anchor(pdf: Path, label: str, title: str = "Öppna PDF") -> str:
     """HTML-länk som öppnar en PDF lokalt via ?pdf=<base64>-handlern högst upp
-    i webui-scriptet (laddas i den gömda pdf_opener-iframen). ``label`` ska
+    i Utredning-scriptet (laddas i den gömda pdf_opener-iframen). ``label`` ska
     redan vara HTML-säker."""
     token = base64.urlsafe_b64encode(str(pdf).encode()).decode().rstrip("=")
     return (
@@ -104,7 +104,7 @@ def linkify_citations(
     known_sources: set[str] | None = None,
 ) -> str:
     """Förvandla "Nr X, sida Y" till små inline-knappar som öppnar PDF lokalt
-    via ?pdf=<base64>-handlern högst upp i webui-scriptet.
+    via ?pdf=<base64>-handlern högst upp i Utredning-scriptet.
     Fungerar i både RAG- och MCP-läge — slår upp nr → PDF via ``mapping``.
 
     ``known_sources`` (källfilnamn som faktiskt hämtades för svaret, finns bara

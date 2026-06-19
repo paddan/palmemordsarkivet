@@ -1,5 +1,5 @@
 #!/bin/bash
-# Visa/ändra LLM-konfigurationen (generated/llm_config.json) utan webui.
+# Visa/ändra LLM-konfigurationen (generated/llm_config.json) utan webgränssnittet.
 set -eu
 ROOT=$(cd "$(dirname "$0")" && pwd)
 cd "$ROOT"

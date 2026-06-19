@@ -1,11 +1,11 @@
-"""Delad LLM-backend-katalog — en sanning för webui och llm_config_cli.
+"""Delad LLM-backend-katalog — en sanning för Utredning-sidan och llm_config_cli.
 
 Innehåller listan över valbara backends (Claude/OpenAI/DeepSeek/Ollama/custom),
 modell-filtret och hjälpfunktioner för att hämta tillgängliga modeller från en
 OpenAI-kompatibel /v1/models-endpoint. Konsumeras av:
 
-* ``webui.py`` — sidofältets backend-/modellval (cachar fetch via st.cache_data)
-* ``llm_config_cli.py`` — den interaktiva menyn (samma val utan webui)
+* ``Utredning.py`` — sidofältets backend-/modellval (cachar fetch via st.cache_data)
+* ``llm_config_cli.py`` — den interaktiva menyn (samma val utan webgränssnitt)
 """
 from __future__ import annotations
 
@@ -101,7 +101,7 @@ def available_models(backend: dict, api_key: str = "", fetcher=None) -> list[str
     via ``fetcher`` (default fetch_models), brusmodeller filtreras bort med
     MODEL_SKIP_SUBSTRINGS, och vid tomt/fel-resultat faller vi tillbaka på den
     statiska ``models``-listan. Backends utan ``base_url`` (t.ex. Claude)
-    returnerar alltid sin statiska lista. ``fetcher`` låter webui skicka in sin
+    returnerar alltid sin statiska lista. ``fetcher`` låter Utredning-sidan skicka in sin
     st.cache_data-cachade variant så /v1/models inte slås upp på varje rerun.
     """
     static = list(backend.get("models", []))

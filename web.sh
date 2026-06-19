@@ -15,7 +15,7 @@ Användning: $(basename "$0") [flaggor] [-- streamlit-flaggor...]
   --root DIR    projektrot ($PWD om ej satt via ROOT)
   -h, --help    visa denna hjälp
 
-Allt efter '--' skickas vidare till 'streamlit run webui.py'.
+Allt efter '--' skickas vidare till 'streamlit run src/Utredning.py'.
 EOF
 }
 
@@ -43,4 +43,4 @@ if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && [ -z "${ANTHROPIC_API_KEY:-}" ]; the
   fi
 fi
 
-exec streamlit run src/webui.py ${extra[@]+"${extra[@]}"}
+exec streamlit run src/Utredning.py ${extra[@]+"${extra[@]}"}

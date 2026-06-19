@@ -84,8 +84,8 @@ PIP=".venv/bin/pip"
 "$PIP" install --upgrade pip --quiet
 
 # ── Python-beroenden ──────────────────────────────────────────────────────────
-echo "→ pip install -e .[webui]…"
-"$PIP" install --quiet -e ".[webui]"
+echo "→ pip install -e .[web]…"
+"$PIP" install --quiet -e ".[web]"
 
 if [[ "$WITH_SURYA" == "true" ]]; then
   echo "→ pip install -e .[surya]…"

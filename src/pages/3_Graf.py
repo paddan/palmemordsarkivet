@@ -1,6 +1,6 @@
 """Streamlit-sida: utforska kunskapsgrafen som interaktivt ego-nätverk.
 
-Fristående multipage-sida (kräver inga ändringar i webui.py). Söker en entitet
+Fristående multipage-sida (kräver inga ändringar i Utredning.py). Söker en entitet
 i Neo4j och ritar dess nätverk med Cytoscape (st-link-analysis): dubbelklick
 på en entitetsnod fäller ut den, dubbelklick på en dokumentnod öppnar PDF:en.
 Degraderar snällt om Neo4j inte är igång.
@@ -24,6 +24,7 @@ except ImportError:  # pragma: no cover — optional extra
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 
+import casebook_ui as _casebook_ui  # noqa: E402
 import citations as _citations  # noqa: E402
 from graph import viz  # noqa: E402
 
@@ -81,24 +82,38 @@ with st.sidebar:
     graph_height = st.slider("Grafhöjd (px)", 400, 1400, 660, step=20,
                              help="Justera graffönstrets höjd.")
 
-if not query.strip():
+linked_centers = _casebook_ui.decode_graph_centers_param(
+    st.query_params.get("centers")
+)
+use_linked_centers = bool(linked_centers) and not query.strip()
+
+if not query.strip() and not use_linked_centers:
     st.info("Skriv ett namn i sidofältet för att rita nätverket.")
     st.stop()
 
-hits = _search(query.strip())
-if not hits:
-    st.info(f"Inga entiteter matchar “{query}”.")
-    st.stop()
+if use_linked_centers:
+    seed_centers = linked_centers
+    seed_key = tuple(sorted((c["label"], c["norm"]) for c in seed_centers))
+    st.caption(
+        "Återskapad från utredningspärmen: "
+        + ", ".join(f"{c['namn']} ({c['label']})" for c in seed_centers)
+    )
+else:
+    hits = _search(query.strip())
+    if not hits:
+        st.info(f"Inga entiteter matchar “{query}”.")
+        st.stop()
 
-labels = [f'{h["namn"]}  ·  {h["label"]}' for h in hits]
-idx = st.selectbox("Träffar", range(len(hits)), format_func=lambda i: labels[i])
-seed = hits[idx]
+    labels = [f'{h["namn"]}  ·  {h["label"]}' for h in hits]
+    idx = st.selectbox("Träffar", range(len(hits)), format_func=lambda i: labels[i])
+    seed = hits[idx]
+    seed_centers = [seed]
+    seed_key = (seed["label"], seed["norm"])
 
-# Ackumulera utfällda noder. Byter man sökt frö nollställs utfällningen.
-seed_key = (seed["label"], seed["norm"])
+# Ackumulera utfällda noder. Byter man frö nollställs utfällningen.
 if st.session_state.get("graph_seed") != seed_key:
     st.session_state["graph_seed"] = seed_key
-    st.session_state["graph_centers"] = [seed]
+    st.session_state["graph_centers"] = list(seed_centers)
 centers = st.session_state["graph_centers"]
 
 # Hämta och slå ihop ego-nätverken för alla utfällda center.
@@ -122,8 +137,16 @@ with st.sidebar:
     st.subheader("Expandera")
     st.caption(f"Utfällda noder: {len(centers)} — dubbelklicka en nod i grafen "
                "för att fälla ut den.")
-    if len(centers) > 1 and st.button("Återställ till sökt nod", use_container_width=True):
-        st.session_state["graph_centers"] = [seed]
+    reset_label = (
+        "Återställ till länkad graf"
+        if use_linked_centers
+        else "Återställ till sökt nod"
+    )
+    if len(centers) > len(seed_centers) and st.button(
+        reset_label,
+        use_container_width=True,
+    ):
+        st.session_state["graph_centers"] = list(seed_centers)
         st.rerun()
 
 center_names = ", ".join(f"{c['namn']} ({c['label']})" for c in centers)

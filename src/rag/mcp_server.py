@@ -5,7 +5,7 @@ Exponerar två verktyg som Claude kan anropa autonomt:
   - search_archive  — vektor- eller hybridsökning, valfri reranking
   - get_page        — hämta råtext från en specifik sida
 
-Körs som subprocess av ask.py (--mcp) och webui.py (utredningsläge).
+Körs som subprocess av ask.py (--mcp) och Utredning.py (utredningsläge).
 Startas normalt inte manuellt.
 """
 

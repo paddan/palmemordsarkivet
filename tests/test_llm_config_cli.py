@@ -1,4 +1,4 @@
-"""Tester för llm_config_cli — visa/sätta LLM-konfig utan webui."""
+"""Tester för llm_config_cli — visa/sätta LLM-konfig utan webgränssnittet."""
 from __future__ import annotations
 
 import json

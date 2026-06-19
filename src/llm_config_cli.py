@@ -1,5 +1,5 @@
 """CLI för att visa/ändra LLM-konfigurationen (generated/llm_config.json)
-utan att starta webgränssnittet. Konsumeras av webui, llm_correct och
+utan att starta webgränssnittet. Konsumeras av Utredning-sidan, llm_correct och
 graph/extract_entities.
 
 Kör:
@@ -9,7 +9,7 @@ Kör:
     ./llm_config.sh --reset                # tillbaka till defaults
 
 Utan argument från en terminal startas en meny där backend och modell väljs ur
-samma katalog som webui:s sidofält (src/backends.py). Körs utan TTY (pipe/skript)
+samma katalog som Utredning-sidans sidofält (src/backends.py). Körs utan TTY (pipe/skript)
 skrivs den aktuella konfigurationen ut, precis som tidigare.
 """
 from __future__ import annotations
@@ -28,7 +28,7 @@ PROVIDER_DEFAULT_MODELS = {
     "openai": "gpt-4o-mini",
 }
 
-# Visningsnamn per provider, matchar webui:s namngivning.
+# Visningsnamn per provider, matchar Utredning-sidans namngivning.
 PROVIDER_BACKEND_NAMES = {
     "claude": "Claude",
     "openai": "OpenAI",
@@ -75,7 +75,7 @@ def _prompt_choice(out, read, title, options, *, default=None, allow_custom=Fals
 
 
 def run_menu(read=input, out=print) -> int:
-    """Interaktiv meny för att välja backend och modell (speglar webui:s sidofält)."""
+    """Interaktiv meny för att välja backend och modell (speglar Utredning-sidans sidofält)."""
     try:
         return _run_menu(read, out)
     except (EOFError, KeyboardInterrupt):
@@ -132,7 +132,7 @@ def _run_menu(read, out) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Visa/ändra LLM-konfigurationen utan webui.",
+        description="Visa/ändra LLM-konfigurationen utan webgränssnittet.",
     )
     parser.add_argument("--provider", help="claude eller openai")
     parser.add_argument("--model", help="modellnamn")

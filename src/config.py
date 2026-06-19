@@ -1,4 +1,4 @@
-"""Delad LLM-konfiguration — läses av webui och llm_correct."""
+"""Delad LLM-konfiguration — läses av Utredning-sidan och llm_correct."""
 from __future__ import annotations
 
 import json
