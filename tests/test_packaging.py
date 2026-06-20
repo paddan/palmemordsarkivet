@@ -22,3 +22,11 @@ def test_pyproject_includes_graph_package() -> None:
 
     assert "rag*" in include
     assert "graph*" in include
+
+
+def test_pyproject_includes_karta_module() -> None:
+    root = Path(__file__).resolve().parents[1]
+    data = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    py_modules = set(data["tool"]["setuptools"]["py-modules"])
+
+    assert "karta" in py_modules

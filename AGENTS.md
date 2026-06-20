@@ -29,7 +29,7 @@ När du gör förändringar i projektet ska du **alltid** uppdatera den använda
 
 ## Project Overview
 
-**palmemordsarkivet** laddar ner, OCR-processar och gör 3 762 palme-PDF:er + 7 155 wpu-PDF:er (~47 000 sidor, 8 665 sökbara dokument efter merge) från palmemordsarkivet.se och wpu.nu sökbara via RAG + Codex Opus 4.7, med Streamlit-flikarna Utredning, Utredningspärm, Graf, Maskeringar och Jämförelse. Alla kommentarer och docstrings är på svenska.
+**palmemordsarkivet** laddar ner, OCR-processar och gör 3 762 palme-PDF:er + 7 155 wpu-PDF:er (~47 000 sidor, 8 665 sökbara dokument efter merge) från palmemordsarkivet.se och wpu.nu sökbara via RAG + Codex Opus 4.7, med Streamlit-flikarna Utredning, Utredningspärm, Graf, Maskeringar, Jämförelse och Karta. Alla kommentarer och docstrings är på svenska.
 
 Pipeline: download → OCR (Tesseract + optional Surya) → detect redactions → normalize → quality scoring → LanceDB ingest → RAG query → Streamlit UI.
 
@@ -52,11 +52,13 @@ src/
   facets.py            # Facetterad sökning: entiteter ur doc_entities → filtrera träffar
   search_fuzzy.py      # OCR-tolerant fuzzy-sökning (difflib token-index över chunk-korpusen)
   compare.py           # Vittnesjämförelse: promptbyggare som ställer källor mot varandra
+  karta.py             # Ren kartlogik: validering, popup-HTML och TimestampedGeoJson
   pages/
     2_Utredningspärm.py # Sparade fråga/svar-spår, källbokmärken och anteckningar
     3_Graf.py          # Fristående grafsida
     5_Maskeringar.py   # Maskeringsutforskaren (dokument sorterade efter antal [MASKAD])
     6_Jämförelse.py    # Vittnesjämförelse (korsförhörsläge — letar motstridiga uppgifter)
+    7_Karta.py         # Karta över mordkvällens observationer med formulär och tidslinje
   rag/
     ingest.py          # LanceDB vector index builder
     ask.py             # RAG query + Codex integration
@@ -76,6 +78,9 @@ Data-kataloger (gitignored):
 - `generated/lancedb/` — vektorindex
 - `generated/db/state.db` — SQLite-databas med pipeline-state (markörer, kvalitet, ingest-mtime) samt Utredningspärm, källbokmärken och anteckningar. WAL-filer (`state.db-wal`, `state.db-shm`) ligger bredvid.
 - `generated/errors.log` — fellog
+
+Repo-data:
+- `data/karta/platser.json`, `data/karta/rorelser.json` — seed-filer för kartans platser och observationer
 
 ## Commands
 
@@ -133,6 +138,13 @@ grafentiteter som en länk till Graf-sidan. Länken kodar sparade center-entitet
 i query-parametern `centers`; `src/pages/3_Graf.py` läser den och återskapar
 startgrafen utan ny sökning.
 
+**Kartmodulen (`src/karta.py` + `src/pages/7_Karta.py`)**: Observationer lever i
+state.db (`map_places`, `map_observations`) och seedas från `data/karta/*.json`
+bara om karttabellerna är tomma. `src/karta.py` är Streamlit-fri och bygger
+validerad TimestampedGeoJson; `map_observations.time` lagras som `HH:MM` och
+expanderas mot basdatum `1986-02-28` innan tidslinjen ritas. UI:t visar inte
+observationer i tidslinjen utan tid, koordinat och källa.
+
 **mtime-tracking (ingest.py)**: Varje `.txt`-fil jämförs mot mtime som lagras i `ingest`-tabellen i state.db (auktoritativt); nyare fil → re-ingest. LanceDB-tabellen har fortfarande en `mtime`-kolumn men den läses inte längre för delta-beslut. Om ingest-state saknas men källan finns i LanceDB behandlas filen som re-indexering, så gamla chunks ersätts i stället för att dupliceras. Legacy-rader med sentinel-mtime `0.0` re-indexeras bara med `--reindex-since`.
 
 **Redaktionsdetektering (ocr_pages.py)**: Hittar svarta maskeringsblock i bilder och infogar `[MASKAD]` i texten. På som standard; `--no-detect-redactions` stänger av. Idempotens spåras via `pdf_files.redaction_checked_at` i state.db — `.redact`-markörfilerna är borttagna. `detect_redactions.sh` förfiltrerar listan baserat på databasen så filer som redan kollats spawnar inga subprocesser alls.
@@ -149,3 +161,4 @@ startgrafen utan ny sökning.
 4. **FTS kräver tantivy**: Saknas det faller hybrid-sökning tillbaka på vektor-only.
 5. **OAuth vs API**: `CLAUDE_CODE_OAUTH_TOKEN` räknas mot Pro/Max-prenumerationen; `ANTHROPIC_API_KEY` drar API-credits.
 6. **SQLite WAL-filer**: `generated/db/state.db-wal` och `-shm` är normala WAL-filer och syncas vid checkpoint. Säkerhetskopiera alla tre samtidigt.
+7. **Kartor kräver nät för bakgrundsrutor**: folium-markörer och spår renderas även offline, men OSM-bakgrunden kräver internet.

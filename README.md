@@ -18,7 +18,8 @@ Efter nedladdning och OCR-scanning finns ett webgränssnitt (`./web.sh`) med
 flikar: **Utredning** för frågor (med facett- och OCR-tolerant fuzzy-filter),
 **Utredningspärm** för sparade spår, bokmärken och anteckningar, **Graf** för
 relationer, **Maskeringar** för att utforska svärtad text och **Jämförelse**
-för att ställa källor mot varandra.
+för att ställa källor mot varandra, samt **Karta** för källhänvisade
+observationer på mordkvällen.
 
 ### Utredning
 
@@ -65,6 +66,13 @@ intressant som innehållet.
 Fliken **Jämförelse** är ett korsförhörsläge: ange ett ämne så hämtas flera
 källor och AI:n ställer dem mot varandra och lyfter fram var de **säger emot**
 varandra — i stället för att jämka ihop uppgifterna som i vanliga svar.
+
+### Karta
+
+**Karta** visar källhänvisade observationer på en tidsanimerad karta över
+mordkvällen. Platskatalogen seedas och används för snabbval i formuläret, medan
+observationerna kan redigeras i appen; rörelser visas bara när de har tid,
+koordinater och källa.
 
 ### Graf
 

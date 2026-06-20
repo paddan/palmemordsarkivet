@@ -99,6 +99,15 @@ att gräva: **Maskeringar** visar var arkivet svärtat över text, och
 **Jämförelse** ställer flera källor mot varandra och lyfter fram motstridiga
 uppgifter.
 
+### Karta
+
+Karta-fliken finns i Streamlit-appen och visar observationer runt mordkvällen på
+en folium-karta. Nya observationer ska ha person, plats/koordinat och
+källhänvisning (`Nr` + `sida`); tid behövs för att observationen ska visas i
+tidslinjen. Kartan seedar platskatalogen från
+`data/karta/platser.json`; `data/karta/rorelser.json` börjar tom tills
+verifierade observationer läggs till.
+
 ## Kunskapsgraf (valfritt)
 
 Utöver vektorsökningen kan arkivet byggas som en kunskapsgraf i Neo4j, med en

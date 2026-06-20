@@ -21,6 +21,8 @@ Inspektera med t.ex. `sqlite3 generated/db/state.db`. Tabellerna:
 - `casebook_entries` — sparade fråga/svar-spår från webgränssnittets utredningspärm
 - `source_bookmarks` — bokmärkta källor från källlistorna i webgränssnittet
 - `source_annotations` — utredarens fritextanteckningar knutna till en källa/sida (flera per källa tillåts)
+- `map_places` — platskatalog för Karta-flikens snabbval
+- `map_observations` — källhänvisade observationer med person, koordinat, tid (`HH:MM`), osäkerhet, `nr`, `sida` och notering; `src/karta.py` tolkar tiden mot basdatum `1986-02-28` när `TimestampedGeoJson` byggs
 
 **Livscykel:** radera inte `generated/db/state.db` mitt under en pågående
 pipeline-körning — befintliga processer fortsätter skriva mot den unlinkade inoden
@@ -34,7 +36,7 @@ LanceDB-källor och ersätts i stället för att dupliceras.
 
 - `ocrmypdf`, `tesseract-lang`, `poppler`, `unpaper`, `hunspell` via brew
 - sv_SE-ordlista länkad till `~/Library/Spelling/` (för qualitets-scoring)
-- `.venv/` med `pip install -e .[web]`
+- `.venv/` med `pip install -e .[web]` (bl.a. Streamlit, `folium` och `streamlit-folium`)
 - Laddar ner `swe_best.traineddata` (~12 MB) via `setup_tessdata.sh`
 
 Surya-OCR ingår som standard. Hoppa över det (snabbare install) med:
@@ -393,6 +395,15 @@ dem mot varandra. System-prompten (i `src/compare.py`) ber modellen lyfta fram
 stället för att syntetisera bort konflikterna. Backend följer det val som
 sparats i `generated/llm_config.json` (sätts i Utredning-flikens sidofält).
 
+#### Karta (Karta-fliken)
+
+`src/pages/7_Karta.py` renderar en folium-karta via `streamlit-folium`.
+`src/karta.py` bygger `TimestampedGeoJson` från observationer i state.db.
+Observationer utan giltig tid, koordinat eller källa visas inte i den animerade
+tidslinjen, men kan redigeras i formuläret. Seed-data ligger i
+`data/karta/platser.json` och `data/karta/rorelser.json`; seed körs bara när
+karttabellerna är tomma.
+
 #### Kunskapsgraf till svaret
 
 När Neo4j är igång (`./neo4j.sh` + `./load_graph.sh`) erbjuds ett ego-nätverk ur
@@ -619,6 +630,7 @@ delas mellan Utredning-fliken och `llm_config.sh` så att valen alltid är ident
 | `src/search_fuzzy.py` | OCR-tolerant fuzzy-sökning (difflib token-index över chunk-korpusen) |
 | `src/redactions.py` → `src/pages/5_Maskeringar.py` | Maskeringsutforskaren: aggregera `[MASKAD]` ur `pdf_pages`, visa kontext |
 | `src/compare.py` → `src/pages/6_Jämförelse.py` | Vittnesjämförelse (korsförhörsläge — letar motstridiga uppgifter) |
+| `src/karta.py` → `src/pages/7_Karta.py` | Kartmodulen: validera observationer, bygg tidslinje-GeoJSON och rendera karta |
 | `extract_entities.sh` → `src/graph/extract_entities.py` | Entitets-/relationsextraktion till `doc_entities` i state.db (Claude Haiku) |
 | `load_graph.sh` → `src/graph/load_neo4j.py` | Ladda kunskapsgrafen från state.db till Neo4j |
 | `neo4j.sh` | Starta/stoppa Neo4j via podman (genererar lösenord → `neo4j/.password`) |
@@ -630,6 +642,7 @@ delas mellan Utredning-fliken och `llm_config.sh` så att valen alltid är ident
 | `src/db.py` | SQLite-state: schema + CRUD + delta-queries, inklusive utredningspärm, källbokmärken och anteckningar |
 | `tessdata/swe.user-words` | Palme-specifika ord (committat) |
 | `tessdata/tesseract.config` | `preserve_interword_spaces 1` (committat) |
+| `data/karta/platser.json` + `data/karta/rorelser.json` | Seed-filer för kartans platser och observationer |
 
 ### Bonus: kvalitetskoll
 

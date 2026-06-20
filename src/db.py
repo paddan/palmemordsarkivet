@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -19,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 DEFAULT_DB: Path = Path(os.environ.get("STATE_DB", str(ROOT / "generated" / "db" / "state.db")))
 
-SCHEMA_VERSION: int = 2
+SCHEMA_VERSION: int = 3
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -169,6 +170,35 @@ CREATE INDEX IF NOT EXISTS idx_source_annotations_source
     ON source_annotations(source, page);
 CREATE INDEX IF NOT EXISTS idx_source_annotations_updated
     ON source_annotations(updated_at DESC, id DESC);
+
+CREATE TABLE IF NOT EXISTS map_places (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT NOT NULL,
+    lat        REAL NOT NULL,
+    lon        REAL NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_map_places_name
+    ON map_places(name COLLATE NOCASE);
+
+CREATE TABLE IF NOT EXISTS map_observations (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    person      TEXT NOT NULL,
+    place_name  TEXT,
+    lat         REAL NOT NULL,
+    lon         REAL NOT NULL,
+    time        TEXT,
+    uncertainty TEXT,
+    nr          TEXT,
+    sida        INTEGER,
+    note        TEXT,
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_map_observations_person_time
+    ON map_observations(person COLLATE NOCASE, time, id);
+CREATE INDEX IF NOT EXISTS idx_map_observations_source
+    ON map_observations(nr, sida);
 """
 
 
@@ -1006,6 +1036,281 @@ def delete_source_annotation(conn: sqlite3.Connection, annotation_id: int) -> bo
     )
     conn.commit()
     return cur.rowcount > 0
+
+
+# --- karta ------------------------------------------------------------
+
+_MAP_OBSERVATION_FIELDS = {
+    "person", "place_name", "lat", "lon", "time", "uncertainty", "nr", "sida", "note"
+}
+
+_TIME_HH_MM_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+
+
+def _row_dict(row: sqlite3.Row) -> dict:
+    """Gör om en sqlite-rad till en vanlig dict."""
+    return dict(row)
+
+
+def _validate_lat_lon(lat: float, lon: float) -> tuple[float, float]:
+    """Validera och normalisera koordinater till float."""
+    try:
+        lat_f = float(lat)
+        lon_f = float(lon)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("lat/lon måste vara tal") from exc
+    if not -90 <= lat_f <= 90:
+        raise ValueError("lat måste ligga mellan -90 och 90")
+    if not -180 <= lon_f <= 180:
+        raise ValueError("lon måste ligga mellan -180 och 180")
+    return lat_f, lon_f
+
+
+def _validate_time_hh_mm(time_value: str | None) -> str | None:
+    """Validera strikt tid i formatet HH:MM eller returnera None."""
+    if time_value is None:
+        return None
+    if not isinstance(time_value, str) or not _TIME_HH_MM_RE.fullmatch(time_value):
+        raise ValueError("time måste vara i formatet HH:MM mellan 00:00 och 23:59")
+    return time_value
+
+
+def record_map_place(conn: sqlite3.Connection, *, name: str, lat: float, lon: float) -> int:
+    """Spara en plats i kartans platskatalog och returnera rad-id."""
+    clean_name = name.strip()
+    if not clean_name:
+        raise ValueError("name får inte vara tom")
+    lat_f, lon_f = _validate_lat_lon(lat, lon)
+    cur = conn.execute(
+        """
+        INSERT INTO map_places(name, lat, lon, created_at)
+        VALUES (?, ?, ?, ?)
+        """,
+        (clean_name, lat_f, lon_f, now()),
+    )
+    conn.commit()
+    return int(cur.lastrowid)
+
+
+def list_map_places(conn: sqlite3.Connection) -> list[dict]:
+    """Lista alla platser i kartan alfabetiskt på namn."""
+    rows = conn.execute(
+        """
+        SELECT id, name, lat, lon, created_at
+        FROM map_places
+        ORDER BY name COLLATE NOCASE, id
+        """
+    )
+    return [_row_dict(row) for row in rows]
+
+
+def delete_map_place(conn: sqlite3.Connection, place_id: int) -> bool:
+    """Radera en plats ur platskatalogen."""
+    cur = conn.execute("DELETE FROM map_places WHERE id=?", (place_id,))
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def list_map_observations(
+    conn: sqlite3.Connection, *, person: str | None = None
+) -> list[dict]:
+    """Lista kartobservationer, nyast först inom samma tid/person."""
+    params: tuple = ()
+    where = ""
+    if person and person.strip():
+        where = "WHERE person = ?"
+        params = (person.strip(),)
+    rows = conn.execute(
+        f"""
+        SELECT id, person, place_name, lat, lon, time, uncertainty,
+               nr, sida, note, created_at, updated_at
+        FROM map_observations
+        {where}
+        ORDER BY COALESCE(time, '99:99') DESC, person COLLATE NOCASE, id DESC
+        """,
+        params,
+    )
+    return [_row_dict(row) for row in rows]
+
+
+def record_map_observation(
+    conn: sqlite3.Connection,
+    *,
+    person: str,
+    place_name: str | None = None,
+    lat: float,
+    lon: float,
+    time: str | None = None,
+    uncertainty: str | None = None,
+    nr: str | None = None,
+    sida: int | None = None,
+    note: str | None = None,
+) -> int:
+    """Spara en källhänvisad kartobservation och returnera rad-id."""
+    clean_person = person.strip()
+    if not clean_person:
+        raise ValueError("person får inte vara tom")
+    lat_f, lon_f = _validate_lat_lon(lat, lon)
+    time_value = _validate_time_hh_mm(time)
+    stamp = now()
+    cur = conn.execute(
+        """
+        INSERT INTO map_observations(
+            person, place_name, lat, lon, time, uncertainty,
+            nr, sida, note, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            clean_person,
+            place_name.strip() if place_name and place_name.strip() else None,
+            lat_f,
+            lon_f,
+            time_value,
+            uncertainty.strip() if uncertainty and uncertainty.strip() else None,
+            nr.strip() if nr and nr.strip() else None,
+            int(sida) if sida is not None else None,
+            note.strip() if note and note.strip() else None,
+            stamp,
+            stamp,
+        ),
+    )
+    conn.commit()
+    return int(cur.lastrowid)
+
+
+def update_map_observation(conn: sqlite3.Connection, obs_id: int, **fields) -> bool:
+    """Uppdatera valda fält på en kartobservation."""
+    unknown = set(fields) - _MAP_OBSERVATION_FIELDS
+    if unknown:
+        raise ValueError(f"okända kartfält: {', '.join(sorted(unknown))}")
+    if not fields:
+        return False
+    cleaned = dict(fields)
+    if "person" in cleaned:
+        person = str(cleaned["person"]).strip()
+        if not person:
+            raise ValueError("person får inte vara tom")
+        cleaned["person"] = person
+    if "time" in cleaned:
+        cleaned["time"] = _validate_time_hh_mm(cleaned["time"])
+    if "lat" in cleaned or "lon" in cleaned:
+        current = conn.execute(
+            "SELECT lat, lon FROM map_observations WHERE id=?", (obs_id,)
+        ).fetchone()
+        if current is None:
+            return False
+        lat_f, lon_f = _validate_lat_lon(
+            cleaned.get("lat", current["lat"]),
+            cleaned.get("lon", current["lon"]),
+        )
+        cleaned["lat"] = lat_f
+        cleaned["lon"] = lon_f
+    for key in ("place_name", "time", "uncertainty", "nr", "note"):
+        if key == "time":
+            continue
+        if key in cleaned:
+            value = cleaned[key]
+            cleaned[key] = value.strip() if isinstance(value, str) and value.strip() else None
+    if "sida" in cleaned and cleaned["sida"] is not None:
+        cleaned["sida"] = int(cleaned["sida"])
+    cleaned["updated_at"] = now()
+    assignments = ", ".join(f"{key}=?" for key in cleaned)
+    values = list(cleaned.values()) + [obs_id]
+    cur = conn.execute(
+        f"UPDATE map_observations SET {assignments} WHERE id=?",
+        values,
+    )
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def delete_map_observation(conn: sqlite3.Connection, obs_id: int) -> bool:
+    """Radera en kartobservation."""
+    cur = conn.execute("DELETE FROM map_observations WHERE id=?", (obs_id,))
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def seed_map_data_if_empty(
+    conn: sqlite3.Connection, places: list[dict], observations: list[dict]
+) -> int:
+    """Seeda karttabellerna om både plats- och observationstabell är tomma."""
+    has_places = conn.execute("SELECT 1 FROM map_places LIMIT 1").fetchone()
+    has_obs = conn.execute("SELECT 1 FROM map_observations LIMIT 1").fetchone()
+    if has_places or has_obs:
+        return 0
+
+    normalized_places: list[tuple[str, float, float]] = []
+    for place in places:
+        name = str(place.get("name") or "").strip()
+        if not name:
+            raise ValueError("seed-plats saknar name")
+        lat_f, lon_f = _validate_lat_lon(place.get("lat"), place.get("lon"))
+        normalized_places.append((name, lat_f, lon_f))
+
+    normalized_observations: list[tuple[str, str | None, float, float, str | None, str | None, str | None, int | None, str | None]] = []
+    for obs in observations:
+        person = str(obs.get("person") or "").strip()
+        if not person:
+            raise ValueError("seed-observation saknar person")
+        lat_f, lon_f = _validate_lat_lon(obs.get("lat"), obs.get("lon"))
+        normalized_observations.append(
+            (
+                person,
+                str(obs.get("place_name") or "").strip() or None,
+                lat_f,
+                lon_f,
+                _validate_time_hh_mm(obs.get("time")),
+                str(obs.get("uncertainty") or "").strip() or None,
+                str(obs.get("nr") or "").strip() or None,
+                int(obs["sida"]) if obs.get("sida") is not None else None,
+                str(obs.get("note") or "").strip() or None,
+            )
+        )
+
+    inserted = 0
+    stamp = now()
+    for name, lat_f, lon_f in normalized_places:
+        conn.execute(
+            "INSERT INTO map_places(name, lat, lon, created_at) VALUES (?, ?, ?, ?)",
+            (name, lat_f, lon_f, stamp),
+        )
+        inserted += 1
+    for (
+        person,
+        place_name,
+        lat_f,
+        lon_f,
+        time_value,
+        uncertainty,
+        nr,
+        sida,
+        note,
+    ) in normalized_observations:
+        conn.execute(
+            """
+            INSERT INTO map_observations(
+                person, place_name, lat, lon, time, uncertainty,
+                nr, sida, note, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                person,
+                place_name,
+                lat_f,
+                lon_f,
+                time_value,
+                uncertainty,
+                nr,
+                sida,
+                note,
+                stamp,
+                stamp,
+            ),
+        )
+        inserted += 1
+    conn.commit()
+    return inserted
 
 
 # --- delta-queries (inkrementell logik) -------------------------------

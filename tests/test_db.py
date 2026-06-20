@@ -22,6 +22,10 @@ from db import (
     record_source_bookmark, list_source_bookmarks, delete_source_bookmark,
     record_source_annotation, update_source_annotation,
     list_source_annotations, delete_source_annotation,
+    record_map_place, list_map_places, delete_map_place,
+    record_map_observation, list_map_observations,
+    update_map_observation, delete_map_observation,
+    seed_map_data_if_empty,
     files_needing_normalize, files_needing_quality, files_needing_ingest,
 )
 
@@ -501,6 +505,230 @@ def test_doc_entities_roundtrip(tmp_path):
     assert len(rows) == 1
     assert rows[0]["pdf_stem"] == "doc"
     assert rows[0]["payload"]["entiteter"][0]["namn"] == "Stig Engström"
+
+
+def test_map_places_crud(tmp_path):
+    conn = _fresh(tmp_path)
+    place_id = record_map_place(
+        conn,
+        name="Dekorima",
+        lat=59.33695,
+        lon=18.06324,
+    )
+
+    places = list_map_places(conn)
+
+    assert places == [{
+        "id": place_id,
+        "name": "Dekorima",
+        "lat": 59.33695,
+        "lon": 18.06324,
+        "created_at": places[0]["created_at"],
+    }]
+    assert places[0]["created_at"]
+    assert delete_map_place(conn, place_id) is True
+    assert delete_map_place(conn, place_id) is False
+    assert list_map_places(conn) == []
+
+
+def test_map_places_are_listed_alphabetically(tmp_path):
+    conn = _fresh(tmp_path)
+    conn.execute(
+        """
+        INSERT INTO map_places(name, lat, lon, created_at)
+        VALUES (?, ?, ?, ?)
+        """,
+        ("zeta", 59.0, 18.0, "2026-01-01T00:00:02+00:00"),
+    )
+    conn.execute(
+        """
+        INSERT INTO map_places(name, lat, lon, created_at)
+        VALUES (?, ?, ?, ?)
+        """,
+        ("Alpha", 59.1, 18.1, "2026-01-01T00:00:01+00:00"),
+    )
+    conn.commit()
+
+    places = list_map_places(conn)
+
+    assert [place["name"] for place in places] == ["Alpha", "zeta"]
+
+
+def test_map_place_requires_name_and_coordinates(tmp_path):
+    conn = _fresh(tmp_path)
+    with pytest.raises(ValueError):
+        record_map_place(conn, name=" ", lat=59.0, lon=18.0)
+    with pytest.raises(ValueError):
+        record_map_place(conn, name="Grand", lat=120.0, lon=18.0)
+    with pytest.raises(ValueError):
+        record_map_place(conn, name="Grand", lat=59.0, lon=220.0)
+
+
+def test_map_observations_crud_and_person_filter(tmp_path):
+    conn = _fresh(tmp_path)
+    first = record_map_observation(
+        conn,
+        person="Olof Palme",
+        place_name="Grand",
+        lat=59.34057,
+        lon=18.06024,
+        time="21:15",
+        uncertainty="ca",
+        nr="2055",
+        sida=1,
+        note="Biobesök",
+    )
+    second = record_map_observation(
+        conn,
+        person="Lisbeth Palme",
+        place_name="Grand",
+        lat=59.34057,
+        lon=18.06024,
+        time="21:15",
+        nr="2055",
+        sida=1,
+    )
+
+    assert [r["id"] for r in list_map_observations(conn)] == [second, first]
+    palme = list_map_observations(conn, person="Olof Palme")
+    assert len(palme) == 1
+    assert palme[0]["person"] == "Olof Palme"
+    assert palme[0]["place_name"] == "Grand"
+    assert palme[0]["sida"] == 1
+
+    assert update_map_observation(
+        conn,
+        first,
+        place_name="Dekorima",
+        lat=59.33695,
+        lon=18.06324,
+        time="23:21",
+        note="Uppdaterad",
+    ) is True
+    updated = list_map_observations(conn, person="Olof Palme")[0]
+    assert updated["place_name"] == "Dekorima"
+    assert updated["time"] == "23:21"
+    assert updated["note"] == "Uppdaterad"
+    assert updated["updated_at"] >= updated["created_at"]
+
+    assert update_map_observation(conn, 9999, place_name="Saknas") is False
+    assert delete_map_observation(conn, second) is True
+    assert delete_map_observation(conn, second) is False
+
+
+def test_map_observation_requires_person_and_coordinates(tmp_path):
+    conn = _fresh(tmp_path)
+    with pytest.raises(ValueError):
+        record_map_observation(conn, person=" ", place_name=None, lat=59.0, lon=18.0)
+    with pytest.raises(ValueError):
+        record_map_observation(conn, person="A", place_name=None, lat=-100.0, lon=18.0)
+    with pytest.raises(ValueError):
+        record_map_observation(conn, person="A", place_name=None, lat=59.0, lon=200.0)
+    with pytest.raises(ValueError):
+        update_map_observation(conn, 1, forbidden="x")
+
+
+def test_map_time_must_be_strict_hh_mm(tmp_path):
+    conn = _fresh(tmp_path)
+    for bad_time in ("9:5", "24:00", "fri text"):
+        with pytest.raises(ValueError):
+            seed_map_data_if_empty(
+                conn,
+                [{"name": "Dekorima", "lat": 59.0, "lon": 18.0}],
+                [{
+                    "person": "Olof Palme",
+                    "place_name": "Dekorima",
+                    "lat": 59.0,
+                    "lon": 18.0,
+                    "time": bad_time,
+                }],
+            )
+
+
+def test_update_map_observation_rejects_invalid_time(tmp_path):
+    conn = _fresh(tmp_path)
+    obs_id = record_map_observation(
+        conn,
+        person="Olof Palme",
+        place_name=None,
+        lat=59.0,
+        lon=18.0,
+        time="21:15",
+    )
+
+    with pytest.raises(ValueError):
+        update_map_observation(conn, obs_id, time="24:00")
+
+
+def test_seed_map_data_if_empty_ignores_invalid_input_when_data_exists(tmp_path):
+    conn = _fresh(tmp_path)
+    record_map_place(conn, name="Dekorima", lat=59.33695, lon=18.06324)
+    record_map_observation(
+        conn,
+        person="Olof Palme",
+        place_name="Dekorima",
+        lat=59.33695,
+        lon=18.06324,
+        time="23:21",
+        uncertainty="ca",
+        nr="1000",
+        sida=1,
+        note="Testkälla",
+    )
+
+    inserted = seed_map_data_if_empty(
+        conn,
+        [{"name": "Dekorima", "lat": 59.0, "lon": 18.0}],
+        [{
+            "person": "Olof Palme",
+            "place_name": "Dekorima",
+            "lat": 59.0,
+            "lon": 18.0,
+            "time": "24:00",
+        }],
+    )
+
+    assert inserted == 0
+    assert len(list_map_places(conn)) == 1
+    assert len(list_map_observations(conn)) == 1
+
+
+def test_seed_map_data_if_empty_rejects_invalid_time_on_empty_database(tmp_path):
+    conn = _fresh(tmp_path)
+
+    with pytest.raises(ValueError):
+        seed_map_data_if_empty(
+            conn,
+            [{"name": "Dekorima", "lat": 59.0, "lon": 18.0}],
+            [{
+                "person": "Olof Palme",
+                "place_name": "Dekorima",
+                "lat": 59.0,
+                "lon": 18.0,
+                "time": "24:00",
+            }],
+        )
+
+
+def test_seed_map_data_if_empty_is_idempotent(tmp_path):
+    conn = _fresh(tmp_path)
+    places = [{"name": "Dekorima", "lat": 59.33695, "lon": 18.06324}]
+    observations = [{
+        "person": "Olof Palme",
+        "place_name": "Dekorima",
+        "lat": 59.33695,
+        "lon": 18.06324,
+        "time": "23:21",
+        "uncertainty": "ca",
+        "nr": "1000",
+        "sida": 1,
+        "note": "Testkälla",
+    }]
+
+    assert seed_map_data_if_empty(conn, places, observations) == 2
+    assert seed_map_data_if_empty(conn, places, observations) == 0
+    assert len(list_map_places(conn)) == 1
+    assert len(list_map_observations(conn)) == 1
 
 
 def test_record_doc_entities_is_upsert(tmp_path):

@@ -36,6 +36,8 @@ dev = [
 web = [
     "streamlit",
     "openai",
+    "folium",
+    "streamlit-folium",
 ]
 graph = [
     "neo4j",
@@ -76,6 +78,7 @@ py-modules = [
     "llm_correct",
     "merge_pages",
     "merge_wpu",
+    "karta",
 ]
 
 [tool.setuptools.package-dir]
