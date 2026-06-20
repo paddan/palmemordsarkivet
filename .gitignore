@@ -9,6 +9,9 @@ __pycache__/
 downloaded/
 generated/
 log.txt
+
+# Visuell brainstorm-companion (tillfälliga mockups)
+.superpowers/
 *.pdf
 text_vision/
 

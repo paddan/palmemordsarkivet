@@ -83,7 +83,21 @@ Sparade spår visas som kollapsade poster med kort rubrik; öppna posten för at
 se frågan, svaret, källkort med PDF/text-knappar, modellvalet och eventuella
 grafentiteter. Grafentiteterna kan öppnas som en länk som återskapar grafen i
 Graf-fliken. Du kan också bokmärka enskilda källor från källistan för att
-snabbt komma tillbaka till samma PDF eller sida senare.
+snabbt komma tillbaka till samma PDF eller sida senare, och skriva fria
+**anteckningar** på en källa via ✏️-rutan på källkorten (samlas på en egen flik
+i Utredningspärmen).
+
+I Utredning-flikens sidofält finns två extra sökfilter för RAG-läget:
+**facetter** (begränsa träffarna till dokument som nämner en viss person/plats/
+organisation ur kunskapsgrafen) och **OCR-tolerant fuzzy-sökning** (fångar
+söktermer som OCR:en felstavat, t.ex. *Engstrcm* för *Engström* — första
+körningen bygger ett index och tar en stund). Med likhetströskeln (sliden under
+toggeln) avgör du hur tolerant matchningen är: sänk den mot ~0.6 för korta namn
+med ett OCR-fel som *Palme*→*Paine*, höj den för mindre brus. Två fristående
+flikar hjälper dig dessutom
+att gräva: **Maskeringar** visar var arkivet svärtat över text, och
+**Jämförelse** ställer flera källor mot varandra och lyfter fram motstridiga
+uppgifter.
 
 ## Kunskapsgraf (valfritt)
 

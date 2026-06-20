@@ -22,6 +22,8 @@ import backends as _backends  # noqa: E402
 import casebook_ui as _casebook_ui  # noqa: E402
 import citations as _citations  # noqa: E402
 import config as _llm_config  # noqa: E402
+import facets as _facets  # noqa: E402
+import search_fuzzy as _search_fuzzy  # noqa: E402
 from errors_log import log_error  # noqa: E402
 from graph import answer_entities as _answer_entities  # noqa: E402
 from graph import viz as _viz  # noqa: E402
@@ -103,6 +105,50 @@ def find_txt(source_txt: str) -> Path | None:
 
 
 casebook_conn = _casebook_ui.state_conn()
+
+
+@st.cache_data(show_spinner=False)
+def _load_facets() -> dict:
+    """Entitetsfacetter ur kunskapsgrafen (doc_entities). Cachas per session."""
+    return _facets.entity_facets(_casebook_ui.state_conn())
+
+
+@st.cache_data(show_spinner=False)
+def _load_facet_index() -> dict:
+    """Cachat ``casefold(namn) -> {pdf_stem}`` så doc_entities inte parsas om
+    per vald facett och sökning."""
+    return _facets.entity_stem_index(_casebook_ui.state_conn())
+
+
+@st.cache_resource(show_spinner="Bygger fuzzy-index (engångskostnad ~30 s)…")
+def _load_fuzzy_corpus():
+    """Hela chunk-korpusen + token-index för OCR-tolerant fuzzy-sökning.
+
+    Tungt (~100 MB text) men byggs bara en gång och bara om användaren slår på
+    fuzzy-sökningen. Vi projicerar kolumnerna i sökningen i stället för
+    ``to_pandas()`` så vektorkolumnen (~660 MB) aldrig materialiseras."""
+    cols = ["text", "source", "page", "chunk_idx", "nr", "titel", "anmarkning"]
+    rows = table.search().select(cols).limit(table.count_rows()).to_list()
+    return rows, _search_fuzzy.build_index(rows)
+
+
+def _interleave_hits(primary: list[dict], extra: list[dict]) -> list[dict]:
+    """Varva två träfflistor (round-robin), dedupa på (source, page, chunk_idx).
+
+    Round-robin (i stället för append) så fuzzy-träffarna får plats bland
+    topp-N även utan reranker — annars tar ``hits[:top_n]`` bara vektorträffar."""
+    import itertools  # noqa: PLC0415
+
+    seen: set = set()
+    out: list[dict] = []
+    for h in itertools.chain.from_iterable(itertools.zip_longest(primary, extra)):
+        if h is None:
+            continue
+        key = (h.get("source"), h.get("page"), h.get("chunk_idx"))
+        if key not in seen:
+            seen.add(key)
+            out.append(h)
+    return out
 
 
 def extract_cited_sources(answer: str) -> list[dict]:
@@ -307,8 +353,9 @@ with st.sidebar:
         "Visa kunskapsgraf",
         value=True,
         key="show_graph",
-        help="Extraherar svarets nyckelentiteter (Claude Haiku) och ritar deras "
-        "nätverk ur kunskapsgrafen i en sektion under svaret. "
+        help="Visar en hopfällbar grafsektion under svaret. Själva grafen "
+        "(entitetsextraktion med Claude Haiku + Neo4j) byggs först när du "
+        "öppnar den — inte automatiskt efter varje svar. "
         "Kräver att Neo4j är igång (./neo4j.sh).",
     )
     top_k = st.slider(
@@ -329,6 +376,39 @@ with st.sidebar:
         help="Antal chunks (efter ev. reranking) som faktiskt skickas som "
         "kontext till språkmodellen. Högre N → mer underlag men längre "
         "prompt, högre kostnad och risk att modellen tappar fokus.",
+    )
+
+    # Sökfilter (RAG-läget): facetter ur kunskapsgrafen + OCR-tolerant fuzzy.
+    st.subheader("Sökfilter")
+    st.caption("Gäller RAG-läget (inte utredningsläget).")
+    _facet_data = _load_facets()
+    _facet_options: list[str] = []
+    _facet_to_name: dict[str, str] = {}
+    for _typ in _facets.FACET_TYPES:
+        for _namn, _cnt in _facet_data.get(_typ, [])[:50]:
+            _label = f"{_typ}: {_namn} ({_cnt})"
+            _facet_options.append(_label)
+            _facet_to_name[_label] = _namn
+    selected_facets = st.multiselect(
+        "Begränsa till entiteter",
+        _facet_options,
+        help="Visa bara träffar ur dokument som nämner valda personer/platser/"
+        "organisationer (ur kunskapsgrafen). Tomt = ingen begränsning.",
+    )
+    fuzzy_on = st.toggle(
+        "OCR-tolerant fuzzy-sökning",
+        value=False,
+        help="Lägg till träffar där söktermer förekommer felstavade av OCR "
+        "(t.ex. 'Engstrcm' för 'Engström'). Första körningen bygger ett index "
+        "(~30 s, ~100 MB minne).",
+    )
+    fuzzy_threshold = st.slider(
+        "Fuzzy-likhet (tröskel)",
+        0.50, 0.95, 0.70, step=0.05,
+        help="Lägre = fångar fler felstavningar men mer brus. Korta namn med "
+        "ett OCR-fel (t.ex. 'Palme'→'Paine') kräver ~0.6; längre ord klarar "
+        "högre tröskel. Påverkar bara när fuzzy-sökning är på.",
+        disabled=not fuzzy_on,
     )
 
 if backend["kind"] == "claude":
@@ -813,44 +893,58 @@ def _render_cytoscape_graph(nodes: list[dict], edges: list[dict],
         st.rerun()
 
 
-def _render_answer_graph(centers: list[dict], state_key: str) -> None:
-    """Rita ego-nätverk för centers i en hopfällbar sektion i fullbredd
-    mellan svaret och källorna.
+def _render_answer_graph(answer: str, state_key: str) -> list[dict]:
+    """Rita ego-nätverk för svarets entiteter i en hopfällbar sektion i fullbredd
+    mellan svaret och källorna. Returnerar de beräknade center-noderna (eller
+    en tom lista) så utredningspärmen kan spara dem.
 
-    Sektionen styrs av en keyad toggle i stället för st.expander: Cytoscape-
-    komponenten saknar resize-hantering och blir tom om den monteras i en
-    hopfälld (dold) container, så grafen renderas bara när den är synlig.
-    Det sparar dessutom Neo4j-frågorna helt när sektionen är stängd.
+    **Grafen byggs först när användaren öppnar toggeln** — då, och bara då, körs
+    den dyra entitetsextraktionen (LLM) och Neo4j-frågorna. Resultatet cachas
+    per svar i session state, så att öppna/stänga eller andra reruns inte
+    räknar om det. Sektionen styrs av en keyad toggle i stället för st.expander:
+    Cytoscape-komponenten saknar resize-hantering och blir tom om den monteras i
+    en hopfälld (dold) container.
 
     Grundgrafen visar ENDAST svarets entiteter och relationerna mellan dem —
     inte deras hela grannskap (det blev oöverskådligt). Dubbelklick på en nod
     fäller ut dess grannskap (relationer + dokument); de utfällda noderna
-    sparas i session state per ``state_key`` och nollställs när svaret
-    (centers) byts. Sidopanelen ger legend, höjdreglage, återställning och
-    PDF-länkar för synliga dokumentnoder."""
+    sparas i session state per ``state_key`` och nollställs när svaret byts.
+    Sidopanelen ger legend, höjdreglage, återställning och PDF-länkar för
+    synliga dokumentnoder."""
     if not _HAS_LINK_ANALYSIS:
         st.caption("Kunskapsgraf otillgänglig — installera grafextran: "
                    "`pip install -e .[graph]`.")
-        return
+        return []
     driver = _graph_driver()
     if driver is None:
         st.caption("Kunskapsgraf otillgänglig — starta Neo4j med `./neo4j.sh`.")
-        return
+        return []
+    if not answer.strip():
+        return []
+
+    centers_key = f"{state_key}_centers"
+    answer_key = f"{state_key}_answer"
+    extra_key = f"{state_key}_extra"
+
+    # Bygg inte grafen förrän användaren öppnar den.
+    if not st.toggle("🕸 Visa kunskapsgraf", key=f"{state_key}_open",
+                     help="Extraherar svarets entiteter och ritar deras nätverk "
+                     "ur kunskapsgrafen. Byggs först när du öppnar den."):
+        return ss.get(centers_key, [])
+
+    # Lat beräkning: kör entitetsextraktionen en gång per svar och cacha den.
+    # Nytt svar nollställer även utfällda noder.
+    if ss.get(answer_key) != answer:
+        with st.spinner("Bygger kunskapsgraf…"):
+            ss[centers_key] = _compute_answer_centers(answer)
+        ss[answer_key] = answer
+        ss[extra_key] = []
+    centers = ss.get(centers_key, [])
+    ss.setdefault(extra_key, [])
+
     if not centers:
         st.caption("Inga entiteter ur svaret återfanns i grafen.")
-        return
-
-    # Utfällda noder ackumuleras per svar; nytt svar (ny center-mängd) nollställer.
-    seed = tuple(sorted((c["label"], c["norm"]) for c in centers))
-    extra_key = f"{state_key}_extra"
-    if ss.get(f"{state_key}_seed") != seed:
-        ss[f"{state_key}_seed"] = seed
-        ss[extra_key] = []
-
-    names = ", ".join(c["namn"] for c in centers)
-    if not st.toggle(f"🕸 Kunskapsgraf: {names}", key=f"{state_key}_open",
-                     help="Visa/dölj grafen"):
-        return
+        return centers
 
     # Utfällda noder kan vara både svars-entiteter och grannar; dedupa
     # hämtningslistan men behåll utfälld-status separat.
@@ -890,6 +984,7 @@ def _render_answer_graph(centers: list[dict], state_key: str) -> None:
     with graph_col:
         _render_cytoscape_graph(nodes, edges, expanded_norms, height,
                                 state_key, extra_key)
+    return centers
 
 
 def _render_rag_sources(hits: list, key_prefix: str) -> None:
@@ -918,8 +1013,9 @@ def _render_chat_turn(turn: dict, turn_idx: int) -> None:
     with st.chat_message(turn["role"]):
         st.markdown(turn["text"], unsafe_allow_html=True)
         centers = turn.get("centers") or []
-        if turn["role"] == "assistant" and show_graph and centers:
-            _render_answer_graph(centers, f"turn_{turn_idx}")
+        if turn["role"] == "assistant" and show_graph:
+            # Lat: grafen (och entitetsextraktionen) byggs först vid öppning.
+            centers = _render_answer_graph(turn["text"], f"turn_{turn_idx}")
         if turn["role"] == "assistant":
             prev_q = ""
             if turn_idx > 0 and ss.chat_history[turn_idx - 1]["role"] == "user":
@@ -957,10 +1053,11 @@ if mcp_mode:
                 )
                 centers: list[dict] = []
                 if show_graph:
-                    with st.spinner("Bygger kunskapsgraf…"):
-                        centers = _compute_answer_centers(answer)
-                    # Samma state_key som turen får i historiken efter append.
-                    _render_answer_graph(centers, f"turn_{len(ss.chat_history)}")
+                    # Lat: grafen byggs först när toggeln öppnas. Samma state_key
+                    # som turen får i historiken efter append.
+                    centers = _render_answer_graph(
+                        answer, f"turn_{len(ss.chat_history)}"
+                    )
             ss.mcp_session_id = new_id
             ss.chat_history.append(
                 {
@@ -991,10 +1088,11 @@ if mcp_mode:
                 )
                 centers: list[dict] = []
                 if show_graph:
-                    with st.spinner("Bygger kunskapsgraf…"):
-                        centers = _compute_answer_centers(answer)
-                    # Samma state_key som turen får i historiken efter append.
-                    _render_answer_graph(centers, f"turn_{len(ss.chat_history)}")
+                    # Lat: grafen byggs först när toggeln öppnas. Samma state_key
+                    # som turen får i historiken efter append.
+                    centers = _render_answer_graph(
+                        answer, f"turn_{len(ss.chat_history)}"
+                    )
             ss.chat_history.append(
                 {
                     "role": "assistant",
@@ -1012,9 +1110,36 @@ else:
     if submitted and q.strip():
         ss.question = q
         with st.status("Söker i indexet…", expanded=False) as status:
-            hits = search(table, embed_model, q, top_k)
+            # Facetter prefiltrerar vektorsökningen så dokument utanför ofiltrerade
+            # topp-K ändå kan ytas; samla valda entiteters stems först.
+            facet_stems: set[str] = set()
+            if selected_facets:
+                facet_index = _load_facet_index()
+                for _label in selected_facets:
+                    facet_stems |= facet_index.get(
+                        _facet_to_name[_label].casefold(), set()
+                    )
+                status.update(label="Söker bland valda entiteters dokument…")
+            where = _facets.sources_where_clause(facet_stems)
+            hits = search(table, embed_model, q, top_k, where=where)
+            if fuzzy_on:
+                status.update(label="Lägger till OCR-toleranta träffar…")
+                rows, index = _load_fuzzy_corpus()
+                fuzzy_hits = _search_fuzzy.fuzzy_search(
+                    rows, q, index=index, top_k=top_k, threshold=fuzzy_threshold
+                )
+                if facet_stems:
+                    fuzzy_hits = _facets.filter_hits_by_stems(fuzzy_hits, facet_stems)
+                hits = _interleave_hits(hits, fuzzy_hits)
             if not hits:
-                status.update(label="Inga träffar", state="error")
+                if selected_facets:
+                    status.update(
+                        label="Inga träffar bland de valda entiteterna — ta bort "
+                        "en facett eller höj top-K",
+                        state="error",
+                    )
+                else:
+                    status.update(label="Inga träffar", state="error")
                 ss.hits, ss.answer = None, ""
                 st.stop()
             if do_rerank:
@@ -1041,9 +1166,8 @@ else:
         ss.answer_centers = []
         if show_graph:
             with _graph_slot.container():
-                with st.spinner("Bygger kunskapsgraf…"):
-                    ss.answer_centers = _compute_answer_centers(ss.answer)
-                _render_answer_graph(ss.answer_centers, "rag")
+                # Lat: entitetsextraktionen körs först när användaren öppnar grafen.
+                ss.answer_centers = _render_answer_graph(ss.answer, "rag")
         _casebook_ui.render_casebook_save(
             casebook_conn,
             question=q,
@@ -1062,7 +1186,7 @@ if ss.hits and not mcp_mode and not (submitted and q.strip()):
     st.subheader("Svar")
     st.markdown(ss.answer, unsafe_allow_html=True)
     if show_graph:
-        _render_answer_graph(ss.answer_centers, "rag")
+        ss.answer_centers = _render_answer_graph(ss.answer, "rag")
     _casebook_ui.render_casebook_save(
         casebook_conn,
         question=ss.question,

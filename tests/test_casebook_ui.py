@@ -3,6 +3,25 @@
 from __future__ import annotations
 
 import casebook_ui
+import db as _db
+
+
+def test_annotation_payload_matches_record_kwargs(tmp_path) -> None:
+    """source_bookmark_payload ska kunna skickas rakt in i
+    record_source_annotation (det render_annotation_widget gör). Låser fast
+    att signaturerna inte glider isär."""
+    conn = _db.connect(tmp_path / "state.db")
+    _db.init_schema(conn)
+    payload = casebook_ui.source_bookmark_payload(
+        {"source": "100 — Skandia.txt", "page": 28, "nr": "100",
+         "titel": "Skandiaförhör", "text": "ignoreras"}
+    )
+    annotation_id = _db.record_source_annotation(conn, note="Kolla detta", **payload)
+    saved = _db.list_source_annotations(conn, source="100 — Skandia.txt")
+    assert annotation_id > 0
+    assert saved[0]["note"] == "Kolla detta"
+    assert saved[0]["page"] == 28
+    assert saved[0]["title"] == "Skandiaförhör"
 
 
 def test_source_bookmark_payload_normalizes_rag_hit() -> None:

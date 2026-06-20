@@ -20,6 +20,8 @@ from db import (
     is_tesseract_blacklisted,
     record_casebook_entry, list_casebook_entries, delete_casebook_entry,
     record_source_bookmark, list_source_bookmarks, delete_source_bookmark,
+    record_source_annotation, update_source_annotation,
+    list_source_annotations, delete_source_annotation,
     files_needing_normalize, files_needing_quality, files_needing_ingest,
 )
 
@@ -315,6 +317,56 @@ def test_source_bookmarks_upsert_and_delete(tmp_path):
     assert delete_source_bookmark(conn, first) is True
     assert delete_source_bookmark(conn, first) is False
     assert list_source_bookmarks(conn) == []
+
+
+def test_source_annotations_roundtrip(tmp_path):
+    conn = _fresh(tmp_path)
+    first = record_source_annotation(
+        conn,
+        source="100 — Skandia.txt",
+        page=28,
+        nr="100",
+        title="Skandia",
+        quote="vid 23-tiden lämnade han kontoret",
+        note="Stämmer detta med Engströms uppgift?",
+    )
+    # Flera anteckningar per källa/sida tillåts (till skillnad från bokmärken).
+    second = record_source_annotation(
+        conn,
+        source="100 — Skandia.txt",
+        page=28,
+        note="Andra anteckningen samma sida",
+    )
+    assert second != first
+
+    notes = list_source_annotations(conn)
+    assert len(notes) == 2
+    # Senast skapad först.
+    assert notes[0]["note"] == "Andra anteckningen samma sida"
+    assert notes[1]["quote"] == "vid 23-tiden lämnade han kontoret"
+    assert notes[1]["page"] == 28
+
+    # Filtrera på källa.
+    record_source_annotation(conn, source="200 — Annat.txt", note="annan källa")
+    only = list_source_annotations(conn, source="100 — Skandia.txt")
+    assert len(only) == 2
+    assert {n["source"] for n in only} == {"100 — Skandia.txt"}
+
+    assert update_source_annotation(conn, first, note="Reviderad anteckning") is True
+    reread = list_source_annotations(conn, source="100 — Skandia.txt")
+    assert any(n["note"] == "Reviderad anteckning" for n in reread)
+
+    assert delete_source_annotation(conn, first) is True
+    assert delete_source_annotation(conn, first) is False
+    assert len(list_source_annotations(conn, source="100 — Skandia.txt")) == 1
+
+
+def test_source_annotation_requires_source_and_note(tmp_path):
+    conn = _fresh(tmp_path)
+    with pytest.raises(ValueError):
+        record_source_annotation(conn, source="  ", note="x")
+    with pytest.raises(ValueError):
+        record_source_annotation(conn, source="a.txt", note="   ")
 
 
 def test_tesseract_blacklist(tmp_path):

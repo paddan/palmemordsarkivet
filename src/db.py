@@ -150,6 +150,25 @@ CREATE TABLE IF NOT EXISTS source_bookmarks (
 );
 CREATE INDEX IF NOT EXISTS idx_source_bookmarks_updated
     ON source_bookmarks(updated_at DESC, id DESC);
+
+-- Fritextanteckningar (utredarens marginalanteckningar) knutna till en
+-- specifik källa/sida. Till skillnad från bokmärken kan en källa/sida ha
+-- flera anteckningar, så ingen UNIQUE(source, page) — id är nyckeln.
+CREATE TABLE IF NOT EXISTS source_annotations (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    source     TEXT NOT NULL,
+    page       INTEGER NOT NULL DEFAULT 0,
+    nr         TEXT,
+    title      TEXT,
+    quote      TEXT,
+    note       TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_source_annotations_source
+    ON source_annotations(source, page);
+CREATE INDEX IF NOT EXISTS idx_source_annotations_updated
+    ON source_annotations(updated_at DESC, id DESC);
 """
 
 
@@ -889,6 +908,102 @@ def list_source_bookmarks(
 def delete_source_bookmark(conn: sqlite3.Connection, bookmark_id: int) -> bool:
     """Radera ett källbokmärke. Returnerar True om något togs bort."""
     cur = conn.execute("DELETE FROM source_bookmarks WHERE id=?", (bookmark_id,))
+    conn.commit()
+    return cur.rowcount > 0
+
+
+# --- source_annotations (utredarens marginalanteckningar) -------------
+
+def record_source_annotation(
+    conn: sqlite3.Connection,
+    *,
+    source: str,
+    note: str,
+    page: int | None = None,
+    nr: str | None = None,
+    title: str | None = None,
+    quote: str | None = None,
+) -> int:
+    """Spara en ny anteckning knuten till en källa/sida och returnera rad-id.
+
+    Flera anteckningar per källa/sida tillåts (till skillnad från bokmärken)."""
+    if not source.strip():
+        raise ValueError("source får inte vara tom")
+    if not note.strip():
+        raise ValueError("note får inte vara tom")
+    stamp = now()
+    cur = conn.execute(
+        """
+        INSERT INTO source_annotations(
+            source, page, nr, title, quote, note, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            source.strip(),
+            _stored_bookmark_page(page),
+            nr,
+            title,
+            quote.strip() if quote and quote.strip() else None,
+            note.strip(),
+            stamp,
+            stamp,
+        ),
+    )
+    conn.commit()
+    return int(cur.lastrowid)
+
+
+def update_source_annotation(
+    conn: sqlite3.Connection, annotation_id: int, *, note: str
+) -> bool:
+    """Uppdatera anteckningstexten. Returnerar True om raden fanns."""
+    if not note.strip():
+        raise ValueError("note får inte vara tom")
+    cur = conn.execute(
+        "UPDATE source_annotations SET note=?, updated_at=? WHERE id=?",
+        (note.strip(), now(), annotation_id),
+    )
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def list_source_annotations(
+    conn: sqlite3.Connection, *, source: str | None = None, limit: int = 200
+) -> list[dict]:
+    """Lista anteckningar, senast uppdaterade först.
+
+    Filtrera på ``source`` för en specifik källa (alla sidor)."""
+    sql = (
+        "SELECT id, source, page, nr, title, quote, note, created_at, updated_at "
+        "FROM source_annotations"
+    )
+    params: list = []
+    if source is not None:
+        sql += " WHERE source=?"
+        params.append(source.strip())
+    sql += " ORDER BY updated_at DESC, id DESC LIMIT ?"
+    params.append(limit)
+    return [
+        {
+            "id": row["id"],
+            "source": row["source"],
+            "page": _public_bookmark_page(row["page"]),
+            "nr": row["nr"],
+            "title": row["title"],
+            "quote": row["quote"],
+            "note": row["note"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+        for row in conn.execute(sql, params)
+    ]
+
+
+def delete_source_annotation(conn: sqlite3.Connection, annotation_id: int) -> bool:
+    """Radera en anteckning. Returnerar True om något togs bort."""
+    cur = conn.execute(
+        "DELETE FROM source_annotations WHERE id=?", (annotation_id,)
+    )
     conn.commit()
     return cur.rowcount > 0
 

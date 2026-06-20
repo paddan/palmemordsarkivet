@@ -6,6 +6,18 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 
 Kör **inte** `/cap` automatiskt efter varje ändring — användaren kör det själv när hen är redo. Kör aldrig `git commit`/`git push` direkt heller.
 
+## Implementation med Superpowers och subagenter
+
+All implementation ska använda relevanta Superpowers-skills innan kodändringar
+görs. Använd subagenter med en modell och nivå som är lämplig för den specifika uppgiften: dela ut självständiga, tydligt avgränsade
+deluppgifter när arbetet har flera delar eller behöver parallell granskning, men
+undvik att skapa onödiga agenter för triviala ändringar.
+
+För varje subagent ska en noggrann plan skapas med mål, berörda filer, förväntad
+leverans och verifiering. Huvudagenten ska övervaka subagenterna löpande, stämma
+av att de följer planen, granska deras resultat och integrera endast sådant som
+passar projektets befintliga arkitektur och instruktioner.
+
 ## Dokumentation hålls synkad
 
 När du gör förändringar i projektet ska du **alltid** uppdatera den användarvända dokumentationen och `AGENTS.md` i samma commit — om ändringen påverkar något i dem.
@@ -17,7 +29,7 @@ När du gör förändringar i projektet ska du **alltid** uppdatera den använda
 
 ## Project Overview
 
-**palmemordsarkivet** laddar ner, OCR-processar och gör 3 762 palme-PDF:er + 7 155 wpu-PDF:er (~47 000 sidor, 8 665 sökbara dokument efter merge) från palmemordsarkivet.se och wpu.nu sökbara via RAG + Codex Opus 4.7, med Streamlit-flikarna Utredning, Utredningspärm och Graf. Alla kommentarer och docstrings är på svenska.
+**palmemordsarkivet** laddar ner, OCR-processar och gör 3 762 palme-PDF:er + 7 155 wpu-PDF:er (~47 000 sidor, 8 665 sökbara dokument efter merge) från palmemordsarkivet.se och wpu.nu sökbara via RAG + Codex Opus 4.7, med Streamlit-flikarna Utredning, Utredningspärm, Graf, Maskeringar och Jämförelse. Alla kommentarer och docstrings är på svenska.
 
 Pipeline: download → OCR (Tesseract + optional Surya) → detect redactions → normalize → quality scoring → LanceDB ingest → RAG query → Streamlit UI.
 
@@ -34,11 +46,17 @@ src/
   merge_pages.py       # Slå ihop per-sida-text från state.db → text/<stem>.txt
   build_user_words.py  # Generera Tesseract user-words från OCR-text
   errors_log.py        # Centraliserad felloggning (tab-separerad)
-  Utredning.py         # Streamlit-frågesida (RAG/MCP, svarsgraf, sparknapp, bokmärken)
-  casebook_ui.py       # Delade Streamlit-komponenter för utredningspärm + bokmärken
+  Utredning.py         # Streamlit-frågesida (RAG/MCP, svarsgraf, sparknapp, bokmärken, facett-/fuzzy-filter)
+  casebook_ui.py       # Delade Streamlit-komponenter för utredningspärm + bokmärken + anteckningar
+  redactions.py        # Maskeringsutforskaren: aggregera [MASKAD]-markörer ur pdf_pages
+  facets.py            # Facetterad sökning: entiteter ur doc_entities → filtrera träffar
+  search_fuzzy.py      # OCR-tolerant fuzzy-sökning (difflib token-index över chunk-korpusen)
+  compare.py           # Vittnesjämförelse: promptbyggare som ställer källor mot varandra
   pages/
-    2_Utredningspärm.py # Sparade fråga/svar-spår och källbokmärken
+    2_Utredningspärm.py # Sparade fråga/svar-spår, källbokmärken och anteckningar
     3_Graf.py          # Fristående grafsida
+    5_Maskeringar.py   # Maskeringsutforskaren (dokument sorterade efter antal [MASKAD])
+    6_Jämförelse.py    # Vittnesjämförelse (korsförhörsläge — letar motstridiga uppgifter)
   rag/
     ingest.py          # LanceDB vector index builder
     ask.py             # RAG query + Codex integration
@@ -47,7 +65,7 @@ src/
     load_neo4j.py       # Ladda doc_entities → Neo4j (MERGE, idempotent) + namnkanonisering
     viz.py              # Ego-nätverk för flera center (Cypher → noder/kanter, dedup) + Cytoscape-konvertering
     answer_entities.py  # LLM (Haiku) listar nyckelentiteter ur ett RAG-svar → inline-grafen i Utredning
-tests/                 # pytest (test_quality, test_chunk, test_download, test_merge_pages, test_detect_redactions, test_reingest, test_normalize_text, test_answer_entities)
+tests/                 # pytest (test_quality, test_chunk, test_download, test_merge_pages, test_detect_redactions, test_reingest, test_normalize_text, test_answer_entities, test_redactions, test_facets, test_search_fuzzy, test_compare)
 *.sh                   # Bash-wrappers (aktiverar .venv, läser API-nycklar, vidarebefordrar flaggor)
 tessdata/              # swe_best.traineddata, swe.user-words, tesseract.config
 ```
@@ -56,7 +74,7 @@ Data-kataloger (gitignored):
 - `downloaded/files/`, `downloaded/wpu_files/` — PDF:er
 - `generated/text/` — OCR-text, `generated/text_pages/` — per-sida-artefakter
 - `generated/lancedb/` — vektorindex
-- `generated/db/state.db` — SQLite-databas med pipeline-state (markörer, kvalitet, ingest-mtime) samt Utredningspärm och källbokmärken. WAL-filer (`state.db-wal`, `state.db-shm`) ligger bredvid.
+- `generated/db/state.db` — SQLite-databas med pipeline-state (markörer, kvalitet, ingest-mtime) samt Utredningspärm, källbokmärken och anteckningar. WAL-filer (`state.db-wal`, `state.db-shm`) ligger bredvid.
 - `generated/errors.log` — fellog
 
 ## Commands
@@ -99,6 +117,8 @@ Env-variabler: `CLAUDE_CODE_OAUTH_TOKEN` (Pro/Max, räknas mot prenumeration) el
 ## Non-obvious Design Decisions
 
 **MCP-läge (Utredning.py)**: Konversationskontinuitet uppnås genom att fånga `session_id` från `ResultMessage` och skicka tillbaka det som `ClaudeAgentOptions(resume=...)` på nästa fråga. "Ny konversation" nollställer `chat_history` + `mcp_session_id`.
+
+**Kunskapsgraf byggs lazy (Utredning.py)**: `_render_answer_graph` tar svaret, inte färdiga centers. Den dyra entitetsextraktionen (`_compute_answer_centers` → Claude Haiku) och Neo4j-frågorna körs **först när användaren öppnar graf-toggeln** — inte automatiskt efter varje svar. Resultatet cachas per svar i session state och returneras så utredningspärmen kan spara det.
 
 **SQLite-state (`generated/db/state.db`)**: all operativ pipeline-state lever här —
 downloads, per-PDF-status (redaktion/merge/normalize), per-sida OCR-resultat,

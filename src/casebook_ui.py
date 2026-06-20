@@ -126,6 +126,33 @@ def _open_path(path: Path) -> None:
         st.error(f"Kan inte öppna fil: {e}")
 
 
+def render_annotation_widget(conn, source: dict, key: str) -> None:
+    """Hopfällbar ruta för att läsa/lägga till fritextanteckningar på en källa."""
+    payload = source_bookmark_payload(source)
+    if not payload["source"]:
+        return
+    existing = _state_db.list_source_annotations(conn, source=payload["source"])
+    label = "✏️ Anteckna" + (f" ({len(existing)})" if existing else "")
+    with st.expander(label, expanded=False):
+        for a in existing:
+            # Ingen unsafe_allow_html: anteckningstexten är användarens egen och
+            # ska renderas som vanlig markdown, inte tolkas som HTML.
+            st.markdown(f"- {a['note']}")
+            if a.get("page"):
+                st.caption(f"sida {a['page']}")
+        note = st.text_area(
+            "Anteckning",
+            key=f"{key}_note",
+            label_visibility="collapsed",
+            placeholder="Din anteckning om den här källan…",
+        )
+        if st.button("Spara anteckning", key=f"{key}_save", use_container_width=True):
+            if note.strip():
+                _state_db.record_source_annotation(conn, note=note, **payload)
+                st.toast("Anteckning sparad")
+                st.rerun()
+
+
 def render_source_cards(root: Path, sources: list[dict], conn, *, key_prefix: str) -> None:
     """Rendera källkort med samma PDF/text-knappar som Utredning-vyn."""
     for i, source in enumerate(sources):
@@ -155,6 +182,7 @@ def render_source_cards(root: Path, sources: list[dict], conn, *, key_prefix: st
                     _open_path(txt)
             with cols[3]:
                 bookmark_source_button(conn, source, f"{key_prefix}_bookmark_{i}")
+            render_annotation_widget(conn, source, f"{key_prefix}_annot_{i}")
 
 
 def render_graph_restore_link(entities: list[dict]) -> None:
@@ -225,13 +253,21 @@ def render_casebook_page(root: Path, conn) -> None:
 
     entries = _state_db.list_casebook_entries(conn, limit=100)
     bookmarks = _state_db.list_source_bookmarks(conn, limit=200)
-    st.caption(f"{len(entries)} sparade svar · {len(bookmarks)} bokmärken")
+    annotations = _state_db.list_source_annotations(conn, limit=300)
+    st.caption(
+        f"{len(entries)} sparade svar · {len(bookmarks)} bokmärken · "
+        f"{len(annotations)} anteckningar"
+    )
 
-    tab_entries, tab_bookmarks = st.tabs(["Sparade svar", "Bokmärken"])
+    tab_entries, tab_bookmarks, tab_annotations = st.tabs(
+        ["Sparade svar", "Bokmärken", "Anteckningar"]
+    )
     with tab_entries:
         _render_saved_answers(root, entries, conn)
     with tab_bookmarks:
         _render_bookmarks(root, bookmarks, conn)
+    with tab_annotations:
+        _render_annotations(root, annotations, conn)
 
 
 def _render_saved_answers(root: Path, entries: list[dict], conn) -> None:
@@ -302,6 +338,40 @@ def _render_bookmarks(root: Path, bookmarks: list[dict], conn) -> None:
                     use_container_width=True,
                 ):
                     _state_db.delete_source_bookmark(conn, bm["id"])
+                    st.rerun()
+
+
+def _render_annotations(root: Path, annotations: list[dict], conn) -> None:
+    if not annotations:
+        st.info("Inga anteckningar ännu. Skriv anteckningar via källkortens "
+                "✏️-ruta i Utredning, Jämförelse eller Maskeringar.")
+        return
+    for a in annotations:
+        with st.container(border=True):
+            cols = st.columns([5, 1, 1])
+            with cols[0]:
+                title = a.get("title") or a["source"]
+                page = f", sida {a['page']}" if a.get("page") else ""
+                st.markdown(f"**{title}**{page}")
+                st.caption(a["source"])
+                if a.get("quote"):
+                    st.caption(f"”{a['quote']}”")
+                st.markdown(a["note"])
+            with cols[1]:
+                pdf = find_pdf(root, a["source"])
+                if pdf and st.button(
+                    "Öppna PDF",
+                    key=f"annot_page_pdf_{a['id']}",
+                    use_container_width=True,
+                ):
+                    _open_path(pdf)
+            with cols[2]:
+                if st.button(
+                    "Ta bort",
+                    key=f"annot_page_del_{a['id']}",
+                    use_container_width=True,
+                ):
+                    _state_db.delete_source_annotation(conn, a["id"])
                     st.rerun()
 
 

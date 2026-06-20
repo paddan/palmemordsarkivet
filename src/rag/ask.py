@@ -72,18 +72,18 @@ Regler:
 SELECT_COLS = ["text", "source", "page", "chunk_idx", "nr", "titel", "anmarkning"]
 
 
-def search(table, model, q: str, top_k: int) -> list[dict]:
+def search(table, model, q: str, top_k: int, where: str | None = None) -> list[dict]:
     qv = model.encode(
         [f"query: {q}"],
         normalize_embeddings=True,
         convert_to_numpy=True,
     )[0]
-    return (
-        table.search(qv.tolist())
-        .limit(top_k)
-        .select([*SELECT_COLS, "_distance"])
-        .to_list()
-    )
+    qb = table.search(qv.tolist()).limit(top_k).select([*SELECT_COLS, "_distance"])
+    if where:
+        # prefilter=True begränsar INNAN topp-K väljs, så facett-filtrerade
+        # dokument kan ytas även om de ligger utanför ofiltrerade topp-K.
+        qb = qb.where(where, prefilter=True)
+    return qb.to_list()
 
 
 def _hit_key(h: dict) -> tuple:

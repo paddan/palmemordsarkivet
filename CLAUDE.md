@@ -17,7 +17,7 @@ När du gör förändringar i projektet ska du **alltid** uppdatera den använda
 
 ## Project Overview
 
-**palmemordsarkivet** laddar ner, OCR-processar och gör 3 762 palme-PDF:er + 7 155 wpu-PDF:er (~47 000 sidor, 8 665 sökbara dokument efter merge) från palmemordsarkivet.se och wpu.nu sökbara via RAG + Codex Opus 4.7, med Streamlit-flikarna Utredning, Utredningspärm och Graf. Alla kommentarer och docstrings är på svenska.
+**palmemordsarkivet** laddar ner, OCR-processar och gör 3 762 palme-PDF:er + 7 155 wpu-PDF:er (~47 000 sidor, 8 665 sökbara dokument efter merge) från palmemordsarkivet.se och wpu.nu sökbara via RAG + Codex Opus 4.7, med Streamlit-flikarna Utredning, Utredningspärm, Graf, Maskeringar och Jämförelse. Alla kommentarer och docstrings är på svenska.
 
 Pipeline: download → OCR (Tesseract + optional Surya) → detect redactions → normalize → quality scoring → LanceDB ingest → RAG query → Streamlit UI.
 
@@ -34,11 +34,17 @@ src/
   merge_pages.py       # Slå ihop per-sida-text från state.db → text/<stem>.txt
   build_user_words.py  # Generera Tesseract user-words från OCR-text
   errors_log.py        # Centraliserad felloggning (tab-separerad)
-  Utredning.py         # Streamlit-frågesida (RAG/MCP, svarsgraf, sparknapp, bokmärken)
-  casebook_ui.py       # Delade Streamlit-komponenter för utredningspärm + bokmärken
+  Utredning.py         # Streamlit-frågesida (RAG/MCP, svarsgraf, sparknapp, bokmärken, facett-/fuzzy-filter)
+  casebook_ui.py       # Delade Streamlit-komponenter för utredningspärm + bokmärken + anteckningar
+  redactions.py        # Maskeringsutforskaren: aggregera [MASKAD]-markörer ur pdf_pages
+  facets.py            # Facetterad sökning: entiteter ur doc_entities → filtrera träffar
+  search_fuzzy.py      # OCR-tolerant fuzzy-sökning (difflib token-index över chunk-korpusen)
+  compare.py           # Vittnesjämförelse: promptbyggare som ställer källor mot varandra
   pages/
-    2_Utredningspärm.py # Sparade fråga/svar-spår och källbokmärken
+    2_Utredningspärm.py # Sparade fråga/svar-spår, källbokmärken och anteckningar
     3_Graf.py          # Fristående grafsida
+    5_Maskeringar.py   # Maskeringsutforskaren (dokument sorterade efter antal [MASKAD])
+    6_Jämförelse.py    # Vittnesjämförelse (korsförhörsläge — letar motstridiga uppgifter)
   rag/
     ingest.py          # LanceDB vector index builder
     ask.py             # RAG query + Codex integration
@@ -47,7 +53,7 @@ src/
     load_neo4j.py       # Ladda doc_entities → Neo4j (MERGE, idempotent) + namnkanonisering
     viz.py              # Ego-nätverk för flera center (Cypher → noder/kanter, dedup) + Cytoscape-konvertering
     answer_entities.py  # LLM (Haiku) listar nyckelentiteter ur ett RAG-svar → inline-grafen i Utredning
-tests/                 # pytest (test_quality, test_chunk, test_download, test_merge_pages, test_detect_redactions, test_reingest, test_normalize_text, test_answer_entities)
+tests/                 # pytest (test_quality, test_chunk, test_download, test_merge_pages, test_detect_redactions, test_reingest, test_normalize_text, test_answer_entities, test_redactions, test_facets, test_search_fuzzy, test_compare)
 *.sh                   # Bash-wrappers (aktiverar .venv, läser API-nycklar, vidarebefordrar flaggor)
 tessdata/              # swe_best.traineddata, swe.user-words, tesseract.config
 ```
@@ -103,7 +109,9 @@ Env-variabler: `CLAUDE_CODE_OAUTH_TOKEN` (Pro/Max, räknas mot prenumeration) el
 **SQLite-state (`generated/db/state.db`)**: all operativ pipeline-state lever här —
 downloads, per-PDF-status (redaktion/merge/normalize), per-sida OCR-resultat,
 kvalitetspoäng, LLM-korrigeringar och ingest-tracking. Utredningspärmen
-lever också här i `casebook_entries` och `source_bookmarks`. Inkrementell logik
+lever också här i `casebook_entries`, `source_bookmarks` och `source_annotations`
+(utredarens fritextanteckningar — flera per källa/sida, till skillnad från
+bokmärken). Inkrementell logik
 bygger på att jämföra `pdf_files.text_mtime` mot `normalized_at`/`scored_at`/etc.
 `--rebuild` tvingar omkörning. Modulen `src/db.py` exponerar alla CRUD- och delta-queries; konsumenter skriver aldrig egen SQL.
 
@@ -112,6 +120,32 @@ När en post öppnas renderas källor som källkort med PDF/text-knappar och
 grafentiteter som en länk till Graf-sidan. Länken kodar sparade center-entiteter
 i query-parametern `centers`; `src/pages/3_Graf.py` läser den och återskapar
 startgrafen utan ny sökning.
+
+**Kunskapsgraf byggs lazy (Utredning.py)**: `_render_answer_graph` tar svaret,
+inte färdiga centers. Den dyra entitetsextraktionen (`_compute_answer_centers`
+→ Claude Haiku) och Neo4j-frågorna körs **först när användaren öppnar
+graf-toggeln** — inte automatiskt efter varje svar. Resultatet cachas per svar
+i session state (`{state_key}_centers`/`_answer`) och returneras så
+utredningspärmen kan spara det. Gäller både RAG- och MCP-turerna.
+
+**Sökfilter i Utredning (RAG-läget)**: Sidofältet har facett-filter och
+OCR-tolerant fuzzy-sökning. Facetterna kommer ur `doc_entities` via
+`src/facets.py` och begränsar träffarna till dokument som nämner valda
+entiteter (efter sökning, före rerank). Fuzzy-sökningen (`src/search_fuzzy.py`,
+ren `difflib`) bygger ett token-index över hela chunk-korpusen *en gång*
+(`st.cache_resource`, ~100 MB) och slås bara på vid behov — den fångar
+söktermer som OCR:en felstavat. Båda gäller bara RAG-läget, inte MCP-läget
+(där modellen söker själv).
+
+**Maskeringsutforskaren (`src/redactions.py` + `pages/5_Maskeringar.py`)**:
+aggregerar `[MASKAD]`-markörerna ur `pdf_pages` och visar dokument sorterade
+efter antal maskeringar med kontextutdrag — "vad har dolts".
+
+**Vittnesjämförelse (`src/compare.py` + `pages/6_Jämförelse.py`)**: ett
+korsförhörsläge. Promptbyggaren är ren/testbar; sidan kör samma sök+rerank som
+Utredning men med en system-prompt som letar *motstridiga* uppgifter mellan
+källor i stället för att syntetisera bort dem. Följer det backend-val som
+sparats i `generated/llm_config.json`.
 
 **mtime-tracking (ingest.py)**: Varje `.txt`-fil jämförs mot mtime som lagras i `ingest`-tabellen i state.db (auktoritativt); nyare fil → re-ingest. LanceDB-tabellen har fortfarande en `mtime`-kolumn men den läses inte längre för delta-beslut. Om ingest-state saknas men källan finns i LanceDB behandlas filen som re-indexering, så gamla chunks ersätts i stället för att dupliceras. Legacy-rader med sentinel-mtime `0.0` re-indexeras bara med `--reindex-since`.
 

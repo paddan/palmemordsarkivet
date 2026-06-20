@@ -14,9 +14,11 @@ kunskapsgraf och utforskas visuellt.
 
 ## Web-gränssnitt
 
-Efter nedladdning och OCR-scanning finns ett webgränssnitt (`./web.sh`) med tre
-flikar: **Utredning** för frågor, **Utredningspärm** för sparade spår och
-**Graf** för relationer.
+Efter nedladdning och OCR-scanning finns ett webgränssnitt (`./web.sh`) med
+flikar: **Utredning** för frågor (med facett- och OCR-tolerant fuzzy-filter),
+**Utredningspärm** för sparade spår, bokmärken och anteckningar, **Graf** för
+relationer, **Maskeringar** för att utforska svärtad text och **Jämförelse**
+för att ställa källor mot varandra.
 
 ### Utredning
 
@@ -49,15 +51,29 @@ svaret, källorna, modellvalet, grafentiteterna och eventuell egen anteckning.
 Källorna visas som klickbara källkort med PDF/text-knappar, och sparade
 grafentiteter har en länk som återskapar grafen i Graf-fliken. Källor i svarens
 källista kan också bokmärkas separat så att du snabbt hittar tillbaka till
-viktiga PDF:er och sidor.
+viktiga PDF:er och sidor. En egen flik samlar dessutom alla **anteckningar** du
+skrivit på källor (✏️-rutan på källkorten) — flera anteckningar per källa.
+
+### Maskeringar
+
+Fliken **Maskeringar** listar dokument efter hur mycket text som svärtats över
+(`[MASKAD]`), med kontextutdrag runt varje maskering. Det som dolts är ofta lika
+intressant som innehållet.
+
+### Jämförelse
+
+Fliken **Jämförelse** är ett korsförhörsläge: ange ett ämne så hämtas flera
+källor och AI:n ställer dem mot varandra och lyfter fram var de **säger emot**
+varandra — i stället för att jämka ihop uppgifterna som i vanliga svar.
 
 ### Graf
 
 En **Graf**-sida visualiserar kunskapsgrafen: sök en person, plats eller
 organisation och utforska dess nätverk av relationer och källdokument som ett
 interaktivt ego-nätverk — dubbelklicka en nod för att fälla ut dess grannskap
-eller öppna ett källdokument. Samma graf dyker även upp automatiskt till varje
-svar i frågeläget, centrerad kring de entiteter svaret handlar om.
+eller öppna ett källdokument. Samma graf kan även visas till ett svar i
+frågeläget, centrerad kring de entiteter svaret handlar om — den byggs först när
+du öppnar grafsektionen, inte automatiskt efter varje svar.
 
 ![Web-gränssnitt — Graf](graf.png)
 

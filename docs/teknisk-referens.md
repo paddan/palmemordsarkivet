@@ -20,6 +20,7 @@ Inspektera med t.ex. `sqlite3 generated/db/state.db`. Tabellerna:
 - `doc_entities` — extraherade entiteter/relationer per sida (kunskapsgrafen)
 - `casebook_entries` — sparade fråga/svar-spår från webgränssnittets utredningspärm
 - `source_bookmarks` — bokmärkta källor från källlistorna i webgränssnittet
+- `source_annotations` — utredarens fritextanteckningar knutna till en källa/sida (flera per källa tillåts)
 
 **Livscykel:** radera inte `generated/db/state.db` mitt under en pågående
 pipeline-körning — befintliga processer fortsätter skriva mot den unlinkade inoden
@@ -341,17 +342,71 @@ sparar eller uppdaterar källan i `source_bookmarks`, deduplicerat på
 `source` + `page` (okänd sida lagras som 0 internt men visas som tom sida i UI).
 Bokmärkena visas på Utredningspärm-sidan och kan öppna matchande PDF lokalt.
 
+#### Anteckningar på källor
+
+Varje källkort (i Utredning, Jämförelse och Maskeringar) har en hopfällbar
+**✏️ Anteckna**-ruta för fritextanteckningar. Till skillnad från bokmärken kan
+en källa/sida ha flera anteckningar; de sparas i `source_annotations` och
+samlas på en egen flik (**Anteckningar**) i Utredningspärmen där de kan läsas,
+öppna matchande PDF och tas bort. CRUD ligger i `src/db.py`
+(`record_source_annotation`, `list_source_annotations`,
+`update_source_annotation`, `delete_source_annotation`).
+
+#### Sökfilter: facetter och OCR-tolerant fuzzy-sökning
+
+I RAG-läget har Utredning-flikens sidofält två sökfilter (gäller inte
+MCP-läget):
+
+- **Facetter** — en multiselect med personer, platser och organisationer ur
+  kunskapsgrafen (`doc_entities`). Väljs en eller flera entiteter *prefiltreras*
+  vektorsökningen på `source`-kolumnen (`facets.sources_where_clause` →
+  `table.search(...).where(..., prefilter=True)`), så att även dokument som
+  ligger utanför den ofiltrerade topp-K kan ytas. `src/facets.py` bygger ett
+  cachat `casefold(namn) → {pdf_stem}`-index så `doc_entities` inte parsas om
+  per sökning.
+- **OCR-tolerant fuzzy-sökning** — en toggle (med en likhetströskel-slider) som
+  lägger till träffar där söktermen förekommer felstavad av OCR (t.ex.
+  *Engstrcm* för *Engström*). `src/search_fuzzy.py` bygger med ren `difflib` ett
+  token-index över hela chunk-korpusen *en gång* (cachat med
+  `st.cache_resource`, kolumnprojicerat så vektorkolumnen aldrig laddas,
+  ~100 MB minne, ~30 s första körningen) och matchar frågans tokens mot
+  vokabulären. Tröskeln styr toleransen: korta namn med ett OCR-fel
+  (*Palme*→*Paine*, difflib-ratio ~0.6) kräver låg tröskel, längre ord klarar
+  högre. Träffarna varvas (round-robin) med vektorträffarna så de får plats
+  bland topp-N även utan reranker; med rerankern rangordnas hela den utökade
+  kandidatmängden.
+
+#### Maskeringsutforskaren (Maskeringar-fliken)
+
+Sidan `pages/5_Maskeringar.py` listar dokument sorterade efter hur många
+`[MASKAD]`-markörer redaktionsdetekteringen infogat, med kontextutdrag runt
+varje maskering — användbart för att se *vad som dolts*. All aggregering sker i
+`src/redactions.py` direkt mot `pdf_pages` i state.db (ingen ny pipeline-körning
+behövs).
+
+#### Vittnesjämförelse (Jämförelse-fliken)
+
+Sidan `pages/6_Jämförelse.py` är ett korsförhörsläge: ange ett ämne, hämta
+flera källor med samma sök+rerank som Utredning, och låt språkmodellen ställa
+dem mot varandra. System-prompten (i `src/compare.py`) ber modellen lyfta fram
+**motstridiga** och **överensstämmande** uppgifter med källhänvisningar, i
+stället för att syntetisera bort konflikterna. Backend följer det val som
+sparats i `generated/llm_config.json` (sätts i Utredning-flikens sidofält).
+
 #### Kunskapsgraf till svaret
 
-När Neo4j är igång (`./neo4j.sh` + `./load_graph.sh`) visas ett ego-nätverk ur
+När Neo4j är igång (`./neo4j.sh` + `./load_graph.sh`) erbjuds ett ego-nätverk ur
 kunskapsgrafen som en hopfälld sektion (toggle) i fullbredd mellan svaret och
-källistan — i både RAG-läget och utredningsläget. Grafen ritas först när
-sektionen öppnas; Cytoscape-komponenten kan inte monteras dold (ingen
-resize-hantering) och stängd sektion slipper dessutom Neo4j-frågorna. Efter
-att svaret är klart listar Claude Haiku svarets nyckelentiteter
-(`src/graph/answer_entities.py`); namnen slås upp i grafen
+källistan — i både RAG-läget och utredningsläget. **Grafen byggs först när
+användaren öppnar toggeln, inte automatiskt efter varje svar.** Det är då, och
+bara då, som Claude Haiku listar svarets nyckelentiteter
+(`src/graph/answer_entities.py`), namnen slås upp i grafen
 (`viz.lookup_centers`) och ritas med Cytoscape (st-link-analysis, ingår i
-extran `.[graph]`).
+extran `.[graph]`). Resultatet (center-noderna) cachas per svar i session state
+så att öppna/stänga eller andra reruns inte kör om den dyra extraktionen.
+Cytoscape-komponenten kan dessutom inte monteras dold (ingen resize-hantering),
+så grafen ritas oavsett bara när sektionen är synlig. `Visa kunskapsgraf` i
+sidofältet styr om sektionen (toggeln) visas alls.
 
 Grundgrafen visar **endast svarets entiteter** och relationerna mellan dem —
 inte deras hela grannskap. Grafen är interaktiv: dubbelklick på en entitetsnod
@@ -557,9 +612,13 @@ delas mellan Utredning-fliken och `llm_config.sh` så att valen alltid är ident
 | `src/backends.py` | Delad backend-katalog (Claude/OpenAI/DeepSeek/Ollama/custom) + `fetch_models`/`available_models` — delas av Utredning-sidan och `llm_config.sh` |
 | `llm_config.sh` → `src/llm_config_cli.py` | Visa/ändra `generated/llm_config.json` utan webgränssnittet (interaktiv meny i terminal) |
 | `src/citations.py` | Slår upp `[Nr X, sida Y]`-citat mot PDF:er och renderar citatlänkar |
-| `src/Utredning.py` | Streamlit-flik för frågor (RAG + MCP-toggle), svarsgraf, sparknapp och källbokmärken |
-| `src/casebook_ui.py` | Delade Streamlit-komponenter för utredningspärm och källbokmärken |
-| `src/pages/2_Utredningspärm.py` | Streamlit-sida för sparade fråga/svar-spår och bokmärkta källor |
+| `src/Utredning.py` | Streamlit-flik för frågor (RAG + MCP-toggle), svarsgraf, sparknapp, källbokmärken samt facett-/fuzzy-sökfilter |
+| `src/casebook_ui.py` | Delade Streamlit-komponenter för utredningspärm, källbokmärken och anteckningar |
+| `src/pages/2_Utredningspärm.py` | Streamlit-sida för sparade fråga/svar-spår, bokmärkta källor och anteckningar |
+| `src/facets.py` | Facetterad sökning: entiteter ur `doc_entities` → filtrera sökträffar |
+| `src/search_fuzzy.py` | OCR-tolerant fuzzy-sökning (difflib token-index över chunk-korpusen) |
+| `src/redactions.py` → `src/pages/5_Maskeringar.py` | Maskeringsutforskaren: aggregera `[MASKAD]` ur `pdf_pages`, visa kontext |
+| `src/compare.py` → `src/pages/6_Jämförelse.py` | Vittnesjämförelse (korsförhörsläge — letar motstridiga uppgifter) |
 | `extract_entities.sh` → `src/graph/extract_entities.py` | Entitets-/relationsextraktion till `doc_entities` i state.db (Claude Haiku) |
 | `load_graph.sh` → `src/graph/load_neo4j.py` | Ladda kunskapsgrafen från state.db till Neo4j |
 | `neo4j.sh` | Starta/stoppa Neo4j via podman (genererar lösenord → `neo4j/.password`) |
@@ -568,7 +627,7 @@ delas mellan Utredning-fliken och `llm_config.sh` så att valen alltid är ident
 | `src/pages/3_Graf.py` | Streamlit-grafsida: sök entitet → interaktivt nätverk, fäll ut noder |
 | `neo4j/docker-compose.yml` | Neo4j 5 för kunskapsgrafen med Docker (Browser på :7474) |
 | `web.sh` | Wrapper för Streamlit-servern |
-| `src/db.py` | SQLite-state: schema + CRUD + delta-queries, inklusive utredningspärm och källbokmärken |
+| `src/db.py` | SQLite-state: schema + CRUD + delta-queries, inklusive utredningspärm, källbokmärken och anteckningar |
 | `tessdata/swe.user-words` | Palme-specifika ord (committat) |
 | `tessdata/tesseract.config` | `preserve_interword_spaces 1` (committat) |
 
