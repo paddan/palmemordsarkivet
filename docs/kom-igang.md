@@ -102,11 +102,27 @@ uppgifter.
 ### Karta
 
 Karta-fliken finns i Streamlit-appen och visar observationer runt mordkvällen på
-en folium-karta. Nya observationer ska ha person, plats/koordinat och
-källhänvisning (`Nr` + `sida`); tid behövs för att observationen ska visas i
-tidslinjen. Kartan seedar platskatalogen från
-`data/karta/platser.json`; `data/karta/rorelser.json` börjar tom tills
-verifierade observationer läggs till.
+en folium-karta. Varje observation syns som en markör (färg per person); slå på
+**Animera tidslinje** för att spela upp dem i tidsordning. Nya observationer ska
+ha person, plats/koordinat och källhänvisning (`Nr` + `sida`); tid behövs för att
+observationen ska komma med i tidslinjen. Källan väljs genom att **söka** fram
+dokumentet (nr eller titel) och välja ur listan — du behöver inte kunna numret
+utantill. Du kan **flytta** en observation direkt
+på kartan: klicka på dess markör för att välja den, slå på **Flytta-läge** och
+klicka där den ska ligga — och sätt klockslag i snabbfältet intill kartan. Kartan
+seedar platskatalogen från `data/karta/platser.json`; `data/karta/rorelser.json`
+börjar tom tills verifierade observationer läggs till.
+
+För att leta fram kandidater ur OCR-texten utan att publicera dem direkt:
+
+```bash
+./extract_map_observations.sh --dry-run --limit 20
+./extract_map_observations.sh --limit 20
+```
+
+Öppna sedan Karta-fliken och granska förslagen under **Granska extraherade
+kartförslag**. En kandidat måste ha person, koordinat, tid och källa innan den
+kan godkännas till tidslinjen.
 
 ## Kunskapsgraf (valfritt)
 

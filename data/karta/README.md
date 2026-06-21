@@ -33,3 +33,10 @@ Exempel:
 Seedade observationer börjar tomma för att kartan inte ska påstå positioner utan
 granskad källhänvisning. Lägg till riktiga observationer via UI:t eller genom en
 granskad ändring av `rorelser.json`.
+
+## Extraherade kandidater
+
+`./extract_map_observations.sh` skapar kandidater i state-db, inte i
+`rorelser.json`. Granska alltid kandidatens citat och källkort i Karta-fliken
+innan den godkänns. Kandidater utan koordinater behöver matchas mot en plats
+eller få lat/lon manuellt.

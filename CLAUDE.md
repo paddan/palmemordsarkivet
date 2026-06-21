@@ -41,6 +41,8 @@ src/
   search_fuzzy.py      # OCR-tolerant fuzzy-sökning (difflib token-index över chunk-korpusen)
   compare.py           # Vittnesjämförelse: promptbyggare som ställer källor mot varandra
   karta.py             # Ren kartlogik: validering, popup-HTML och TimestampedGeoJson
+  map_extract.py       # Ren parsing/platsmatchning för kartobservations-kandidater
+  extract_map_observations.py # LLM-extraktion av person-position-tid-kandidater
   pages/
     2_Utredningspärm.py # Sparade fråga/svar-spår, källbokmärken och anteckningar
     3_Graf.py          # Fristående grafsida
@@ -99,6 +101,9 @@ Repo-data:
 # wpu.nu (valfritt)
 ./download_wpu.sh && ./merge_wpu.sh
 
+# Kartobservations-kandidater (valfritt; LLM extraherar förslag till granskning)
+./extract_map_observations.sh [--dry-run] [--limit N]
+
 # Kunskapsgraf (valfritt; installera först podman + Python-extra .[graph])
 ./extract_entities.sh [--limit N] [--dry-run]
 ./neo4j.sh
@@ -116,7 +121,9 @@ downloads, per-PDF-status (redaktion/merge/normalize), per-sida OCR-resultat,
 kvalitetspoäng, LLM-korrigeringar och ingest-tracking. Utredningspärmen
 lever också här i `casebook_entries`, `source_bookmarks` och `source_annotations`
 (utredarens fritextanteckningar — flera per källa/sida, till skillnad från
-bokmärken). Inkrementell logik
+bokmärken). Karta-flikens granskningskö använder `map_observation_candidates`
+och `map_observation_extractions` (per-sida-markör även när inga kandidater
+hittas). Inkrementell logik
 bygger på att jämföra `pdf_files.text_mtime` mot `normalized_at`/`scored_at`/etc.
 `--rebuild` tvingar omkörning. Modulen `src/db.py` exponerar alla CRUD- och delta-queries; konsumenter skriver aldrig egen SQL.
 
@@ -132,6 +139,15 @@ bara om karttabellerna är tomma. `src/karta.py` är Streamlit-fri och bygger
 validerad TimestampedGeoJson; `map_observations.time` lagras som `HH:MM` och
 expanderas mot basdatum `1986-02-28` innan tidslinjen ritas. UI:t visar inte
 observationer i tidslinjen utan tid, koordinat och källa.
+
+**Kartobservations-extraktion (`src/extract_map_observations.py` + `src/map_extract.py`)**:
+LLM-extraktorn skriver bara till `map_observation_candidates`. Kandidater är
+granskningsmaterial, inte fakta på kartan. Först när användaren godkänner en
+kandidat i Karta-fliken (**Granska extraherade kartförslag**) skapas en rad i
+`map_observations`. Platsmatchning mot `data/karta/platser.json` är transparent
+(exact/fuzzy/none); okända platser måste få koordinater innan godkännande.
+Varje lyckad sida markeras dessutom i `map_observation_extractions`, även om
+LLM:en returnerar noll kandidater, så omkörningar inte debiterar tomma sidor igen.
 
 **Kunskapsgraf byggs lazy (Utredning.py)**: `_render_answer_graph` tar svaret,
 inte färdiga centers. Den dyra entitetsextraktionen (`_compute_answer_centers`

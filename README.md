@@ -72,7 +72,9 @@ varandra — i stället för att jämka ihop uppgifterna som i vanliga svar.
 **Karta** visar källhänvisade observationer på en tidsanimerad karta över
 mordkvällen. Platskatalogen seedas och används för snabbval i formuläret, medan
 observationerna kan redigeras i appen; rörelser visas bara när de har tid,
-koordinater och källa.
+koordinater och källa. Kartförslag kan dessutom extraheras som en separat
+granskningskö med `./extract_map_observations.sh` och godkänns manuellt innan
+de syns på kartan.
 
 ### Graf
 

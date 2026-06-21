@@ -26,6 +26,11 @@ from db import (
     record_map_observation, list_map_observations,
     update_map_observation, delete_map_observation,
     seed_map_data_if_empty,
+    record_map_observation_candidate,
+    list_map_observation_candidates,
+    update_map_observation_candidate,
+    reject_map_observation_candidate,
+    approve_map_observation_candidate,
     files_needing_normalize, files_needing_quality, files_needing_ingest,
 )
 
@@ -729,6 +734,235 @@ def test_seed_map_data_if_empty_is_idempotent(tmp_path):
     assert seed_map_data_if_empty(conn, places, observations) == 0
     assert len(list_map_places(conn)) == 1
     assert len(list_map_observations(conn)) == 1
+
+
+def test_map_observation_candidates_roundtrip(tmp_path):
+    conn = _fresh(tmp_path)
+
+    candidate_id = record_map_observation_candidate(
+        conn,
+        pdf_stem="2055 — Grandbesökare",
+        page_num=3,
+        person="Olof Palme",
+        raw_place="Grand",
+        place_name="Biografen Grand",
+        lat=59.34057,
+        lon=18.06024,
+        time="21:15",
+        uncertainty="ca",
+        nr="2055",
+        sida=3,
+        quote="Olof Palme sågs vid Grand omkring 21.15.",
+        note="Sågs vid platsen enligt texten.",
+        confidence="high",
+        place_match="exact",
+        model="test-model",
+    )
+
+    rows = list_map_observation_candidates(conn)
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["id"] == candidate_id
+    assert row["status"] == "pending"
+    assert row["person"] == "Olof Palme"
+    assert row["place_name"] == "Biografen Grand"
+    assert row["time"] == "21:15"
+    assert row["quote"].startswith("Olof Palme")
+    assert row["created_at"]
+    assert row["updated_at"]
+
+
+def test_map_observation_candidate_upsert_is_idempotent(tmp_path):
+    conn = _fresh(tmp_path)
+    kwargs = dict(
+        pdf_stem="2055 — Grandbesökare",
+        page_num=3,
+        person="Olof Palme",
+        raw_place="Grand",
+        place_name="Biografen Grand",
+        lat=59.34057,
+        lon=18.06024,
+        time="21:15",
+        uncertainty="ca",
+        nr="2055",
+        sida=3,
+        quote="Olof Palme sågs vid Grand omkring 21.15.",
+        note="Första texten.",
+        confidence="medium",
+        place_match="exact",
+        model="test-model",
+    )
+
+    first = record_map_observation_candidate(conn, **kwargs)
+    second = record_map_observation_candidate(conn, **{**kwargs, "note": "Uppdaterad text."})
+
+    rows = list_map_observation_candidates(conn)
+    assert first == second
+    assert len(rows) == 1
+    assert rows[0]["note"] == "Uppdaterad text."
+
+
+def test_map_observation_candidate_upsert_matches_case_insensitive_unique_index(tmp_path):
+    conn = _fresh(tmp_path)
+    kwargs = dict(
+        pdf_stem="2055 — Grandbesökare",
+        page_num=3,
+        person="Olof Palme",
+        raw_place="Grand",
+        place_name="Biografen Grand",
+        lat=59.34057,
+        lon=18.06024,
+        time="21:15",
+        uncertainty="ca",
+        nr="2055",
+        sida=3,
+        quote="Olof Palme sågs vid Grand omkring 21.15.",
+        note="Första texten.",
+        confidence="medium",
+        place_match="exact",
+        model="test-model",
+    )
+
+    first = record_map_observation_candidate(conn, **kwargs)
+    second = record_map_observation_candidate(
+        conn,
+        **{
+            **kwargs,
+            "person": "olof palme",
+            "raw_place": "grand",
+            "note": "Uppdaterad text.",
+        },
+    )
+
+    rows = list_map_observation_candidates(conn)
+    assert first == second
+    assert len(rows) == 1
+    assert rows[0]["note"] == "Uppdaterad text."
+
+
+def test_map_observation_candidate_requires_core_fields(tmp_path):
+    conn = _fresh(tmp_path)
+    base = dict(
+        pdf_stem="doc",
+        page_num=1,
+        person="Olof Palme",
+        raw_place="Grand",
+        place_name=None,
+        lat=None,
+        lon=None,
+        time=None,
+        uncertainty=None,
+        nr="2055",
+        sida=1,
+        quote="Kort citat.",
+        note=None,
+        confidence="low",
+        place_match="none",
+        model="test-model",
+    )
+    for field in ("pdf_stem", "person", "raw_place", "nr", "quote", "model"):
+        with pytest.raises(ValueError):
+            record_map_observation_candidate(conn, **{**base, field: " "})
+    with pytest.raises(ValueError):
+        record_map_observation_candidate(conn, **{**base, "confidence": "maybe"})
+    with pytest.raises(ValueError):
+        record_map_observation_candidate(conn, **{**base, "place_match": "magic"})
+    with pytest.raises(ValueError):
+        record_map_observation_candidate(conn, **{**base, "lat": 59.0, "lon": None})
+
+
+def test_update_reject_and_approve_map_observation_candidate(tmp_path):
+    conn = _fresh(tmp_path)
+    candidate_id = record_map_observation_candidate(
+        conn,
+        pdf_stem="2055 — Grandbesökare",
+        page_num=3,
+        person="Olof Palme",
+        raw_place="Grand",
+        place_name=None,
+        lat=None,
+        lon=None,
+        time=None,
+        uncertainty="ca",
+        nr="2055",
+        sida=3,
+        quote="Olof Palme sågs vid Grand.",
+        note=None,
+        confidence="medium",
+        place_match="none",
+        model="test-model",
+    )
+
+    assert update_map_observation_candidate(
+        conn,
+        candidate_id,
+        place_name="Biografen Grand",
+        lat=59.34057,
+        lon=18.06024,
+        time="21:15",
+        note="Godkänd rad.",
+    ) is True
+
+    observation_id = approve_map_observation_candidate(conn, candidate_id)
+    approved = list_map_observation_candidates(conn, status="approved")
+    observations = list_map_observations(conn, person="Olof Palme")
+
+    assert approved[0]["map_observation_id"] == observation_id
+    assert observations[0]["person"] == "Olof Palme"
+    assert observations[0]["place_name"] == "Biografen Grand"
+    assert observations[0]["time"] == "21:15"
+    assert observations[0]["nr"] == "2055"
+    assert observations[0]["sida"] == 3
+    assert "Godkänd rad." in observations[0]["note"]
+
+    reject_id = record_map_observation_candidate(
+        conn,
+        pdf_stem="doc",
+        page_num=4,
+        person="Lisbeth Palme",
+        raw_place="okänd plats",
+        place_name=None,
+        lat=None,
+        lon=None,
+        time=None,
+        uncertainty=None,
+        nr="2055",
+        sida=4,
+        quote="Oklar rad.",
+        note=None,
+        confidence="low",
+        place_match="none",
+        model="test-model",
+    )
+    assert reject_map_observation_candidate(conn, reject_id) is True
+    assert list_map_observation_candidates(conn, status="rejected")[0]["id"] == reject_id
+
+
+def test_approve_candidate_requires_time_source_and_coordinates(tmp_path):
+    conn = _fresh(tmp_path)
+    candidate_id = record_map_observation_candidate(
+        conn,
+        pdf_stem="doc",
+        page_num=1,
+        person="Olof Palme",
+        raw_place="Grand",
+        place_name="Biografen Grand",
+        lat=59.34057,
+        lon=18.06024,
+        time=None,
+        uncertainty=None,
+        nr="2055",
+        sida=1,
+        quote="Olof Palme vid Grand.",
+        note=None,
+        confidence="medium",
+        place_match="exact",
+        model="test-model",
+    )
+
+    with pytest.raises(ValueError, match="time"):
+        approve_map_observation_candidate(conn, candidate_id)
 
 
 def test_record_doc_entities_is_upsert(tmp_path):

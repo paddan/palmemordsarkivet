@@ -79,6 +79,8 @@ py-modules = [
     "merge_pages",
     "merge_wpu",
     "karta",
+    "map_extract",
+    "extract_map_observations",
 ]
 
 [tool.setuptools.package-dir]

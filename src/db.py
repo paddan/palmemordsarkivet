@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 DEFAULT_DB: Path = Path(os.environ.get("STATE_DB", str(ROOT / "generated" / "db" / "state.db")))
 
-SCHEMA_VERSION: int = 3
+SCHEMA_VERSION: int = 5
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -199,6 +199,57 @@ CREATE INDEX IF NOT EXISTS idx_map_observations_person_time
     ON map_observations(person COLLATE NOCASE, time, id);
 CREATE INDEX IF NOT EXISTS idx_map_observations_source
     ON map_observations(nr, sida);
+
+CREATE TABLE IF NOT EXISTS map_observation_candidates (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    pdf_stem           TEXT NOT NULL,
+    page_num           INTEGER NOT NULL,
+    person             TEXT NOT NULL,
+    raw_place          TEXT NOT NULL,
+    place_name         TEXT,
+    lat                REAL,
+    lon                REAL,
+    time               TEXT,
+    uncertainty        TEXT,
+    nr                 TEXT NOT NULL,
+    sida               INTEGER NOT NULL,
+    quote              TEXT NOT NULL,
+    note               TEXT,
+    confidence         TEXT NOT NULL CHECK(confidence IN ('low', 'medium', 'high')),
+    place_match        TEXT NOT NULL CHECK(place_match IN ('none', 'fuzzy', 'exact')),
+    status             TEXT NOT NULL DEFAULT 'pending'
+                           CHECK(status IN ('pending', 'approved', 'rejected')),
+    model              TEXT NOT NULL,
+    map_observation_id INTEGER REFERENCES map_observations(id) ON DELETE SET NULL,
+    created_at         TEXT NOT NULL,
+    updated_at         TEXT NOT NULL,
+    reviewed_at        TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_map_observation_candidates_status
+    ON map_observation_candidates(status, updated_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_map_observation_candidates_source
+    ON map_observation_candidates(pdf_stem, page_num);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_map_observation_candidates_unique
+    ON map_observation_candidates(
+        pdf_stem,
+        page_num,
+        person COLLATE NOCASE,
+        raw_place COLLATE NOCASE,
+        COALESCE(time, ''),
+        quote
+    );
+
+CREATE TABLE IF NOT EXISTS map_observation_extractions (
+    pdf_stem     TEXT NOT NULL,
+    page_num     INTEGER NOT NULL,
+    model        TEXT NOT NULL,
+    observations INTEGER NOT NULL DEFAULT 0,
+    extracted_at TEXT NOT NULL,
+    PRIMARY KEY (pdf_stem, page_num)
+);
+CREATE INDEX IF NOT EXISTS idx_map_observation_extractions_extracted
+    ON map_observation_extractions(extracted_at DESC);
 """
 
 
@@ -1311,6 +1362,333 @@ def seed_map_data_if_empty(
         inserted += 1
     conn.commit()
     return inserted
+
+
+# --- kartobservations-kandidater (granskningskö) ----------------------
+
+_MAP_CANDIDATE_FIELDS = {
+    "person", "raw_place", "place_name", "lat", "lon", "time", "uncertainty",
+    "nr", "sida", "quote", "note", "confidence", "place_match", "status",
+}
+_CANDIDATE_CONFIDENCE = {"low", "medium", "high"}
+_CANDIDATE_PLACE_MATCH = {"none", "fuzzy", "exact"}
+_CANDIDATE_STATUS = {"pending", "approved", "rejected"}
+
+
+def _clean_required_text(value: str | None, field: str) -> str:
+    clean = str(value or "").strip()
+    if not clean:
+        raise ValueError(f"{field} får inte vara tom")
+    return clean
+
+
+def _validate_optional_lat_lon(lat, lon) -> tuple[float | None, float | None]:
+    if lat is None and lon is None:
+        return None, None
+    if lat is None or lon is None:
+        raise ValueError("lat och lon måste anges tillsammans")
+    return _validate_lat_lon(lat, lon)
+
+
+def _validate_choice(value: str, allowed: set[str], field: str) -> str:
+    clean = _clean_required_text(value, field)
+    if clean not in allowed:
+        raise ValueError(f"{field} måste vara en av: {', '.join(sorted(allowed))}")
+    return clean
+
+
+def record_map_observation_candidate(
+    conn: sqlite3.Connection,
+    *,
+    pdf_stem: str,
+    page_num: int,
+    person: str,
+    raw_place: str,
+    place_name: str | None,
+    lat: float | None,
+    lon: float | None,
+    time: str | None,
+    uncertainty: str | None,
+    nr: str,
+    sida: int,
+    quote: str,
+    note: str | None,
+    confidence: str,
+    place_match: str,
+    model: str,
+) -> int:
+    """Spara eller uppdatera en granskningskandidat för kartan."""
+    clean_pdf_stem = _clean_required_text(pdf_stem, "pdf_stem")
+    clean_person = _clean_required_text(person, "person")
+    clean_raw_place = _clean_required_text(raw_place, "raw_place")
+    clean_nr = _clean_required_text(nr, "nr")
+    clean_quote = _clean_required_text(quote, "quote")
+    clean_model = _clean_required_text(model, "model")
+    time_value = _validate_time_hh_mm(time)
+    lat_f, lon_f = _validate_optional_lat_lon(lat, lon)
+    clean_confidence = _validate_choice(confidence, _CANDIDATE_CONFIDENCE, "confidence")
+    clean_place_match = _validate_choice(place_match, _CANDIDATE_PLACE_MATCH, "place_match")
+    existing = conn.execute(
+        """
+        SELECT id FROM map_observation_candidates
+        WHERE pdf_stem=?
+          AND page_num=?
+          AND person COLLATE NOCASE=?
+          AND raw_place COLLATE NOCASE=?
+          AND COALESCE(time, '')=COALESCE(?, '')
+          AND quote=?
+        """,
+        (
+            clean_pdf_stem,
+            int(page_num),
+            clean_person,
+            clean_raw_place,
+            time_value,
+            clean_quote,
+        ),
+    ).fetchone()
+    stamp = now()
+    values = (
+        place_name.strip() if place_name and place_name.strip() else None,
+        lat_f,
+        lon_f,
+        uncertainty.strip() if uncertainty and uncertainty.strip() else None,
+        clean_nr,
+        int(sida),
+        note.strip() if note and note.strip() else None,
+        clean_confidence,
+        clean_place_match,
+        clean_model,
+        stamp,
+    )
+    if existing:
+        conn.execute(
+            """
+            UPDATE map_observation_candidates
+            SET place_name=?, lat=?, lon=?, uncertainty=?, nr=?, sida=?, note=?,
+                confidence=?, place_match=?, model=?, updated_at=?
+            WHERE id=?
+            """,
+            (*values, existing["id"]),
+        )
+        conn.commit()
+        return int(existing["id"])
+    cur = conn.execute(
+        """
+        INSERT INTO map_observation_candidates(
+            pdf_stem, page_num, person, raw_place, place_name, lat, lon,
+            time, uncertainty, nr, sida, quote, note, confidence,
+            place_match, status, model, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
+        """,
+        (
+            clean_pdf_stem,
+            int(page_num),
+            clean_person,
+            clean_raw_place,
+            values[0],
+            values[1],
+            values[2],
+            time_value,
+            values[3],
+            clean_nr,
+            int(sida),
+            clean_quote,
+            values[6],
+            clean_confidence,
+            clean_place_match,
+            clean_model,
+            stamp,
+            stamp,
+        ),
+    )
+    conn.commit()
+    return int(cur.lastrowid)
+
+
+def map_observation_candidate_exists(
+    conn: sqlite3.Connection, pdf_stem: str, page_num: int
+) -> bool:
+    """Sann om en kandidat redan finns för en viss källsida (valfri status)."""
+    return conn.execute(
+        "SELECT 1 FROM map_observation_candidates WHERE pdf_stem=? AND page_num=? LIMIT 1",
+        (pdf_stem, int(page_num)),
+    ).fetchone() is not None
+
+
+def mark_map_observation_extracted(
+    conn: sqlite3.Connection,
+    *,
+    pdf_stem: str,
+    page_num: int,
+    model: str,
+    observations: int,
+) -> None:
+    """Markera att kartobservations-extraktion körts för en sida."""
+    clean_pdf_stem = _clean_required_text(pdf_stem, "pdf_stem")
+    clean_model = _clean_required_text(model, "model")
+    count = int(observations)
+    if count < 0:
+        raise ValueError("observations får inte vara negativt")
+    conn.execute(
+        """
+        INSERT INTO map_observation_extractions(
+            pdf_stem, page_num, model, observations, extracted_at
+        ) VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(pdf_stem, page_num) DO UPDATE SET
+            model        = excluded.model,
+            observations = excluded.observations,
+            extracted_at = excluded.extracted_at
+        """,
+        (clean_pdf_stem, int(page_num), clean_model, count, now()),
+    )
+    conn.commit()
+
+
+def map_observation_extracted(
+    conn: sqlite3.Connection, pdf_stem: str, page_num: int
+) -> bool:
+    """Sann om kartobservations-extraktion redan körts för sidan."""
+    return conn.execute(
+        """
+        SELECT 1 FROM map_observation_extractions
+        WHERE pdf_stem=? AND page_num=?
+        LIMIT 1
+        """,
+        (pdf_stem, int(page_num)),
+    ).fetchone() is not None
+
+
+def list_map_observation_candidates(
+    conn: sqlite3.Connection, *, status: str = "pending", limit: int = 100
+) -> list[dict]:
+    """Lista kartkandidater för granskning."""
+    clean_status = _validate_choice(status, _CANDIDATE_STATUS, "status")
+    rows = conn.execute(
+        """
+        SELECT id, pdf_stem, page_num, person, raw_place, place_name, lat, lon,
+               time, uncertainty, nr, sida, quote, note, confidence,
+               place_match, status, model, map_observation_id,
+               created_at, updated_at, reviewed_at
+        FROM map_observation_candidates
+        WHERE status=?
+        ORDER BY updated_at DESC, id DESC
+        LIMIT ?
+        """,
+        (clean_status, int(limit)),
+    )
+    return [_row_dict(row) for row in rows]
+
+
+def update_map_observation_candidate(
+    conn: sqlite3.Connection, candidate_id: int, **fields
+) -> bool:
+    """Uppdatera granskningsfält på en kartkandidat."""
+    unknown = set(fields) - _MAP_CANDIDATE_FIELDS
+    if unknown:
+        raise ValueError(f"okända kandidatfält: {', '.join(sorted(unknown))}")
+    if not fields:
+        return False
+    cleaned = dict(fields)
+    for key in ("person", "raw_place", "nr", "quote"):
+        if key in cleaned:
+            cleaned[key] = _clean_required_text(cleaned[key], key)
+    if "time" in cleaned:
+        cleaned["time"] = _validate_time_hh_mm(cleaned["time"])
+    if "confidence" in cleaned:
+        cleaned["confidence"] = _validate_choice(cleaned["confidence"], _CANDIDATE_CONFIDENCE, "confidence")
+    if "place_match" in cleaned:
+        cleaned["place_match"] = _validate_choice(cleaned["place_match"], _CANDIDATE_PLACE_MATCH, "place_match")
+    if "status" in cleaned:
+        cleaned["status"] = _validate_choice(cleaned["status"], _CANDIDATE_STATUS, "status")
+    if "lat" in cleaned or "lon" in cleaned:
+        current = conn.execute(
+            "SELECT lat, lon FROM map_observation_candidates WHERE id=?",
+            (candidate_id,),
+        ).fetchone()
+        if current is None:
+            return False
+        lat_f, lon_f = _validate_optional_lat_lon(
+            cleaned.get("lat", current["lat"]),
+            cleaned.get("lon", current["lon"]),
+        )
+        cleaned["lat"] = lat_f
+        cleaned["lon"] = lon_f
+    for key in ("place_name", "uncertainty", "note"):
+        if key in cleaned:
+            value = cleaned[key]
+            cleaned[key] = value.strip() if isinstance(value, str) and value.strip() else None
+    if "sida" in cleaned:
+        cleaned["sida"] = int(cleaned["sida"])
+    cleaned["updated_at"] = now()
+    assignments = ", ".join(f"{key}=?" for key in cleaned)
+    values = list(cleaned.values()) + [candidate_id]
+    cur = conn.execute(
+        f"UPDATE map_observation_candidates SET {assignments} WHERE id=?",
+        values,
+    )
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def reject_map_observation_candidate(conn: sqlite3.Connection, candidate_id: int) -> bool:
+    """Markera en kartkandidat som avvisad."""
+    stamp = now()
+    cur = conn.execute(
+        """
+        UPDATE map_observation_candidates
+        SET status='rejected', updated_at=?, reviewed_at=?
+        WHERE id=? AND status='pending'
+        """,
+        (stamp, stamp, candidate_id),
+    )
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def approve_map_observation_candidate(conn: sqlite3.Connection, candidate_id: int) -> int:
+    """Skapa en publicerad kartobservation från en granskad kandidat."""
+    row = conn.execute(
+        """
+        SELECT id, person, raw_place, place_name, lat, lon, time, uncertainty,
+               nr, sida, note, quote
+        FROM map_observation_candidates
+        WHERE id=? AND status='pending'
+        """,
+        (candidate_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError("kandidaten saknas eller är redan granskad")
+    if row["lat"] is None or row["lon"] is None:
+        raise ValueError("lat/lon krävs innan kandidaten kan godkännas")
+    if not row["time"]:
+        raise ValueError("time krävs innan kandidaten kan godkännas")
+    if not row["nr"] or row["sida"] is None:
+        raise ValueError("nr och sida krävs innan kandidaten kan godkännas")
+    note = row["note"] or row["quote"]
+    observation_id = record_map_observation(
+        conn,
+        person=row["person"],
+        place_name=row["place_name"] or row["raw_place"],
+        lat=row["lat"],
+        lon=row["lon"],
+        time=row["time"],
+        uncertainty=row["uncertainty"],
+        nr=row["nr"],
+        sida=row["sida"],
+        note=note,
+    )
+    stamp = now()
+    conn.execute(
+        """
+        UPDATE map_observation_candidates
+        SET status='approved', map_observation_id=?, updated_at=?, reviewed_at=?
+        WHERE id=?
+        """,
+        (observation_id, stamp, stamp, candidate_id),
+    )
+    conn.commit()
+    return observation_id
 
 
 # --- delta-queries (inkrementell logik) -------------------------------

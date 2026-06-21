@@ -1,6 +1,6 @@
 [
   {
-    "name": "Mordplatsen / Dekorima",
+    "name": "Mordplatsen / Dekorima / Brottsplatsen",
     "lat": 59.33695,
     "lon": 18.06324
   },
@@ -38,5 +38,15 @@
     "name": "Sabbatsbergs sjukhus",
     "lat": 59.33844,
     "lon": 18.04629
+  },
+  {
+    "name": "David Bagares gata",
+    "lat": 59.33930,
+    "lon": 18.06480
+  },
+  {
+    "name": "Johannesgatan",
+    "lat": 59.33950,
+    "lon": 18.06330
   }
 ]

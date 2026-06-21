@@ -23,6 +23,8 @@ Inspektera med t.ex. `sqlite3 generated/db/state.db`. Tabellerna:
 - `source_annotations` — utredarens fritextanteckningar knutna till en källa/sida (flera per källa tillåts)
 - `map_places` — platskatalog för Karta-flikens snabbval
 - `map_observations` — källhänvisade observationer med person, koordinat, tid (`HH:MM`), osäkerhet, `nr`, `sida` och notering; `src/karta.py` tolkar tiden mot basdatum `1986-02-28` när `TimestampedGeoJson` byggs
+- `map_observation_candidates` — granskningskö för LLM-extraherade kartförslag. Raderna har `status` (`pending`, `approved`, `rejected`) och blir inte publicerade kartobservationer förrän `approve_map_observation_candidate` skapar en rad i `map_observations`
+- `map_observation_extractions` — per-sida-markör för kartobservations-extraktionen. Även sidor där LLM:en hittar noll kandidater markeras här så omkörningar inte skickar samma tomma sida igen
 
 **Livscykel:** radera inte `generated/db/state.db` mitt under en pågående
 pipeline-körning — befintliga processer fortsätter skriva mot den unlinkade inoden
@@ -397,12 +399,42 @@ sparats i `generated/llm_config.json` (sätts i Utredning-flikens sidofält).
 
 #### Karta (Karta-fliken)
 
-`src/pages/7_Karta.py` renderar en folium-karta via `streamlit-folium`.
-`src/karta.py` bygger `TimestampedGeoJson` från observationer i state.db.
-Observationer utan giltig tid, koordinat eller källa visas inte i den animerade
-tidslinjen, men kan redigeras i formuläret. Seed-data ligger i
-`data/karta/platser.json` och `data/karta/rorelser.json`; seed körs bara när
-karttabellerna är tomma.
+`src/pages/7_Karta.py` renderar en folium-karta via `streamlit-folium`. Alla
+observationer med giltig koordinat ritas som **statiska markörer** (färg per
+person) så att valda personer alltid syns; personer med minst två tidsatta
+observationer får en rörelselinje. Tidsanimeringen (`TimestampedGeoJson` byggd i
+`src/karta.py`) är en **valbar toggle** ("Animera tidslinje") eftersom den bara
+visar punkter vid reglagets aktuella tidpunkt. Tider före kl 12 tolkas som efter
+midnatt (nästa dygn) så mordkvällens 23:xx sorteras före 00:xx–05:xx.
+
+**Flytta-läge:** klicka på en markör för att välja en observation
+(`st_folium` `last_object_clicked` → `karta.observations_at_coord`; flera träffar
+på samma punkt löses via listan). Med "Flytta-läge" på flyttas den valda
+observationen dit man klickar på kartan (`last_clicked` → `update_map_observation`),
+och tiden kan sättas i ett snabbfält intill kartan. Observationer utan tid visas
+som markörer men inte i den animerade tidslinjen.
+
+**Källväljare:** i stället för att skriva källans `Nr` blint söker man fram
+dokumentet i en sökruta (nr eller titel) och väljer ur en filtrerad lista
+(`karta.search_sources` över ett cachat index byggt ur `citations.build_nr_to_pdf`,
+~11 000 dokument). Valet fyller i `Nr`-fältet; `sida` anges separat. Seed-data
+ligger i `data/karta/platser.json` och `data/karta/rorelser.json`; seed körs bara
+när karttabellerna är tomma.
+
+`extract_map_observations.sh` läser `generated/text/*.txt` sida för sida och
+skapar kandidater i `map_observation_candidates`. Extraktorn använder samma
+LLM-konfigurationsmönster som kunskapsgrafens `extract_entities.sh`, men har en
+snäv prompt: bara person + plats + tid + citatutdrag. Platsnamn matchas mot
+`data/karta/platser.json`; okända platser sparas utan koordinater och måste
+kompletteras i review-UI:t (**Granska extraherade kartförslag** i Karta-fliken)
+innan de kan godkännas. Varje lyckat sid-anrop markeras i
+`map_observation_extractions`, även när svaret innehåller noll kandidater, så
+idempotenta omkörningar bara försöker nya eller tidigare felande sidor. Kommandon:
+
+```bash
+./extract_map_observations.sh --dry-run [--limit N]
+./extract_map_observations.sh [--limit N] [--provider openai --model gpt-4o-mini]
+```
 
 #### Kunskapsgraf till svaret
 
@@ -631,6 +663,8 @@ delas mellan Utredning-fliken och `llm_config.sh` så att valen alltid är ident
 | `src/redactions.py` → `src/pages/5_Maskeringar.py` | Maskeringsutforskaren: aggregera `[MASKAD]` ur `pdf_pages`, visa kontext |
 | `src/compare.py` → `src/pages/6_Jämförelse.py` | Vittnesjämförelse (korsförhörsläge — letar motstridiga uppgifter) |
 | `src/karta.py` → `src/pages/7_Karta.py` | Kartmodulen: validera observationer, bygg tidslinje-GeoJSON och rendera karta |
+| `src/map_extract.py` | Ren parsing/tidsnormalisering/platsmatchning för kartobservations-kandidater |
+| `extract_map_observations.sh` → `src/extract_map_observations.py` | LLM-extraktion av person-position-tid-kandidater till `map_observation_candidates` |
 | `extract_entities.sh` → `src/graph/extract_entities.py` | Entitets-/relationsextraktion till `doc_entities` i state.db (Claude Haiku) |
 | `load_graph.sh` → `src/graph/load_neo4j.py` | Ladda kunskapsgrafen från state.db till Neo4j |
 | `neo4j.sh` | Starta/stoppa Neo4j via podman (genererar lösenord → `neo4j/.password`) |

@@ -25,6 +25,7 @@ import casebook_ui as _casebook_ui  # noqa: E402
 import citations as _citations  # noqa: E402
 import db as _state_db  # noqa: E402
 import karta as _karta  # noqa: E402
+import map_extract as _map_extract  # noqa: E402
 
 SEED_DIR = ROOT / "data" / "karta"
 DEFAULT_CENTER = [59.33695, 18.06324]
@@ -53,6 +54,16 @@ def _nr_to_pdf_mapping(root: str) -> dict[str, Path]:
     return _citations.build_nr_to_pdf(Path(root))
 
 
+@st.cache_data(show_spinner=False)
+def _source_index(root: str) -> list[tuple[str, str]]:
+    """(nr, etikett) för alla arkivdokument, sorterat på etikett för sökval."""
+    mapping = _nr_to_pdf_mapping(root)
+    return sorted(
+        ((nr, pdf.stem) for nr, pdf in mapping.items()),
+        key=lambda item: item[1].casefold(),
+    )
+
+
 def _sources_for_observation(obs: dict) -> list[dict]:
     nr = str(obs.get("nr") or "").strip()
     sida = obs.get("sida")
@@ -61,6 +72,21 @@ def _sources_for_observation(obs: dict) -> list[dict]:
     mapping = _nr_to_pdf_mapping(str(ROOT))
     stems = [pdf.stem for pdf in _citations.resolve_nr_all(nr, mapping)]
     return _karta.observation_source_payloads(obs, source_stems=stems)
+
+
+def _sources_for_candidate(candidate: dict) -> list[dict]:
+    nr = str(candidate.get("nr") or "").strip()
+    sida = candidate.get("sida")
+    if not nr or sida in (None, ""):
+        return []
+    mapping = _nr_to_pdf_mapping(str(ROOT))
+    stems = [pdf.stem for pdf in _citations.resolve_nr_all(nr, mapping)]
+    payloads = []
+    for stem in stems:
+        payload = _karta.candidate_source_payload(candidate, source_stem=stem)
+        if payload:
+            payloads.append(payload)
+    return payloads
 
 
 def _add_place_markers(map_obj: folium.Map, places: list[dict]) -> None:
@@ -76,34 +102,79 @@ def _add_place_markers(map_obj: folium.Map, places: list[dict]) -> None:
         ).add_to(map_obj)
 
 
-def _build_map(observations: list[dict], places: list[dict]) -> folium.Map:
+def _add_observation_markers(map_obj: folium.Map, observations: list[dict]) -> None:
+    """Statiska, alltid synliga markörer per observation (färg per person)."""
+    for obs in observations:
+        color = _karta.person_color(str(obs.get("person") or ""))
+        folium.CircleMarker(
+            location=[float(obs["lat"]), float(obs["lon"])],
+            radius=7,
+            color=color,
+            weight=2,
+            fill=True,
+            fill_color=color,
+            fill_opacity=0.9,
+            popup=folium.Popup(_karta.popup_html(obs), max_width=320),
+            tooltip=f"{obs.get('person') or 'Okänd'} · {obs.get('time') or 'okänd tid'}",
+        ).add_to(map_obj)
+
+
+def _add_person_paths(map_obj: folium.Map, observations: list[dict]) -> None:
+    """Rörelsespår per person med minst två tidsatta observationer."""
+    for person, items in _karta.observations_by_person(observations).items():
+        coords = [
+            [float(o["lat"]), float(o["lon"])]
+            for o in items
+            if str(o.get("time") or "").strip()
+        ]
+        if len(coords) >= 2:
+            folium.PolyLine(
+                coords,
+                color=_karta.person_color(person),
+                weight=3,
+                opacity=0.6,
+            ).add_to(map_obj)
+
+
+def _build_map(
+    observations: list[dict], places: list[dict], *, animate: bool
+) -> folium.Map:
     map_obj = folium.Map(location=DEFAULT_CENTER, zoom_start=16, tiles="OpenStreetMap")
     _add_place_markers(map_obj, places)
     classified = _karta.classify_timeline_observations(observations)
     invalid = classified["invalid"]
     missing_time = classified["missing_time"]
+    # Alla observationer med giltig koordinat (även tidlösa) ritas som statiska
+    # markörer så att valda personer alltid syns oavsett tidslinjens läge.
+    plottable = classified["valid_timed"] + missing_time
     if invalid:
         st.warning(
-            f"{len(invalid)} observationer saknar giltig tid, koordinat eller källa "
-            "och visas inte i tidslinjen."
+            f"{len(invalid)} observationer saknar giltig koordinat eller källa "
+            "och kan inte visas på kartan."
         )
     if missing_time:
         st.info(
-            f"{len(missing_time)} observationer saknar tid och visas därför inte i tidslinjen."
+            f"{len(missing_time)} observationer saknar tid — de visas som markörer "
+            "men inte i den animerade tidslinjen."
         )
-    geojson = _karta.build_timestamped_geojson(observations)
-    if geojson["features"]:
-        TimestampedGeoJson(
-            geojson,
-            period="PT1M",
-            add_last_point=True,
-            auto_play=False,
-            loop=False,
-            max_speed=10,
-            loop_button=True,
-            date_options="HH:mm",
-            time_slider_drag_update=True,
-        ).add_to(map_obj)
+    _add_observation_markers(map_obj, plottable)
+    _add_person_paths(map_obj, plottable)
+    if animate:
+        geojson = _karta.build_timestamped_geojson(observations)
+        if geojson["features"]:
+            TimestampedGeoJson(
+                geojson,
+                period="PT1M",
+                add_last_point=True,
+                auto_play=False,
+                loop=False,
+                max_speed=10,
+                loop_button=True,
+                date_options="HH:mm",
+                time_slider_drag_update=True,
+            ).add_to(map_obj)
+        else:
+            st.info("Ingen tidsatt rörelse att animera ännu.")
     return map_obj
 
 
@@ -158,12 +229,22 @@ with st.sidebar:
     st.header("Filter")
     selected_people = st.multiselect("Personer", people, default=people)
     show_places = st.toggle("Visa platskatalog", value=True)
+    animate_timeline = st.toggle(
+        "Animera tidslinje",
+        value=False,
+        help="Av: alla valda observationer visas som markörer. "
+        "På: spela upp dem i tidsordning med tidsreglaget.",
+    )
 
 filtered = [
     obs for obs in observations
     if not selected_people or obs["person"] in selected_people
 ]
 map_places = places if show_places else []
+
+# Aktuellt val (sätts av listan längre ned eller av ett markörklick på kartan).
+_selected_id = st.session_state.get("karta_selected_observation")
+current_selected = next((o for o in observations if o["id"] == _selected_id), None)
 
 left, right = st.columns([1, 3])
 with left:
@@ -175,17 +256,79 @@ with left:
         st.info("Inga observationer ännu. Lägg till en källhänvisad observation nedan.")
     st.caption(f"{len(filtered)} visade observationer")
 
+    st.divider()
+    st.subheader("Flytta / tidssätt")
+    move_mode = st.toggle(
+        "Flytta-läge",
+        value=False,
+        help="Klicka på en markör för att välja en observation. När flytta-läge "
+        "är på flyttas den valda observationen dit du klickar på kartan.",
+    )
+    if current_selected:
+        st.caption(
+            f"Vald: **{current_selected['person']}** · "
+            f"{current_selected.get('place_name') or 'okänd plats'} · "
+            f"{current_selected.get('time') or 'utan tid'}"
+        )
+        quick_time = st.text_input(
+            "Tid (HH:MM)",
+            value=current_selected.get("time") or "",
+            key=f"karta_quick_time_{current_selected['id']}",
+        )
+        if st.button("Uppdatera tid", use_container_width=True, key="karta_quick_time_btn"):
+            try:
+                _state_db.update_map_observation(
+                    conn, current_selected["id"], time=quick_time or None
+                )
+                st.toast("Tid uppdaterad")
+                st.rerun()
+            except ValueError as exc:
+                st.error(f"Ogiltig tid: {exc}")
+    else:
+        st.caption(
+            "Klicka en markör (eller välj i listan nedan) för att flytta eller "
+            "tidssätta en observation."
+        )
+
 with right:
     result = st_folium(
-        _build_map(filtered, map_places),
+        _build_map(filtered, map_places, animate=animate_timeline),
         height=650,
         use_container_width=True,
         key="karta_folium",
     )
-    clicked = result.get("last_clicked") if result else None
-    if clicked:
-        st.session_state["karta_last_clicked"] = clicked
-        st.caption(f"Senaste kartklick: {clicked['lat']:.5f}, {clicked['lng']:.5f}")
+    # Markörklick → välj observationen (om markörerna inte ligger ovanpå varandra).
+    obj_click = result.get("last_object_clicked") if result else None
+    if obj_click and obj_click != st.session_state.get("karta_prev_obj_click"):
+        st.session_state["karta_prev_obj_click"] = obj_click
+        matches = _karta.observations_at_coord(
+            observations, obj_click["lat"], obj_click["lng"]
+        )
+        if len(matches) == 1:
+            st.session_state["karta_selected_observation"] = matches[0]["id"]
+            st.rerun()
+        elif len(matches) > 1:
+            st.info(
+                f"{len(matches)} observationer ligger på samma punkt — välj i listan nedan."
+            )
+
+    # Kartklick → flytta vald observation (flytta-läge) eller spara som senaste klick.
+    map_click = result.get("last_clicked") if result else None
+    if map_click and map_click != st.session_state.get("karta_prev_map_click"):
+        st.session_state["karta_prev_map_click"] = map_click
+        st.session_state["karta_last_clicked"] = map_click
+        if move_mode and current_selected:
+            _state_db.update_map_observation(
+                conn,
+                current_selected["id"],
+                lat=float(map_click["lat"]),
+                lon=float(map_click["lng"]),
+            )
+            st.toast(f"Flyttade {current_selected['person']} hit")
+            st.rerun()
+    last_click = st.session_state.get("karta_last_clicked")
+    if last_click:
+        st.caption(f"Senaste kartklick: {last_click['lat']:.5f}, {last_click['lng']:.5f}")
 
 st.subheader("Redigera observationer")
 
@@ -265,6 +408,31 @@ if use_click_clicked and latest_click:
     st.session_state["karta_form_lon"] = defaults["lon"]
     st.rerun()
 
+# Källväljare: sök bland arkivets dokument och fyll i Nr (annars blir fältet blint).
+st.markdown("**Källa**")
+source_query = st.text_input(
+    "Sök källa (nr eller titel)",
+    key="karta_source_query",
+    placeholder="t.ex. Grand, Engström eller 2055…",
+)
+source_matches = _karta.search_sources(_source_index(str(ROOT)), source_query)
+current_nr = str(st.session_state.get("karta_form_nr") or "").strip()
+keep_label = f"(behåll nuvarande: {current_nr or 'ingen'})"
+label_to_nr = {label: nr for nr, label in source_matches}
+src_left, src_right = st.columns([3, 1])
+with src_left:
+    source_pick = st.selectbox(
+        f"Välj källa ({len(source_matches)} träffar)",
+        [keep_label] + [label for _nr, label in source_matches],
+        key="karta_source_pick",
+    )
+with src_right:
+    use_source_clicked = st.button("Använd källa", use_container_width=True)
+if use_source_clicked and source_pick != keep_label:
+    st.session_state["karta_form_nr"] = label_to_nr[source_pick]
+    st.toast(f"Källa satt: Nr {label_to_nr[source_pick]}")
+    st.rerun()
+
 with st.form("map_observation_form", clear_on_submit=False):
     cols = st.columns(3)
     with cols[0]:
@@ -336,3 +504,114 @@ if selected_for_form:
         st.caption(
             "Källhänvisning finns, men ingen lokal arkivfil matchade detta nr ännu."
         )
+
+st.subheader("Granska extraherade kartförslag")
+pending_candidates = _state_db.list_map_observation_candidates(conn, status="pending", limit=50)
+# Platsindex ur katalogen så koordinatlösa kandidater kan föreslås rätt plats
+# i stället för att tyst hamna på mordplatsens defaultkoordinat vid godkännande.
+_candidate_place_index = _map_extract.build_place_index(places)
+if not pending_candidates:
+    st.info("Inga kartförslag väntar på granskning.")
+else:
+    st.caption(f"{len(pending_candidates)} förslag väntar på granskning")
+
+for candidate in pending_candidates:
+    label_time = candidate.get("time") or "utan tid"
+    label_place = candidate.get("place_name") or candidate.get("raw_place") or "okänd plats"
+    with st.expander(
+        f"{candidate['person']} · {label_time} · {label_place} · "
+        f"Nr {candidate['nr']}, sida {candidate['sida']}"
+    ):
+        st.write(candidate.get("quote") or "")
+        st.caption(
+            f"Matchning: {candidate['place_match']} · "
+            f"confidence: {candidate['confidence']} · modell: {candidate['model']}"
+        )
+        sources = _sources_for_candidate(candidate)
+        if sources:
+            _casebook_ui.render_source_cards(
+                ROOT,
+                sources,
+                conn,
+                key_prefix=f"karta_candidate_source_{candidate['id']}",
+            )
+        else:
+            st.caption("Ingen lokal arkivfil matchade kandidatens nr.")
+
+        # Föreslå koordinat för kandidater som saknar en: matcha platsen mot
+        # katalogen. Saknas både koordinat och match varnar vi i stället för att
+        # tyst publicera punkten på mordplatsen.
+        if candidate["lat"] is not None:
+            default_lat, default_lon = float(candidate["lat"]), float(candidate["lon"])
+        else:
+            _m = _map_extract.match_place(
+                candidate.get("place_name") or candidate.get("raw_place") or "",
+                _candidate_place_index,
+            )
+            if _m["place_match"] != "none":
+                default_lat, default_lon = _m["lat"], _m["lon"]
+                st.info(
+                    f"📍 Koordinat föreslagen från katalogen "
+                    f"({_m['place_name']}, {_m['place_match']}) — kontrollera innan godkännande."
+                )
+            else:
+                default_lat, default_lon = DEFAULT_CENTER
+                st.warning(
+                    "⚠️ Ingen koordinat hittad för platsen. Sätt rätt koordinat "
+                    "innan du godkänner — annars hamnar punkten på mordplatsen."
+                )
+
+        with st.form(f"karta_candidate_form_{candidate['id']}"):
+            cols = st.columns(3)
+            with cols[0]:
+                person = st.text_input("Person", value=candidate["person"])
+                place_name = st.text_input(
+                    "Platsnamn",
+                    value=candidate.get("place_name") or candidate.get("raw_place") or "",
+                )
+            with cols[1]:
+                lat = st.number_input("Lat", value=float(default_lat), format="%.6f")
+                lon = st.number_input("Lon", value=float(default_lon), format="%.6f")
+            with cols[2]:
+                time = st.text_input("Tid (HH:MM)", value=candidate.get("time") or "")
+                uncertainty = st.text_input("Osäkerhet", value=candidate.get("uncertainty") or "")
+            note = st.text_area(
+                "Notering",
+                value=candidate.get("note") or candidate.get("quote") or "",
+            )
+            save, approve, reject = st.columns(3)
+            save_clicked = save.form_submit_button("Spara ändringar")
+            approve_clicked = approve.form_submit_button("Godkänn till kartan")
+            reject_clicked = reject.form_submit_button("Avvisa")
+
+        candidate_updates = _karta.candidate_review_payload(
+            {
+                "person": person,
+                "place_name": place_name,
+                "lat": lat,
+                "lon": lon,
+                "time": time,
+                "uncertainty": uncertainty,
+                "note": note,
+            },
+            candidate,
+            default_lat=DEFAULT_CENTER[0],
+            default_lon=DEFAULT_CENTER[1],
+        )
+        if save_clicked:
+            _state_db.update_map_observation_candidate(conn, candidate["id"], **candidate_updates)
+            st.toast("Kartförslaget uppdaterat")
+            st.rerun()
+        if approve_clicked:
+            _state_db.update_map_observation_candidate(conn, candidate["id"], **candidate_updates)
+            try:
+                _state_db.approve_map_observation_candidate(conn, candidate["id"])
+            except ValueError as exc:
+                st.error(f"Kan inte godkänna: {exc}")
+            else:
+                st.toast("Kartförslaget godkänt")
+                st.rerun()
+        if reject_clicked:
+            _state_db.reject_map_observation_candidate(conn, candidate["id"])
+            st.toast("Kartförslaget avvisat")
+            st.rerun()

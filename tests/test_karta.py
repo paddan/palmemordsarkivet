@@ -1,12 +1,16 @@
 from karta import (
     build_timestamped_geojson,
+    candidate_review_payload,
+    candidate_source_payload,
     classify_timeline_observations,
+    observations_at_coord,
     db_observation_payload,
     legend_person_html,
     map_form_defaults,
     observation_source_payload,
     observation_source_payloads,
     observations_by_person,
+    search_sources,
     person_color,
     popup_html,
     validate_observation,
@@ -145,6 +149,39 @@ def test_build_timestamped_geojson_points_and_lines():
     ]
 
 
+def test_build_timestamped_geojson_rolls_after_midnight_to_next_day():
+    # Tider efter midnatt (t.ex. 02:19) hör till dygnet efter mordkvällen och
+    # ska sorteras efter 23:xx, inte före.
+    data = build_timestamped_geojson(
+        [
+            _obs(id=1, person="A", time="23:20", lat=59.337, lon=18.063),
+            _obs(id=2, person="B", time="02:19", lat=59.339, lon=18.065),
+        ]
+    )
+    times = sorted(f["properties"]["time"] for f in data["features"]
+                   if f["geometry"]["type"] == "Point")
+    assert times == ["1986-02-28T23:20:00", "1986-03-01T02:19:00"]
+
+
+def test_build_timestamped_geojson_orders_same_person_across_midnight():
+    data = build_timestamped_geojson(
+        [
+            _obs(id=1, person="A", time="23:20", lat=59.337, lon=18.063),
+            _obs(id=2, person="A", time="02:19", lat=59.339, lon=18.065),
+        ]
+    )
+    line = next(f for f in data["features"] if f["geometry"]["type"] == "LineString")
+
+    assert line["properties"]["times"] == [
+        "1986-02-28T23:20:00",
+        "1986-03-01T02:19:00",
+    ]
+    assert line["geometry"]["coordinates"] == [
+        [18.063, 59.337],
+        [18.065, 59.339],
+    ]
+
+
 def test_classify_timeline_observations_separates_missing_time_from_invalid():
     classified = classify_timeline_observations(
         [
@@ -228,3 +265,94 @@ def test_db_observation_payload_keeps_valid_time_unchanged():
     normalized = db_observation_payload(payload)
 
     assert normalized["time"] == "21:15"
+
+
+def test_candidate_source_payload_uses_exact_source_stem():
+    candidate = {
+        "pdf_stem": "2055 — Grandbesökare",
+        "nr": "2055",
+        "sida": 3,
+        "person": "Olof Palme",
+        "raw_place": "Grand",
+    }
+
+    assert candidate_source_payload(candidate, source_stem="2055 — Grandbesökare") == {
+        "source": "2055 — Grandbesökare.txt",
+        "page": 3,
+        "nr": "2055",
+        "title": "Olof Palme vid Grand",
+    }
+
+
+def test_search_sources_filters_by_nr_or_title_and_caps():
+    index = [
+        ("100", "100 — Skandiaförhör"),
+        ("2055", "2055 — Grandbesökare"),
+        ("300", "300 — Tunnelgatan"),
+    ]
+    assert search_sources(index, "grand") == [("2055", "2055 — Grandbesökare")]
+    assert search_sources(index, "2055") == [("2055", "2055 — Grandbesökare")]
+    assert {nr for nr, _ in search_sources(index, "")} == {"100", "2055", "300"}
+    assert len(search_sources(index, "", limit=2)) == 2
+
+
+def test_observations_at_coord_matches_within_tolerance():
+    obs = [
+        _obs(id=1, person="A", lat=59.337, lon=18.063),
+        _obs(id=2, person="B", lat=59.33700000004, lon=18.06300000004),
+        _obs(id=3, person="C", lat=59.340, lon=18.060),
+    ]
+    hits = observations_at_coord(obs, 59.337, 18.063)
+    assert {o["id"] for o in hits} == {1, 2}
+    assert observations_at_coord(obs, 59.500, 18.000) == []
+
+
+def test_candidate_source_payload_requires_source_and_page():
+    assert candidate_source_payload({"nr": "2055", "sida": 1}, source_stem=None) is None
+    assert candidate_source_payload({"nr": "2055", "sida": None}, source_stem="2055 — X") is None
+
+
+def test_candidate_review_payload_does_not_save_default_coord_for_unknown_place():
+    candidate = {"lat": None, "lon": None, "place_match": "none"}
+    payload = {
+        "person": "Okänt vittne",
+        "place_name": "Okänd gränd",
+        "lat": 59.33695,
+        "lon": 18.06324,
+        "time": "23:21",
+        "uncertainty": "",
+        "note": "Citat ur sidan.",
+    }
+
+    normalized = candidate_review_payload(
+        payload,
+        candidate,
+        default_lat=59.33695,
+        default_lon=18.06324,
+    )
+
+    assert normalized["lat"] is None
+    assert normalized["lon"] is None
+
+
+def test_candidate_review_payload_keeps_explicit_coord_for_unknown_place():
+    candidate = {"lat": None, "lon": None, "place_match": "none"}
+    payload = {
+        "person": "Okänt vittne",
+        "place_name": "Okänd gränd",
+        "lat": 59.34000,
+        "lon": 18.06000,
+        "time": "23:21",
+        "uncertainty": "",
+        "note": "Citat ur sidan.",
+    }
+
+    normalized = candidate_review_payload(
+        payload,
+        candidate,
+        default_lat=59.33695,
+        default_lon=18.06324,
+    )
+
+    assert normalized["lat"] == 59.34000
+    assert normalized["lon"] == 18.06000

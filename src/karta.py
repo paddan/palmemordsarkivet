@@ -11,7 +11,7 @@ import hashlib
 import html
 import re
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 
 PERSON_PALETTE: list[str] = [
     "#c1121f",
@@ -27,6 +27,9 @@ PERSON_PALETTE: list[str] = [
 ]
 
 _TIME_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+# Tider före kl 12 tolkas som efter midnatt (nästa dygn) så att mordkvällens
+# 23:xx sorteras före 00:xx–05:xx i tidslinjen trots gemensamt basdatum.
+_NEXT_DAY_BEFORE_HOUR = 12
 
 
 def person_color(name: str) -> str:
@@ -82,11 +85,22 @@ def validate_observation(obs: dict) -> list[str]:
     return errors
 
 
-def _time_key(obs: dict) -> tuple[int, str, int]:
+def _timeline_minutes(value: str | None) -> int | None:
+    time_value = str(value or "").strip()
+    if not _TIME_RE.fullmatch(time_value):
+        return None
+    hour, minute = (int(part) for part in time_value.split(":"))
+    if hour < _NEXT_DAY_BEFORE_HOUR:
+        hour += 24
+    return hour * 60 + minute
+
+
+def _time_key(obs: dict) -> tuple[int, int, int]:
     time_value = str(obs.get("time") or "").strip()
-    if not time_value:
-        return (1, "", int(obs.get("id") or 0))
-    return (0, time_value, int(obs.get("id") or 0))
+    minutes = _timeline_minutes(time_value)
+    if minutes is None:
+        return (1, 0, int(obs.get("id") or 0))
+    return (0, minutes, int(obs.get("id") or 0))
 
 
 def observations_by_person(obs: list[dict]) -> dict[str, list[dict]]:
@@ -189,6 +203,80 @@ def db_observation_payload(payload: dict) -> dict:
     return normalized
 
 
+def candidate_review_payload(
+    payload: dict,
+    candidate: dict,
+    *,
+    default_lat: float,
+    default_lon: float,
+) -> dict:
+    """Normalisera kandidatpayload utan att spara defaultkoordinat som fakta."""
+    normalized = db_observation_payload(payload)
+    has_no_candidate_coord = candidate.get("lat") is None and candidate.get("lon") is None
+    place_match = str(candidate.get("place_match") or "").strip()
+    lat = _float_value(normalized.get("lat"))
+    lon = _float_value(normalized.get("lon"))
+    if (
+        has_no_candidate_coord
+        and place_match == "none"
+        and lat is not None
+        and lon is not None
+        and abs(lat - float(default_lat)) <= 1e-9
+        and abs(lon - float(default_lon)) <= 1e-9
+    ):
+        normalized["lat"] = None
+        normalized["lon"] = None
+    return normalized
+
+
+def search_sources(
+    index: list[tuple[str, str]], query: str, *, limit: int = 50
+) -> list[tuple[str, str]]:
+    """Filtrera ett källindex ``[(nr, etikett)]`` på nr eller etikett.
+
+    Skiftlägesokänslig delsträngsmatchning; tom fråga ger de första ``limit``."""
+    q = query.strip().casefold()
+    if not q:
+        return list(index[:limit])
+    return [
+        (nr, label)
+        for nr, label in index
+        if q in str(nr).casefold() or q in str(label).casefold()
+    ][:limit]
+
+
+def observations_at_coord(
+    observations: list[dict], lat: float, lon: float, *, tol: float = 1e-5
+) -> list[dict]:
+    """Observationer vars koordinat ligger inom ``tol`` grader från (lat, lon).
+
+    Används för att koppla ett markörklick på kartan tillbaka till en
+    observation; flera träffar betyder att markörer ligger ovanpå varandra."""
+    out: list[dict] = []
+    for obs in observations:
+        try:
+            olat, olon = float(obs["lat"]), float(obs["lon"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if abs(olat - lat) <= tol and abs(olon - lon) <= tol:
+            out.append(obs)
+    return out
+
+
+def candidate_source_payload(candidate: dict, *, source_stem: str | None = None) -> dict | None:
+    """Bygg källkortspayload för en extraherad kartkandidat."""
+    nr = str(candidate.get("nr") or "").strip()
+    sida = candidate.get("sida")
+    stem = str(source_stem or "").strip()
+    if not nr or sida in (None, "") or not stem:
+        return None
+    source = stem if stem.endswith(".txt") else f"{stem}.txt"
+    person = str(candidate.get("person") or "").strip()
+    place = str(candidate.get("raw_place") or candidate.get("place_name") or "").strip()
+    title = f"{person} vid {place}".strip() if person and place else person or place or nr
+    return {"source": source, "page": sida, "nr": nr, "title": title}
+
+
 def legend_person_html(person: str) -> str:
     """Bygg säker legendrad för en person i kartans sidospalt."""
     color = person_color(person)
@@ -226,6 +314,8 @@ def map_form_defaults(
 
 def _iso_time(base_date: str, hhmm: str) -> str:
     stamp = datetime.strptime(f"{base_date} {hhmm}", "%Y-%m-%d %H:%M")
+    if stamp.hour < _NEXT_DAY_BEFORE_HOUR:
+        stamp += timedelta(days=1)
     return stamp.isoformat(timespec="seconds")
 
 
