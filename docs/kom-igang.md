@@ -17,10 +17,12 @@ detaljer om varje steg, se [Teknisk referens](teknisk-referens.md).
 ```bash
 ./install.sh           # installera pipeline/webgränssnitt (brew, Python-paket, tessdata)
 ./install.sh --no-surya  # snabbare install utan Surya-OCR
+./install.sh --dev     # valfritt: installera pytest/ruff/mypy för utveckling
 ```
 
 `install.sh` sköter pipeline- och webgränssnittsberoendena via Homebrew och pip — se
 [Vad install.sh gör](teknisk-referens.md#vad-installsh-gör) för detaljer.
+Kör `./test.sh` för pytest; lägg till `--static` när du vill köra ruff och mypy.
 
 ## 2. Sätt en API-nyckel
 

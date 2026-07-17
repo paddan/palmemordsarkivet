@@ -124,15 +124,23 @@ def linkify_citations(
             if narrowed:
                 cands = narrowed
         if not cands:
-            return m.group(0)
+            return html.escape(m.group(0), quote=False)
+        label = html.escape(m.group(0), quote=False)
         if len(cands) == 1:
-            return _anchor(cands[0], m.group(0), "Öppna PDF")
+            return _anchor(cands[0], label, "Öppna PDF")
         # Genuint tvetydigt nr (flera dokument delar prefix): en länk per fil,
         # märkt med den särskiljande titeldelen ur stammen.
         links = []
         for pdf in cands:
             suffix = pdf.stem[len(nr):].lstrip("_- ") or pdf.stem
-            links.append(_anchor(pdf, html.escape(suffix[:30]), pdf.stem))
-        return f"{m.group(0)} ({' '.join(links)})"
+            links.append(_anchor(pdf, html.escape(suffix[:30], quote=False), pdf.stem))
+        return f"{label} ({' '.join(links)})"
 
-    return CITE_RE.sub(repl, text)
+    parts: list[str] = []
+    last = 0
+    for m in CITE_RE.finditer(text):
+        parts.append(html.escape(text[last:m.start()], quote=False))
+        parts.append(repl(m))
+        last = m.end()
+    parts.append(html.escape(text[last:], quote=False))
+    return "".join(parts)

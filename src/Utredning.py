@@ -632,7 +632,12 @@ def _run_tool(name: str, arguments: dict) -> str:
     mcp_server._table = table
     mcp_server._model = embed_model
     if name == "search_archive":
-        return mcp_server.search_archive(**arguments)
+        args = dict(arguments)
+        args["top_k"], args["top_n"] = mcp_server.clamp_result_limits(
+            args.get("top_k", mcp_server.TOP_K_DEFAULT),
+            args.get("top_n", mcp_server.TOP_N_DEFAULT),
+        )
+        return mcp_server.search_archive(**args)
     if name == "get_page":
         return mcp_server.get_page(**arguments)
     return f"Okänt verktyg: {name}"

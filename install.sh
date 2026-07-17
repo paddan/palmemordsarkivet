@@ -4,16 +4,20 @@
 #
 # Kör:  ./install.sh
 #       ./install.sh --surya    # inkludera Surya-OCR (tyngre, bättre på svåra sidor)
+#       ./install.sh --dev      # installera även pytest/ruff/mypy
 
 set -euo pipefail
 
 WITH_SURYA=true
+WITH_DEV=false
 for arg in "$@"; do
   case "$arg" in
     --no-surya) WITH_SURYA=false ;;
+    --dev) WITH_DEV=true ;;
     -h|--help)
-      echo "Användning: $(basename "$0") [--no-surya]"
+      echo "Användning: $(basename "$0") [--no-surya] [--dev]"
       echo "  --no-surya   hoppa över Surya-OCR (snabbare install, sämre OCR på svåra sidor)"
+      echo "  --dev        installera pytest, ruff och mypy för utveckling/tester"
       exit 0 ;;
     *) echo "okänd flagga: $arg" >&2; exit 2 ;;
   esac
@@ -84,8 +88,13 @@ PIP=".venv/bin/pip"
 "$PIP" install --upgrade pip --quiet
 
 # ── Python-beroenden ──────────────────────────────────────────────────────────
-echo "→ pip install -e .[web]…"
-"$PIP" install --quiet -e ".[web]"
+if [[ "$WITH_DEV" == "true" ]]; then
+  echo "→ pip install -e .[dev,web]…"
+  "$PIP" install --quiet -e ".[dev,web]"
+else
+  echo "→ pip install -e .[web]…"
+  "$PIP" install --quiet -e ".[web]"
+fi
 
 if [[ "$WITH_SURYA" == "true" ]]; then
   echo "→ pip install -e .[surya]…"
@@ -109,3 +118,7 @@ echo "  ./download.sh     # ladda ner ~3 700 PDF:er (tar några timmar)"
 echo "  ./ocr.sh          # OCR till text (tar flera timmar)"
 echo "  ./ingest.sh       # bygg vektorindex"
 echo "  ./web.sh          # starta webgränssnittet"
+echo ""
+echo "Utveckling/tester:"
+echo "  ./install.sh --dev"
+echo "  ./test.sh"

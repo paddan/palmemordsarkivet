@@ -106,6 +106,29 @@ def test_download_wpu_help_only_lists_supported_flags() -> None:
     assert "da-only" not in result.stdout
 
 
+def test_install_help_mentions_dev_flag() -> None:
+    project_root = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        [str(project_root / "install.sh"), "--help"],
+        cwd=project_root,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0
+    assert "--dev" in result.stdout
+    assert "pytest, ruff och mypy" in result.stdout
+
+
+def test_test_sh_makes_static_tools_opt_in() -> None:
+    project_root = Path(__file__).resolve().parents[1]
+    text = (project_root / "test.sh").read_text(encoding="utf-8")
+    assert "--static" in text
+    assert "RUN_STATIC=false" in text
+    assert '.venv/bin/$tool' in text
+    assert 'command -v "$tool"' not in text
+
+
 def test_legacy_migration_files_are_removed() -> None:
     project_root = Path(__file__).resolve().parents[1]
     for path in (

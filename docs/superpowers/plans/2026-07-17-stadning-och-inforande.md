@@ -105,16 +105,16 @@ att `src/db.py` ar aktuell atkomstyta.
 **Interfaces:**
 - Produces: `linkify_citations(text, mapping, known_sources=None)` som HTML-escapar all okand text och bara slapper igenom egna ankare.
 
-- [ ] **Step 1: Skriv regressionstest**
+- [x] **Step 1: Skriv regressionstest**
 
 Lagg test som verifierar att `linkify_citations('<img src=x onerror=alert(1)> [Nr 281, sida 4]', mapping)` inte innehaller raw `<img`.
 
-- [ ] **Step 2: Implementera escaping**
+- [x] **Step 2: Implementera escaping**
 
 Escape:a textsegment mellan citatmatchningar med `html.escape`, men behall
 `pdf_anchor`-HTML for egna lankar.
 
-- [ ] **Step 3: Verifiera**
+- [x] **Step 3: Verifiera**
 
 Run:
 
@@ -132,17 +132,17 @@ Run:
 **Interfaces:**
 - Produces: gemensam clamp/validation for `top_k` 5-50 och `top_n` 1-15.
 
-- [ ] **Step 1: Testa out-of-range**
+- [x] **Step 1: Testa out-of-range**
 
 Lagg test for att `search_archive(..., top_k=9999, top_n=9999)` aldrig skickar
 vidare mer an tillaten grans.
 
-- [ ] **Step 2: Implementera validation**
+- [x] **Step 2: Implementera validation**
 
 Infor liten helper i `mcp_server.py` och ateranvand den i OpenAI-tool-loopen i
 `Utredning.py`.
 
-- [ ] **Step 3: Verifiera**
+- [x] **Step 3: Verifiera**
 
 Run:
 
@@ -159,22 +159,23 @@ Run:
 - Optional create: `.github/workflows/ci.yml`
 
 **Interfaces:**
-- Produces: ett reproducerbart kommando for pytest/ruff/mypy nar dev-extra ar installerad.
+- Produces: ett reproducerbart pytest-kommando och ett explicit `--static`-lage for ruff/mypy nar dev-extra ar installerad.
 
-- [ ] **Step 1: Lagga till testscript**
+- [x] **Step 1: Lagga till testscript**
 
-`test.sh` ska kora pytest och, nar `ruff`/`mypy` finns, aven statisk kontroll.
+`test.sh` ska kora pytest och, med `--static`, aven statisk kontroll via `.venv`.
 
-- [ ] **Step 2: Dokumentera dev-install**
+- [x] **Step 2: Dokumentera dev-install**
 
 Uppdatera testavsnittet till `pip install -e '.[dev,web]'`.
 
-- [ ] **Step 3: Verifiera**
+- [x] **Step 3: Verifiera**
 
 Run:
 
 ```bash
 ./test.sh
+./test.sh --static
 ```
 
 ### Task 7: Senare arkitekturbatchar

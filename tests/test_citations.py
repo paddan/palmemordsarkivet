@@ -103,6 +103,18 @@ def test_linkify_single_match_renders_anchor(tmp_path: Path) -> None:
     assert "[Nr 281, sida 4]" in out
 
 
+def test_linkify_escapes_unknown_html_but_keeps_citation_anchor(tmp_path: Path) -> None:
+    mapping = _mapping(tmp_path, ["281 — Titel"])
+    out = linkify_citations(
+        '<img src=x onerror=alert(1)> [Nr 281, sida 4]',
+        mapping,
+    )
+    assert "<img" not in out
+    assert "&lt;img src=x onerror=alert(1)&gt;" in out
+    assert out.count("<a href=") == 1
+    assert "[Nr 281, sida 4]" in out
+
+
 def test_linkify_unknown_nr_left_untouched(tmp_path: Path) -> None:
     mapping = _mapping(tmp_path, ["281 — Titel"])
     text = "Se [Nr 999, sida 1]."

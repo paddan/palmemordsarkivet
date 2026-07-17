@@ -88,10 +88,13 @@ Repo-data:
 
 ```bash
 # Tests
-.venv/bin/pytest tests/
+./test.sh                             # pytest
+./test.sh --static                    # pytest + ruff/mypy via .venv
+.venv/bin/pytest tests/               # bara pytest
 
 # Setup
 ./install.sh                         # Installera pipeline/webgränssnitt (brew, Python-paket, tessdata)
+./install.sh --dev                   # Installera även pytest/ruff/mypy för utveckling
 
 # Workflow
 ./run_pipeline.sh                    # Hela pipelinen i ett: download → OCR → ingest

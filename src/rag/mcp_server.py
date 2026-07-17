@@ -35,6 +35,13 @@ _table = None
 _model = None
 _text_dir: Path = ROOT / "generated" / "text"
 
+TOP_K_MIN = 5
+TOP_K_MAX = 50
+TOP_K_DEFAULT = 20
+TOP_N_MIN = 1
+TOP_N_MAX = 15
+TOP_N_DEFAULT = 6
+
 
 def _init():
     global _table, _model
@@ -50,13 +57,38 @@ def _init():
     _model = SentenceTransformer(model_name)
 
 
+def _int_or_default(value: object, default: int) -> int:
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return default
+    return default
+
+
+def clamp_result_limits(top_k: object, top_n: object) -> tuple[int, int]:
+    """Normalisera modellstyrda sökgränser till verktygets tillåtna intervall."""
+    k = _int_or_default(top_k, TOP_K_DEFAULT)
+    n = _int_or_default(top_n, TOP_N_DEFAULT)
+    return (
+        min(max(k, TOP_K_MIN), TOP_K_MAX),
+        min(max(n, TOP_N_MIN), TOP_N_MAX),
+    )
+
+
 # ── Verktyg ───────────────────────────────────────────────────────────────────
 
 @mcp.tool()
 def search_archive(
     query: Annotated[str, "Sökfrågan på svenska"],
-    top_k: Annotated[int, "Antal kandidater att hämta (5–50)"] = 20,
-    top_n: Annotated[int, "Antal att behålla efter reranking (1–15)"] = 6,
+    top_k: Annotated[int, "Antal kandidater att hämta (5–50)"] = TOP_K_DEFAULT,
+    top_n: Annotated[int, "Antal att behålla efter reranking (1–15)"] = TOP_N_DEFAULT,
     hybrid: Annotated[bool, "Kombinera vektor- och BM25-sökning"] = True,
     rerank: Annotated[bool, "Omranka med cross-encoder för bättre precision"] = True,
 ) -> str:
@@ -65,6 +97,7 @@ def search_archive(
     Använd detta verktyg för att hitta information i Palmemordsarkivet.
     Anropa flera gånger med olika söktermer för att täcka ett ämne från flera vinklar.
     """
+    top_k, top_n = clamp_result_limits(top_k, top_n)
     _init()
     from ask import format_context, search, search_hybrid
 

@@ -39,12 +39,19 @@ LanceDB-källor och ersätts i stället för att dupliceras.
 - `ocrmypdf`, `tesseract-lang`, `poppler`, `unpaper`, `hunspell` via brew
 - sv_SE-ordlista länkad till `~/Library/Spelling/` (för qualitets-scoring)
 - `.venv/` med `pip install -e .[web]` (bl.a. Streamlit, `folium` och `streamlit-folium`)
+- med `--dev`: `.venv/` med `pip install -e '.[dev,web]'` så `./test.sh --static` även kan köra `ruff` och `mypy`
 - Laddar ner `swe_best.traineddata` (~12 MB) via `setup_tessdata.sh`
 
 Surya-OCR ingår som standard. Hoppa över det (snabbare install) med:
 
 ```bash
 ./install.sh --no-surya
+```
+
+För utveckling/tester:
+
+```bash
+./install.sh --dev
 ```
 
 > **Beroendepinnar:** `sentence-transformers<5` och `transformers<5` är medvetet pinnade — 5.x-versionerna bryter cross-encoder-laddning och Surya-integrationen.
@@ -692,9 +699,13 @@ Valfritt: installera hunspell + sv_SE-ordlista för att fylla i `pct_swe`-kolumn
 ## Tester
 
 ```bash
-.venv/bin/pip install pytest
-.venv/bin/pytest tests/
+.venv/bin/pip install -e '.[dev,web]'
+./test.sh
+./test.sh --static
 ```
+
+`test.sh` kör pytest. Med `--static` körs även `ruff check .` och `mypy src`
+via `.venv/`; saknas verktygen avslutar scriptet med en installationshint.
 
 Testerna täcker: `score_text` (quality), `chunk_text` (ingest), `extract_drive_id`/`sniff_extension` (download),
 `detect_redactions_image` (ocr_pages), `merge_one` (merge_pages), `merge_wpu` (merge_wpu),
