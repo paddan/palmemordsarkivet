@@ -1,12 +1,12 @@
 # Design: Utredningsläge (MCP) för OpenAI-kompatibla backends
 
 **Datum:** 2026-05-14  
-**Fil:** `src/webui.py`  
+**Fil:** `src/Utredning.py`
 **Godkänd approach:** Alt A — direkt funktionsanrop
 
 ## Bakgrund
 
-MCP-läget i webui.py är idag låst till Claude (via `claude_agent_sdk`). OpenAI-kompatibla backends (GPT-4o, GPT-5, DeepSeek, custom) stöder tool calling via OpenAI chat completions API och kan därmed köra samma agentic loop — bara implementationen skiljer sig.
+MCP-läget i Utredning.py är idag låst till Claude (via `claude_agent_sdk`). OpenAI-kompatibla backends (GPT-4o, GPT-5, DeepSeek, custom) stöder tool calling via OpenAI chat completions API och kan därmed köra samma agentic loop — bara implementationen skiljer sig.
 
 ## Komponenter
 

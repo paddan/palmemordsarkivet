@@ -63,7 +63,7 @@ Claude-credentials saknas faller den tillbaka på providern i
 Befintliga `fetch_ego`, `dedup_rels`, `assemble_graph`, `build_pyvis_html`
 återanvänds oförändrade.
 
-### 3. `src/webui.py` (utökas)
+### 3. `src/Utredning.py` (utökas)
 
 - Hjälpfunktion `_render_answer_graph(...)`:
   - Resolvar Neo4j-lösenord + cachad driver (samma `@st.cache_resource`-mönster

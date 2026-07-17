@@ -3,6 +3,11 @@
 **Datum:** 2026-05-17
 **Status:** Godkänd för planering
 
+> Historisk design. Den beskriver övergången från filmarkörer till SQLite.
+> Aktuellt läge efter genomförande: databasen ligger i
+> `generated/db/state.db`; engångsmigreringsskripten togs senare bort och
+> pipeline-state hanteras direkt via `src/db.py`.
+
 ## Bakgrund
 
 Pipelinen har idag operativ state utspridd i många filtyper:
@@ -42,7 +47,7 @@ Utanför scope (behålls som filer):
 
 ### Placering
 
-`generated/state.db` — gitignored som resten av `generated/`.
+`generated/db/state.db` — gitignored som resten av `generated/`.
 
 ## Schema
 
@@ -176,7 +181,7 @@ Princip: konsumenter (`download.py`, `ocr_pages.py`, `normalize_text.py`, `quali
 
 Engångsskript `src/migrate_to_db.py`:
 
-1. Skapar/öppnar `generated/state.db`, kör `init_schema`.
+1. Skapar/öppnar `generated/db/state.db`, kör `init_schema`.
 2. Läser `downloaded/files/manifest.csv` + `downloaded/wpu_files/manifest.csv` → `downloads`.
 3. Skannar `downloaded/files/*.pdf` + `downloaded/wpu_files/*.pdf` → `pdf_files` (med `source`, `pdf_path`).
 4. Läser `generated/text/<stem>.redact` → `pdf_files.has_redactions = 1`, `redaction_checked_at = mtime`.
@@ -249,7 +254,7 @@ WHERE i.pdf_stem IS NULL
 
 ## Rollback
 
-- `generated/state.db` är inte källan till sanning för innehåll (text-filerna är) — kan raderas och återskapas från `migrate_to_db.py`.
+- `generated/db/state.db` är inte källan till sanning för innehåll (text-filerna är) — kan raderas och återskapas från `migrate_to_db.py`.
 - Gamla CSV/JSONL/markörfiler tas inte bort förrän vi verifierat att SQLite-pipelinen fungerar i skarpt läge.
 
 ## Öppna frågor

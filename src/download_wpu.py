@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Laddar ner alla PDF-filer från wpu.nu till files_wpu/.
+Laddar ner alla PDF-filer från wpu.nu till downloaded/wpu_files/.
 
 Idempotent — hoppar över redan nedladdade filer. Merging av text mot
 palmemordsarkivet görs separat av merge_wpu.py.

@@ -2,7 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Ersätt filbaserad pipeline-state (`.normalize_stamp`, `.quality_stamp`, `.redact`, `page-NNN.json`, `manifest.csv`, `quality.csv`, `quality_pages.jsonl`, mtime-kolumn i LanceDB) med en SQLite-databas (`generated/state.db`).
+> Historisk genomförandeplan. Den visar den ursprungliga migreringen från
+> filmarkörer till SQLite. Aktuellt läge efter senare städning: state lever i
+> `generated/db/state.db`, `src/migrate_to_db.py`, `migrate_to_db.sh` och
+> `cleanup_legacy_state.sh` är borttagna, och operativa moduler ska använda
+> `src/db.py` direkt.
+
+**Goal:** Ersätt filbaserad pipeline-state (`.normalize_stamp`, `.quality_stamp`, `.redact`, `page-NNN.json`, `manifest.csv`, `quality.csv`, `quality_pages.jsonl`, mtime-kolumn i LanceDB) med en SQLite-databas (`generated/db/state.db`).
 
 **Architecture:** Ny modul `src/db.py` exponerar `connect()` + domänfunktioner (en per tabell). Konsumentmoduler (`download.py`, `ocr_pages.py`, `merge_pages.py`, `normalize_text.py`, `quality.py`, `llm_correct.py`, `rag/ingest.py`) ersätter sin filbaserade idempotens-logik med anrop till `db`. Engångsskript `src/migrate_to_db.py` fyller databasen från befintliga filer. Filerna lämnas kvar tills verifiering är klar.
 
@@ -830,7 +836,7 @@ def test_migrate_full_fixture(tmp_path):
         {"file": "00001-0001.pdf", "page": 1, "engine": "tesseract",
          "score": 70.0, "chars": 11}))
 
-    db_path = root / "generated/state.db"
+    db_path = root / "generated/db/state.db"
     conn = connect(db_path)
     init_schema(conn)
 
@@ -1082,7 +1088,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--root", default=str(ROOT), help="projektrot")
     ap.add_argument("--db", default=None,
-                    help="path till state.db (default: <root>/generated/state.db)")
+                    help="path till state.db (default: <root>/generated/db/state.db)")
     args = ap.parse_args()
 
     root = Path(args.root)
@@ -1445,7 +1451,7 @@ Hela `src/quality.py:339-360` (CSV-skrivning + JSONL-skrivning) tas bort. `--out
 
 - [ ] **Step 4: Skapa exportkommando för bakåtkompatibilitet med webui**
 
-Webui läser `quality.csv` idag — kontrollera med `grep -n "quality.csv\|quality_pages.jsonl" src/webui.py`. Om webui läser, lägg till `--export-csv FIL` som dumpar `quality`-tabellen till samma format. Tills webui omdirigeras (utanför detta plans scope) kan denna export köras vid behov.
+Webui läser `quality.csv` idag — kontrollera med `grep -n "quality.csv\|quality_pages.jsonl" src/Utredning.py`. Om webui läser, lägg till `--export-csv FIL` som dumpar `quality`-tabellen till samma format. Tills webui omdirigeras (utanför detta plans scope) kan denna export köras vid behov.
 
 - [ ] **Step 5: Kör tester**
 
@@ -1558,7 +1564,7 @@ Identifiera raden som filtrerar bort filer med `.redact`-markör innan `xargs`.
 Lägg till en helper:
 ```bash
 already_checked() {
-  sqlite3 generated/state.db \
+  sqlite3 generated/db/state.db \
     "SELECT pdf_stem FROM pdf_files WHERE redaction_checked_at IS NOT NULL" 2>/dev/null
 }
 ```
@@ -1673,19 +1679,19 @@ git commit -m "chore: cleanup-skript för legacy state-filer (kör manuellt efte
 
 I avsnittet **Non-obvious Design Decisions**: ersätt "Stamp-filbaserad normalisering" och "Stamp-filbaserad quality-bedömning" med:
 
-> **SQLite-state (generated/state.db)**: all operativ pipeline-state lever här — downloads, per-PDF-status (redaktion/merge/normalize), per-sida OCR-resultat, kvalitetspoäng och ingest-tracking. Inkrementell logik via `text_mtime` jämfört mot `normalized_at`/`scored_at`/etc. `--rebuild` tvingar omkörning av allt. Modulen `src/db.py` exponerar alla CRUD- och delta-queries; konsumenter skriver aldrig egen SQL. Ny pipeline efter `git pull`: kör `./migrate_to_db.sh` engångsvis.
+> **SQLite-state (generated/db/state.db)**: all operativ pipeline-state lever här — downloads, per-PDF-status (redaktion/merge/normalize), per-sida OCR-resultat, kvalitetspoäng och ingest-tracking. Inkrementell logik via `text_mtime` jämfört mot `normalized_at`/`scored_at`/etc. `--rebuild` tvingar omkörning av allt. Modulen `src/db.py` exponerar alla CRUD- och delta-queries; konsumenter skriver aldrig egen SQL. Ny pipeline efter `git pull`: kör `./migrate_to_db.sh` engångsvis.
 
-I **Directory Structure**: lägg till `src/db.py` och `src/migrate_to_db.py`. Lägg till `generated/state.db` i lista över genererade artefakter.
+I **Directory Structure**: lägg till `src/db.py` och `src/migrate_to_db.py`. Lägg till `generated/db/state.db` i lista över genererade artefakter.
 
 I **Common Gotchas**: ta bort eventuella stamp-fil-referenser, lägg till:
-> **SQLite WAL-filer**: `generated/state.db-wal` och `-shm` är normalt och syncas vid checkpoint. Säkerhetskopiera alla tre samtidigt.
+> **SQLite WAL-filer**: `generated/db/state.db-wal` och `-shm` är normalt och syncas vid checkpoint. Säkerhetskopiera alla tre samtidigt.
 
 - [ ] **Step 2: Uppdatera README.md**
 
 Lägg till kort avsnitt om `state.db`:
 
 > ## State-databas
-> Alla pipeline-markörer och status lagras i `generated/state.db` (SQLite). Inspektera med `sqlite3 generated/state.db`. Migrering från gamla filmarkörer (om du uppgraderar): `./migrate_to_db.sh`.
+> Alla pipeline-markörer och status lagras i `generated/db/state.db` (SQLite). Inspektera med `sqlite3 generated/db/state.db`. Migrering från gamla filmarkörer (om du uppgraderar): `./migrate_to_db.sh`.
 
 - [ ] **Step 3: Commit**
 

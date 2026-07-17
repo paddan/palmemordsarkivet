@@ -12,14 +12,14 @@
 
 ## Filer
 
-- Modify: `src/webui.py` — enda fil som ändras
+- Modify: `src/Utredning.py` — enda fil som ändras
 
 ---
 
 ### Task 1: Flytta `MCP_SYSTEM_PROMPT` till toppnivå-import
 
 **Files:**
-- Modify: `src/webui.py:26-34` (from ask import), `src/webui.py:273` (lokal import)
+- Modify: `src/Utredning.py:26-34` (from ask import), `src/Utredning.py:273` (lokal import)
 
 - [ ] **Steg 1: Lägg till `MCP_SYSTEM_PROMPT` i toppnivå-importen**
 
@@ -57,7 +57,7 @@ Förväntat: inga ImportError (Streamlit-relaterade warnings ok).
 - [ ] **Steg 4: Commit**
 
 ```bash
-git add src/webui.py
+git add src/Utredning.py
 git commit -m "refactor: flytta MCP_SYSTEM_PROMPT till toppnivå-import i webui"
 ```
 
@@ -66,7 +66,7 @@ git commit -m "refactor: flytta MCP_SYSTEM_PROMPT till toppnivå-import i webui"
 ### Task 2: Lägg till `OPENAI_TOOLS`-konstant
 
 **Files:**
-- Modify: `src/webui.py` — efter `BACKENDS`-dict (rad ~172)
+- Modify: `src/Utredning.py` — efter `BACKENDS`-dict (rad ~172)
 
 - [ ] **Steg 1: Lägg till konstanten direkt efter `BACKENDS`-diktens avslutande `}`**
 
@@ -120,7 +120,7 @@ OPENAI_TOOLS = [
 - [ ] **Steg 2: Commit**
 
 ```bash
-git add src/webui.py
+git add src/Utredning.py
 git commit -m "feat: lägg till OPENAI_TOOLS-schemas för agentic loop"
 ```
 
@@ -129,7 +129,7 @@ git commit -m "feat: lägg till OPENAI_TOOLS-schemas för agentic loop"
 ### Task 3: Lägg till `_run_tool()` och `stream_openai_mcp()`
 
 **Files:**
-- Modify: `src/webui.py` — nya funktioner efter `stream_mcp_to_string` (rad ~360)
+- Modify: `src/Utredning.py` — nya funktioner efter `stream_mcp_to_string` (rad ~360)
 
 - [ ] **Steg 1: Lägg till `_run_tool()` direkt efter `stream_mcp_to_string`**
 
@@ -240,7 +240,7 @@ async def stream_openai_mcp_to_string(cfg: dict, messages: list[dict]) -> str:
 - [ ] **Steg 4: Commit**
 
 ```bash
-git add src/webui.py
+git add src/Utredning.py
 git commit -m "feat: lägg till _run_tool och stream_openai_mcp agentic loop"
 ```
 
@@ -249,7 +249,7 @@ git commit -m "feat: lägg till _run_tool och stream_openai_mcp agentic loop"
 ### Task 4: Uppdatera session state, toggle och "Ny konversation"-knapp
 
 **Files:**
-- Modify: `src/webui.py:194-203` (toggle + knapp), `src/webui.py:236` (session state)
+- Modify: `src/Utredning.py:194-203` (toggle + knapp), `src/Utredning.py:236` (session state)
 
 - [ ] **Steg 1: Lägg till `openai_chat_messages` i session state (efter rad 236)**
 
@@ -300,7 +300,7 @@ till:
 - [ ] **Steg 4: Commit**
 
 ```bash
-git add src/webui.py
+git add src/Utredning.py
 git commit -m "feat: aktivera MCP-toggle för openai-backends och uppdatera ny-konversation-knapp"
 ```
 
@@ -309,7 +309,7 @@ git commit -m "feat: aktivera MCP-toggle för openai-backends och uppdatera ny-k
 ### Task 5: Lägg till OpenAI MCP-chattbranch i huvud-UI
 
 **Files:**
-- Modify: `src/webui.py:363` (if mcp_mode-blocket)
+- Modify: `src/Utredning.py:363` (if mcp_mode-blocket)
 
 - [ ] **Steg 1: Lägg till `else`-gren för OpenAI-backend**
 
@@ -383,7 +383,7 @@ else:
 - [ ] **Steg 2: Commit**
 
 ```bash
-git add src/webui.py
+git add src/Utredning.py
 git commit -m "feat: lägg till OpenAI MCP-chattbranch i webui"
 ```
 
@@ -392,7 +392,7 @@ git commit -m "feat: lägg till OpenAI MCP-chattbranch i webui"
 ### Task 6: Fixa RAG-synlighetsvillkor
 
 **Files:**
-- Modify: `src/webui.py:428`
+- Modify: `src/Utredning.py:428`
 
 - [ ] **Steg 1: Uppdatera villkoret**
 
@@ -408,7 +408,7 @@ if ss.hits and not mcp_mode:
 - [ ] **Steg 2: Commit**
 
 ```bash
-git add src/webui.py
+git add src/Utredning.py
 git commit -m "fix: dölj RAG-källsektion i alla MCP-lägen"
 ```
 

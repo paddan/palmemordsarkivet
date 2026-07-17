@@ -2,9 +2,9 @@
 """Jämför wpu-text mot palme-text och behåll bästa versionen.
 
 Båda sidor måste ha gått genom ``ocr_tesseract.sh`` så att ``text/<stem>.txt``
-och ``ocr/<stem>.pdf`` finns för varje PDF i ``files/`` respektive
-``files_wpu/``. Den här modulen jämför poäng för matchande dokument-ID och
-raderar förlorarens text/+ocr/-filer.
+och ``ocr/<stem>.pdf`` finns för varje PDF i ``downloaded/files/`` respektive
+``downloaded/wpu_files/``. Den här modulen jämför poäng för matchande
+dokument-ID och raderar förlorarens text/+ocr/-filer.
 
 Tre utfall per wpu-fil:
   - vinner mot matchande palme  → palmes text/+ocr/ raderas (``better``)
@@ -135,7 +135,7 @@ def _process_one(
             # Markera INTE som decided — OCR hann inte bli klar. Nästa körning
             # försöker igen när text/<stem>.txt finns.
             result["lines"].append(
-                f"[saknar text] {stem[:70]} — kör ocr_tesseract.sh på files_wpu/ först"
+                f"[saknar text] {stem[:70]} — kör ocr_tesseract.sh på downloaded/wpu_files först"
             )
             result["category"] = "skip"
             return result
@@ -210,7 +210,7 @@ def main() -> int:
                     help="ignorera wpu_decisions-tabellen")
     ap.add_argument("--margin", type=float, default=DEFAULT_MARGIN,
                     help=f"min poängfördel för att vinna (default: {DEFAULT_MARGIN})")
-    ap.add_argument("--files-wpu", default=str(FILES_WPU),
+    ap.add_argument("--files-wpu", dest="wpu_dir", default=str(FILES_WPU),
                     help=f"katalog med wpu-PDF:er (default: {FILES_WPU})")
     ap.add_argument("--text-dir", default=str(TEXT_DIR),
                     help=f"text-katalog (default: {TEXT_DIR})")
@@ -220,12 +220,12 @@ def main() -> int:
                     help="antal parallella processer (default: cpu_count)")
     args = ap.parse_args()
 
-    files_wpu = Path(args.files_wpu)
+    wpu_dir = Path(args.wpu_dir)
     text_dir = Path(args.text_dir)
     ocr_dir = Path(args.ocr_dir)
 
-    if not files_wpu.is_dir():
-        print(f"Saknar {files_wpu}/", file=sys.stderr)
+    if not wpu_dir.is_dir():
+        print(f"Saknar {wpu_dir}/", file=sys.stderr)
         return 1
     if not text_dir.is_dir():
         print(f"Saknar {text_dir}/ — kör ocr_tesseract.sh först.", file=sys.stderr)
@@ -253,8 +253,8 @@ def main() -> int:
     palme_map = build_palme_key_map(text_dir)
     print(f"  {len(palme_map)} ID-nycklar i {text_dir.name}/")
 
-    wpu_pdfs = sorted(files_wpu.glob("*.pdf"))
-    print(f"  {len(wpu_pdfs)} PDF-filer i {files_wpu.name}/")
+    wpu_pdfs = sorted(wpu_dir.glob("*.pdf"))
+    print(f"  {len(wpu_pdfs)} PDF-filer i {wpu_dir.name}/")
     print(f"  parallellt: {args.jobs} processer\n")
 
     counts = {"better": 0, "kept": 0, "lost": 0, "new": 0, "skip": 0}

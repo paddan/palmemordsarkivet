@@ -28,7 +28,7 @@ Default-läge (full pipeline):
   1. ./ocr_tesseract.sh                       # Tesseract på downloaded/files/
   1b./ocr_tesseract.sh --in downloaded/wpu_files # Tesseract på downloaded/wpu_files/ (om finns)
   2. ./merge_wpu.sh                           # jämför wpu vs palme; raderar
-                                              # förloraren (om files_wpu/ finns)
+                                              # förloraren (om downloaded/wpu_files/ finns)
   3. ./detect_redactions.sh                   # infoga [MASKAD] i text
   4. ./normalize.sh                           # regelbaserad textnormalisering
   5. ./quality.sh --per-page                  # quality + quality_pages (db)
@@ -214,7 +214,7 @@ thr, in_dir, out_dir, root, ocr_dir, no_update, txt_dir = sys.argv[1:8]
 thr = float(thr)
 in_dir = Path(in_dir); out_dir = Path(out_dir); root = Path(root)
 txt_dir = Path(txt_dir)
-# wpu-PDF:er ligger i files_wpu/ men text/ kan innehålla deras text (merge_wpu
+# wpu-PDF:er ligger i downloaded/wpu_files/ men text/ kan innehålla deras text (merge_wpu
 # valde wpu-versionen). Vid fallback för --redo måste vi leta där också.
 wpu_dir = root / "downloaded" / "wpu_files"
 

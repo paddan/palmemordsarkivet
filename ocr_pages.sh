@@ -1,11 +1,12 @@
 #!/bin/bash
 # Per-sida OCR (Tesseract/Vision/Surya) — för riktad om-OCR på enstaka
-# dåliga sidor. Skriver page-NNN.txt + page-NNN.json + ihopslagen <stem>.txt.
+# dåliga sidor. Sidtext och metadata lagras i state.db (pdf_pages); merge_pages
+# bygger ihop generated/text/<stem>.txt efteråt.
 #
 # Användning:
-#   ./ocr_pages.sh --in files/foo.pdf --out-dir text_pages
-#   ./ocr_pages.sh --in files/foo.pdf --out-dir text_pages --engine surya
-#   ./ocr_pages.sh --in files/foo.pdf --out-dir text_pages --pages 3,7,12
+#   ./ocr_pages.sh --in downloaded/files/foo.pdf --out-dir generated/text_pages
+#   ./ocr_pages.sh --in downloaded/files/foo.pdf --out-dir generated/text_pages --engine surya
+#   ./ocr_pages.sh --in downloaded/files/foo.pdf --out-dir generated/text_pages --pages 3,7,12
 #   ./ocr_pages.sh -- --help                  # full src/ocr_pages.py-hjälp
 
 set -eu

@@ -45,10 +45,10 @@ def db_env(tmp_path, monkeypatch):
 def _setup(tmp_path: Path) -> tuple[Path, Path, Path]:
     text = tmp_path / "text"
     ocr = tmp_path / "ocr"
-    files_wpu = tmp_path / "files_wpu"
-    for d in (text, ocr, files_wpu):
+    wpu_dir = tmp_path / "wpu_files"
+    for d in (text, ocr, wpu_dir):
         d.mkdir()
-    return text, ocr, files_wpu
+    return text, ocr, wpu_dir
 
 
 def _fake_score(text: str, use_hunspell: bool = False) -> dict:
@@ -60,8 +60,8 @@ def test_skips_when_wpu_text_missing(tmp_path: Path, db_env: Path) -> None:
     """När wpu-text saknas (OCR inte klar) ska filen hoppa över utan att
     markeras decided — annars hindras nästa körning från att försöka igen
     när OCR producerat texten."""
-    text, ocr, files_wpu = _setup(tmp_path)
-    pdf = files_wpu / "DA14259-00.pdf"
+    text, ocr, wpu_dir = _setup(tmp_path)
+    pdf = wpu_dir / "DA14259-00.pdf"
     pdf.write_bytes(b"x")
     merge_wpu._PALME_MAP = {}
     merge_wpu._USE_HUNSPELL = False
@@ -78,8 +78,8 @@ def test_skips_when_wpu_text_missing(tmp_path: Path, db_env: Path) -> None:
 def test_retries_after_text_appears(tmp_path: Path, db_env: Path) -> None:
     """Första körningen saknar text → skip utan markör. Andra körningen,
     efter att OCR producerat texten, ska göra ett riktigt beslut."""
-    text, ocr, files_wpu = _setup(tmp_path)
-    pdf = files_wpu / "DA14259-00.pdf"
+    text, ocr, wpu_dir = _setup(tmp_path)
+    pdf = wpu_dir / "DA14259-00.pdf"
     pdf.write_bytes(b"x")
     merge_wpu._PALME_MAP = {}
     merge_wpu._USE_HUNSPELL = False
@@ -100,8 +100,8 @@ def test_retries_after_text_appears(tmp_path: Path, db_env: Path) -> None:
 
 
 def test_unmatched_wpu_kept_as_new(tmp_path: Path, db_env: Path) -> None:
-    text, ocr, files_wpu = _setup(tmp_path)
-    pdf = files_wpu / "DA14259-00.pdf"
+    text, ocr, wpu_dir = _setup(tmp_path)
+    pdf = wpu_dir / "DA14259-00.pdf"
     pdf.write_bytes(b"x")
     wpu_txt = text / "DA14259-00.txt"
     wpu_txt.write_text("70\nhej", encoding="utf-8")
@@ -119,8 +119,8 @@ def test_unmatched_wpu_kept_as_new(tmp_path: Path, db_env: Path) -> None:
 
 
 def test_wpu_wins_deletes_palme(tmp_path: Path, db_env: Path) -> None:
-    text, ocr, files_wpu = _setup(tmp_path)
-    pdf = files_wpu / "DA14259-00.pdf"
+    text, ocr, wpu_dir = _setup(tmp_path)
+    pdf = wpu_dir / "DA14259-00.pdf"
     pdf.write_bytes(b"x")
     wpu_txt = text / "DA14259-00.txt"
     wpu_txt.write_text("80\nbra wpu-text", encoding="utf-8")
@@ -142,8 +142,8 @@ def test_wpu_wins_deletes_palme(tmp_path: Path, db_env: Path) -> None:
 
 
 def test_palme_wins_deletes_wpu(tmp_path: Path, db_env: Path) -> None:
-    text, ocr, files_wpu = _setup(tmp_path)
-    pdf = files_wpu / "DA14259-00.pdf"
+    text, ocr, wpu_dir = _setup(tmp_path)
+    pdf = wpu_dir / "DA14259-00.pdf"
     pdf.write_bytes(b"x")
     wpu_txt = text / "DA14259-00.txt"
     wpu_txt.write_text("50\nwpu", encoding="utf-8")
@@ -165,8 +165,8 @@ def test_palme_wins_deletes_wpu(tmp_path: Path, db_env: Path) -> None:
 
 
 def test_tie_keeps_both(tmp_path: Path, db_env: Path) -> None:
-    text, ocr, files_wpu = _setup(tmp_path)
-    pdf = files_wpu / "DA14259-00.pdf"
+    text, ocr, wpu_dir = _setup(tmp_path)
+    pdf = wpu_dir / "DA14259-00.pdf"
     pdf.write_bytes(b"x")
     wpu_txt = text / "DA14259-00.txt"
     wpu_txt.write_text("70\nwpu", encoding="utf-8")
@@ -225,8 +225,8 @@ def test_cleanup_keeps_decision_for_intentionally_deleted_wpu_loser(
 
 
 def test_dry_run_does_not_delete(tmp_path: Path, db_env: Path) -> None:
-    text, ocr, files_wpu = _setup(tmp_path)
-    pdf = files_wpu / "DA14259-00.pdf"
+    text, ocr, wpu_dir = _setup(tmp_path)
+    pdf = wpu_dir / "DA14259-00.pdf"
     pdf.write_bytes(b"x")
     wpu_txt = text / "DA14259-00.txt"
     wpu_txt.write_text("80\nbra wpu", encoding="utf-8")

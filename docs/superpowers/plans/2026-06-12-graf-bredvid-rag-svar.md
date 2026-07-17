@@ -4,7 +4,7 @@
 
 **Goal:** Visa ett ego-nätverk ur kunskapsgrafen i en egen kolumn bredvid varje svar i webui:t (RAG-läget och utredningsläget), centrerat kring de entiteter svaret handlar om.
 
-**Architecture:** Färdigt svar → Haiku listar nyckelentiteter (ny modul `graph/answer_entities.py`) → namnen slås upp i Neo4j (`viz.lookup_centers`) → befintliga `fetch_ego`/`assemble_graph`/`build_pyvis_html` ritar grafen i en högerkolumn i `webui.py`. Allt degraderar tyst om Neo4j/LLM saknas.
+**Architecture:** Färdigt svar → Haiku listar nyckelentiteter (ny modul `graph/answer_entities.py`) → namnen slås upp i Neo4j (`viz.lookup_centers`) → befintliga `fetch_ego`/`assemble_graph`/`build_pyvis_html` ritar grafen i en högerkolumn i `Utredning.py`. Allt degraderar tyst om Neo4j/LLM saknas.
 
 **Tech Stack:** Python, Streamlit, Neo4j (driver), pyvis, claude-agent-sdk, openai, pytest.
 
@@ -375,13 +375,13 @@ Förväntat: alla PASS (befintliga + 3 nya)
 ### Task 4: webui — hjälpfunktioner, toggle och RAG-läget
 
 **Files:**
-- Modify: `src/webui.py`
+- Modify: `src/Utredning.py`
 
 Ingen pytest-täckning för Streamlit-skriptet (följer befintligt mönster — webui testas inte i sviten). Verifiering: import-röktest + manuell körning i Task 7.
 
 - [ ] **Step 1: Importer**
 
-I importblocket i `src/webui.py`, efter `import config as _llm_config` (rad ~22), lägg till:
+I importblocket i `src/Utredning.py`, efter `import config as _llm_config` (rad ~22), lägg till:
 
 ```python
 from errors_log import log_error  # noqa: E402
@@ -537,7 +537,7 @@ Obs: ingen ny LLM-extraktion vid rerun — `ss.answer_centers` är cachen.
 
 - [ ] **Step 7: Import-röktest**
 
-Kör: `.venv/bin/python -c "import ast, pathlib; ast.parse(pathlib.Path('src/webui.py').read_text())" && echo OK`
+Kör: `.venv/bin/python -c "import ast, pathlib; ast.parse(pathlib.Path('src/Utredning.py').read_text())" && echo OK`
 Förväntat: `OK` (syntaxkontroll; webui kan inte importeras utanför Streamlit utan sidoeffekter)
 
 Kör: `.venv/bin/pytest tests/ -q`
@@ -548,7 +548,7 @@ Förväntat: alla PASS
 ### Task 5: webui — chatthistorik-refaktor + graf i utredningsläget
 
 **Files:**
-- Modify: `src/webui.py`
+- Modify: `src/Utredning.py`
 
 Historikrenderingen är i dag duplicerad ordagrant i Claude- och OpenAI-grenen (rad ~748–774 resp. ~795–821) — den faktoreras till en hjälpare som samtidigt får grafkolumnen.
 
@@ -678,7 +678,7 @@ Motsvarande i OpenAI-grenen — ersätt blocket från `with st.chat_message("ass
 
 - [ ] **Step 6: Syntax + testsvit**
 
-Kör: `.venv/bin/python -c "import ast, pathlib; ast.parse(pathlib.Path('src/webui.py').read_text())" && echo OK`
+Kör: `.venv/bin/python -c "import ast, pathlib; ast.parse(pathlib.Path('src/Utredning.py').read_text())" && echo OK`
 Förväntat: `OK`
 
 Kör: `.venv/bin/pytest tests/ -q`
