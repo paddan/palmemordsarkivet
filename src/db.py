@@ -11,9 +11,10 @@ from __future__ import annotations
 
 import json
 import os
-import sqlite3
 import re
-from datetime import datetime, timezone
+import sqlite3
+from contextlib import suppress
+from datetime import UTC, datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -55,7 +56,8 @@ CREATE TABLE IF NOT EXISTS pdf_files (
     text_mtime                REAL,
     tesseract_done_at         TEXT,
     tesseract_failed          INTEGER DEFAULT 0,
-    tesseract_blacklisted_at  TEXT
+    tesseract_blacklisted_at  TEXT,
+    surya_failed_at           TEXT
 );
 
 CREATE TABLE IF NOT EXISTS pdf_pages (
@@ -255,7 +257,7 @@ CREATE INDEX IF NOT EXISTS idx_map_observation_extractions_extracted
 
 def now() -> str:
     """Returnera ISO-timestamp i UTC med sekundprecision."""
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    return datetime.now(UTC).replace(microsecond=0).isoformat()
 
 
 def connect(path: Path | None = None) -> sqlite3.Connection:
@@ -292,11 +294,10 @@ def init_schema(conn: sqlite3.Connection) -> None:
         ("tesseract_done_at", "TEXT"),
         ("tesseract_failed", "INTEGER DEFAULT 0"),
         ("tesseract_blacklisted_at", "TEXT"),
+        ("surya_failed_at", "TEXT"),
     ]:
-        try:
+        with suppress(sqlite3.OperationalError):
             conn.execute(f"ALTER TABLE pdf_files ADD COLUMN {col} {typedef}")
-        except sqlite3.OperationalError:
-            pass  # kolumnen finns redan
     conn.commit()
 
 
@@ -455,7 +456,9 @@ def mark_tesseract_done(
         VALUES (?, ?, ?, ?, 0)
         ON CONFLICT(pdf_stem) DO UPDATE SET
             tesseract_done_at = excluded.tesseract_done_at,
-            tesseract_failed  = 0
+            tesseract_failed  = 0,
+            tesseract_blacklisted_at = NULL,
+            surya_failed_at   = NULL
         """,
         (pdf_stem, source, pdf_path, now()),
     )
@@ -489,8 +492,12 @@ def clear_tesseract_failed(conn: sqlite3.Connection) -> int:
 
 
 def mark_tesseract_blacklisted(conn: sqlite3.Connection, pdf_stem: str) -> None:
-    """Permanent uteslut Tesseract-OCR för pdf_stem. Skippas även av --retry-failed —
-    bara --retry-blacklist tar in dem igen. Kräver att pdf_files-raden redan finns."""
+    """Uteslut fler Tesseract-försök för pdf_stem.
+
+    Surya-fallback får fortfarande försöka om ``surya_failed_at`` är tomt.
+    ``--retry-blacklist`` tar in filen i Tesseract-flödet igen.
+    Kräver att pdf_files-raden redan finns.
+    """
     cur = conn.execute(
         "UPDATE pdf_files SET tesseract_blacklisted_at=? WHERE pdf_stem=?",
         (now(), pdf_stem),
@@ -503,7 +510,7 @@ def mark_tesseract_blacklisted(conn: sqlite3.Connection, pdf_stem: str) -> None:
 def clear_tesseract_blacklisted(conn: sqlite3.Connection) -> int:
     """Nollställ tesseract_blacklisted_at för alla filer. Returnerar antal påverkade rader."""
     cur = conn.execute(
-        "UPDATE pdf_files SET tesseract_blacklisted_at=NULL "
+        "UPDATE pdf_files SET tesseract_blacklisted_at=NULL, surya_failed_at=NULL "
         "WHERE tesseract_blacklisted_at IS NOT NULL"
     )
     conn.commit()
@@ -511,10 +518,10 @@ def clear_tesseract_blacklisted(conn: sqlite3.Connection) -> int:
 
 
 def retry_tesseract_blacklisted(conn: sqlite3.Connection) -> int:
-    """Återaktivera blacklistade filer genom att även nollställa failed-status."""
+    """Återaktivera blacklistade filer genom att nollställa OCR-felstatus."""
     cur = conn.execute(
         "UPDATE pdf_files "
-        "SET tesseract_blacklisted_at=NULL, tesseract_failed=0 "
+        "SET tesseract_blacklisted_at=NULL, tesseract_failed=0, surya_failed_at=NULL "
         "WHERE tesseract_blacklisted_at IS NOT NULL"
     )
     conn.commit()
@@ -522,13 +529,50 @@ def retry_tesseract_blacklisted(conn: sqlite3.Connection) -> int:
 
 
 def is_tesseract_blacklisted(conn: sqlite3.Connection, pdf_stem: str) -> bool:
-    """True om pdf_stem är permanent uteslutet."""
+    """True om pdf_stem är uteslutet från fler Tesseract-försök."""
     row = conn.execute(
         "SELECT tesseract_blacklisted_at FROM pdf_files "
         "WHERE pdf_stem=? AND tesseract_blacklisted_at IS NOT NULL",
         (pdf_stem,),
     ).fetchone()
     return row is not None
+
+
+def is_ocr_fully_failed(conn: sqlite3.Connection, pdf_stem: str) -> bool:
+    """True om både Tesseract och Surya-fallback har misslyckats för pdf_stem."""
+    row = conn.execute(
+        "SELECT 1 FROM pdf_files "
+        "WHERE pdf_stem=? "
+        "AND tesseract_blacklisted_at IS NOT NULL "
+        "AND surya_failed_at IS NOT NULL",
+        (pdf_stem,),
+    ).fetchone()
+    return row is not None
+
+
+def mark_surya_failed(conn: sqlite3.Connection, pdf_stem: str) -> None:
+    """Markera att Surya-fallback misslyckades för pdf_stem."""
+    cur = conn.execute(
+        "UPDATE pdf_files SET surya_failed_at=? WHERE pdf_stem=?",
+        (now(), pdf_stem),
+    )
+    if cur.rowcount == 0:
+        raise KeyError(f"okänt pdf_stem: {pdf_stem}")
+    conn.commit()
+
+
+def clear_ocr_failures(conn: sqlite3.Connection, pdf_stem: str) -> bool:
+    """Nollställ OCR-felstatus när en fallbackmotor har producerat text."""
+    cur = conn.execute(
+        """UPDATE pdf_files
+           SET tesseract_failed=0,
+               tesseract_blacklisted_at=NULL,
+               surya_failed_at=NULL
+           WHERE pdf_stem=?""",
+        (pdf_stem,),
+    )
+    conn.commit()
+    return cur.rowcount > 0
 
 
 

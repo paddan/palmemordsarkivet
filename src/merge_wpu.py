@@ -132,6 +132,9 @@ def _process_one(
 
         wpu_txt = text_dir / f"{stem}.txt"
         if not wpu_txt.exists():
+            if state_db.is_ocr_fully_failed(conn, stem):
+                result["category"] = "skip"
+                return result
             # Markera INTE som decided — OCR hann inte bli klar. Nästa körning
             # försöker igen när text/<stem>.txt finns.
             result["lines"].append(

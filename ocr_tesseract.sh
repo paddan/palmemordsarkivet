@@ -37,7 +37,7 @@ motsvarande env-var (versaler, understreck) — flagga vinner över env-var.
   --files-from FILE       lista med filstammar att bearbeta (en per rad, .txt trimmas);
                           om utelämnad bearbetas alla PDF:er i --in
   --retry-failed          nollställ tesseract_failed-flaggor i state.db så att misslyckade filer körs om
-  --retry-blacklist       nollställ tesseract_blacklisted_at-flaggor så att permanent uteslutna filer körs om
+  --retry-blacklist       nollställ Tesseract- och Surya-felstatus för blacklistade filer
   -h, --help              visa denna hjälp och avsluta
 EOF
 }
@@ -258,7 +258,7 @@ process_one() {
     return 0
   fi
 
-  # Hoppa över permanent blacklistade filer — bara --retry-blacklist tar in dem igen.
+  # Hoppa över Tesseract-blacklistade filer — bara --retry-blacklist tar in dem igen.
   if "$PYBIN" "$DB_HELPER" check-blacklisted "$base"; then
     printf 'blacklist-skip' > "$PROGRESS_DIR/${base}.status"
     return 0

@@ -1,37 +1,69 @@
-import sqlite3
 import threading
 import time
-from pathlib import Path
 
 import pytest
 
 from db import (
-    connect, init_schema, SCHEMA_VERSION,
-    record_download, is_downloaded, find_download_by_sha1,
-    upsert_pdf_file, get_pdf_file, mark_redaction_checked,
-    mark_merged, mark_normalized, redaction_checked,
-    record_page, page_exists, get_pages_for_stem,
-    record_quality, record_quality_page, get_bad_pages,
-    record_ingest, get_ingested_mtime,
-    mark_llm_corrected, llm_corrected,
-    mark_wpu_decided, wpu_decided,
-    mark_tesseract_failed, mark_tesseract_blacklisted, retry_tesseract_blacklisted,
-    clear_tesseract_blacklisted,
-    is_tesseract_blacklisted,
-    record_casebook_entry, list_casebook_entries, delete_casebook_entry,
-    record_source_bookmark, list_source_bookmarks, delete_source_bookmark,
-    record_source_annotation, update_source_annotation,
-    list_source_annotations, delete_source_annotation,
-    record_map_place, list_map_places, delete_map_place,
-    record_map_observation, list_map_observations,
-    update_map_observation, delete_map_observation,
-    seed_map_data_if_empty,
-    record_map_observation_candidate,
-    list_map_observation_candidates,
-    update_map_observation_candidate,
-    reject_map_observation_candidate,
+    SCHEMA_VERSION,
     approve_map_observation_candidate,
-    files_needing_normalize, files_needing_quality, files_needing_ingest,
+    clear_ocr_failures,
+    clear_tesseract_blacklisted,
+    connect,
+    delete_casebook_entry,
+    delete_map_observation,
+    delete_map_place,
+    delete_source_annotation,
+    delete_source_bookmark,
+    files_needing_ingest,
+    files_needing_normalize,
+    files_needing_quality,
+    find_download_by_sha1,
+    get_bad_pages,
+    get_ingested_mtime,
+    get_pages_for_stem,
+    get_pdf_file,
+    init_schema,
+    is_downloaded,
+    is_ocr_fully_failed,
+    is_tesseract_blacklisted,
+    list_casebook_entries,
+    list_map_observation_candidates,
+    list_map_observations,
+    list_map_places,
+    list_source_annotations,
+    list_source_bookmarks,
+    llm_corrected,
+    mark_llm_corrected,
+    mark_merged,
+    mark_normalized,
+    mark_redaction_checked,
+    mark_surya_failed,
+    mark_tesseract_blacklisted,
+    mark_tesseract_done,
+    mark_tesseract_failed,
+    mark_wpu_decided,
+    page_exists,
+    record_casebook_entry,
+    record_download,
+    record_ingest,
+    record_map_observation,
+    record_map_observation_candidate,
+    record_map_place,
+    record_page,
+    record_quality,
+    record_quality_page,
+    record_source_annotation,
+    record_source_bookmark,
+    redaction_checked,
+    reject_map_observation_candidate,
+    retry_tesseract_blacklisted,
+    seed_map_data_if_empty,
+    touch_text_mtime,
+    update_map_observation,
+    update_map_observation_candidate,
+    update_source_annotation,
+    upsert_pdf_file,
+    wpu_decided,
 )
 
 
@@ -389,13 +421,18 @@ def test_tesseract_blacklist(tmp_path):
     mark_tesseract_blacklisted(conn, "bad-pdf")
     assert is_tesseract_blacklisted(conn, "bad-pdf")
     assert not is_tesseract_blacklisted(conn, "ok-pdf")
+    assert not is_ocr_fully_failed(conn, "bad-pdf")
 
     # Idempotent — andra anropet stämplar bara om timestampen.
     mark_tesseract_blacklisted(conn, "bad-pdf")
 
-    # clear-funktionen återställer endast blacklisten.
+    # clear-funktionen återställer blacklist och Surya-spärr.
+    mark_surya_failed(conn, "bad-pdf")
+    assert is_ocr_fully_failed(conn, "bad-pdf")
     assert clear_tesseract_blacklisted(conn) == 1
-    assert not is_tesseract_blacklisted(conn, "bad-pdf")
+    row = get_pdf_file(conn, "bad-pdf")
+    assert row["tesseract_blacklisted_at"] is None
+    assert row["surya_failed_at"] is None
     assert clear_tesseract_blacklisted(conn) == 0  # idempotent
 
 
@@ -411,11 +448,49 @@ def test_retry_tesseract_blacklisted_clears_blacklist_and_failed(tmp_path):
         conn, "bad-pdf", pdf_path="downloaded/files/bad-pdf.pdf", source="files"
     )
     mark_tesseract_blacklisted(conn, "bad-pdf")
+    mark_surya_failed(conn, "bad-pdf")
 
     assert retry_tesseract_blacklisted(conn) == 1
     row = get_pdf_file(conn, "bad-pdf")
     assert row["tesseract_blacklisted_at"] is None
     assert row["tesseract_failed"] == 0
+    assert row["surya_failed_at"] is None
+
+
+def test_surya_failure_and_clear_ocr_failures(tmp_path):
+    conn = _fresh(tmp_path)
+    mark_tesseract_failed(
+        conn, "bad-pdf", pdf_path="downloaded/files/bad-pdf.pdf", source="files"
+    )
+    mark_tesseract_blacklisted(conn, "bad-pdf")
+
+    mark_surya_failed(conn, "bad-pdf")
+    row = get_pdf_file(conn, "bad-pdf")
+    assert row["surya_failed_at"] is not None
+
+    assert clear_ocr_failures(conn, "bad-pdf") is True
+    row = get_pdf_file(conn, "bad-pdf")
+    assert row["tesseract_failed"] == 0
+    assert row["tesseract_blacklisted_at"] is None
+    assert row["surya_failed_at"] is None
+
+
+def test_tesseract_done_clears_previous_ocr_failure_status(tmp_path):
+    conn = _fresh(tmp_path)
+    mark_tesseract_failed(
+        conn, "bad-pdf", pdf_path="downloaded/files/bad-pdf.pdf", source="files"
+    )
+    mark_tesseract_blacklisted(conn, "bad-pdf")
+    mark_surya_failed(conn, "bad-pdf")
+
+    mark_tesseract_done(
+        conn, "bad-pdf", pdf_path="downloaded/files/bad-pdf.pdf", source="files"
+    )
+
+    row = get_pdf_file(conn, "bad-pdf")
+    assert row["tesseract_failed"] == 0
+    assert row["tesseract_blacklisted_at"] is None
+    assert row["surya_failed_at"] is None
 
 
 def test_parallel_page_writes(tmp_path):
@@ -440,8 +515,10 @@ def test_parallel_page_writes(tmp_path):
 
     threads = [threading.Thread(target=worker, args=(range(i*25+1, i*25+26),))
                for i in range(4)]
-    for t in threads: t.start()
-    for t in threads: t.join()
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
 
     assert not errors
     c = connect(db_path)
@@ -476,7 +553,6 @@ def test_source_for_path(tmp_path):
 
 
 def test_touch_text_mtime_updates_only_mtime(tmp_path):
-    from db import mark_tesseract_done, touch_text_mtime
     conn = _fresh(tmp_path)
     mark_tesseract_done(conn, "doc", pdf_path="downloaded/files/doc.pdf",
                         source="files")
@@ -498,7 +574,7 @@ def test_touch_text_mtime_unknown_stem_raises(tmp_path):
 
 
 def test_doc_entities_roundtrip(tmp_path):
-    from db import record_doc_entities, doc_entities_extracted, iter_doc_entities
+    from db import doc_entities_extracted, iter_doc_entities, record_doc_entities
     conn = _fresh(tmp_path)
     payload = {"entiteter": [{"typ": "person", "namn": "Stig Engström"}],
                "relationer": []}
@@ -966,7 +1042,7 @@ def test_approve_candidate_requires_time_source_and_coordinates(tmp_path):
 
 
 def test_record_doc_entities_is_upsert(tmp_path):
-    from db import record_doc_entities, iter_doc_entities
+    from db import iter_doc_entities, record_doc_entities
     conn = _fresh(tmp_path)
     record_doc_entities(conn, pdf_stem="doc", page_num=1,
                         payload={"entiteter": [], "relationer": []}, model="a")

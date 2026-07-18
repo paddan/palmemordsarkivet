@@ -57,6 +57,22 @@ def merge_text(original: str, page_updates: dict[int, str]) -> str:
     return "\f".join(pages)
 
 
+def text_from_pages(page_updates: dict[int, str]) -> str:
+    """Bygg en helt ny textfil från per-sida-rader i ``pdf_pages``.
+
+    Används när Tesseract inte lyckades skapa någon originaltext men Surya
+    fallback har producerat sidtext. Sidnummer styr placeringen; saknade sidor
+    blir tomma fält mellan form-feed-tecken.
+    """
+    valid_updates = {n: t for n, t in page_updates.items() if n >= 1}
+    if not valid_updates:
+        return ""
+    pages = [""] * max(valid_updates)
+    for page_num, text in valid_updates.items():
+        pages[page_num - 1] = text
+    return "\f".join(pages)
+
+
 def find_updates(conn: sqlite3.Connection, pdf_stem: str) -> dict[int, str]:
     """Hämta alla OCR-sidor för stem från pdf_pages-tabellen som dict {sidnr: text}."""
     out: dict[int, str] = {}
@@ -69,22 +85,25 @@ def find_updates(conn: sqlite3.Connection, pdf_stem: str) -> dict[int, str]:
     return out
 
 
-def merge_one(stem: str, txt_dir: Path, conn: sqlite3.Connection | None = None) -> bool:
+def merge_one(
+    stem: str,
+    txt_dir: Path,
+    conn: sqlite3.Connection | None = None,
+    *,
+    create_missing: bool = False,
+) -> bool:
     """Slå ihop pdf_pages-sidor för ``stem`` in i ``text/<stem>.txt``.
 
     Returnerar True om filen uppdaterades på disk. Stämplar
     ``pdf_files.merged_at`` + ``text_mtime`` via ``db.mark_merged`` när
-    texten faktiskt skrivs om.
+    texten faktiskt skrivs om. Med ``create_missing=True`` skapas en saknad
+    textfil från per-sida-raderna, vilket används av Surya fallback när
+    Tesseract inte producerade någon originaltext.
 
     Om ``conn`` anges återanvänds den; annars öppnas en egen connection
     som stängs när funktionen returnerar (undviker fd-läck i stora loopar).
     """
     txt_path = txt_dir / f"{stem}.txt"
-
-    if not txt_path.exists():
-        print(f"[merge_pages] {stem}: saknar {txt_path}, hoppar över",
-              file=sys.stderr)
-        return False
 
     own_conn = conn is None
     if own_conn:
@@ -96,16 +115,27 @@ def merge_one(stem: str, txt_dir: Path, conn: sqlite3.Connection | None = None) 
         if not updates:
             return False
 
-        original = txt_path.read_text(encoding="utf-8", errors="replace")
-        merged = merge_text(original, updates)
+        if txt_path.exists():
+            original = txt_path.read_text(encoding="utf-8", errors="replace")
+            merged = merge_text(original, updates)
+        elif create_missing:
+            original = ""
+            merged = text_from_pages(updates)
+            if not merged:
+                return False
+        else:
+            print(f"[merge_pages] {stem}: saknar {txt_path}, hoppar över",
+                  file=sys.stderr)
+            return False
 
         orig_n_pages = original.count("\f") + 1 if original else 0
         invalid = sorted(n for n in updates if n < 1)
         merged_pages = sorted(n for n in updates if n >= 1)
         n_pages = max(orig_n_pages, max(merged_pages) if merged_pages else 0)
 
-        text_changed = merged != original
+        text_changed = merged != original or not txt_path.exists()
         if text_changed:
+            txt_path.parent.mkdir(parents=True, exist_ok=True)
             txt_path.write_text(merged, encoding="utf-8")
             try:
                 state_db.mark_merged(conn, stem, text_mtime=txt_path.stat().st_mtime)

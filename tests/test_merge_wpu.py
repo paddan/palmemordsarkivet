@@ -75,6 +75,57 @@ def test_skips_when_wpu_text_missing(tmp_path: Path, db_env: Path) -> None:
     conn.close()
 
 
+def test_warns_when_tesseract_blacklisted_but_surya_not_tried(
+    tmp_path: Path, db_env: Path
+) -> None:
+    text, ocr, wpu_dir = _setup(tmp_path)
+    pdf = wpu_dir / "DA14259-00.pdf"
+    pdf.write_bytes(b"x")
+    merge_wpu._PALME_MAP = {}
+    merge_wpu._USE_HUNSPELL = False
+
+    conn = state_db.connect(db_env)
+    state_db.mark_tesseract_failed(
+        conn, "DA14259-00", pdf_path=str(pdf), source="wpu"
+    )
+    state_db.mark_tesseract_blacklisted(conn, "DA14259-00")
+    conn.close()
+
+    res = _process_one(str(pdf), str(text), str(ocr), False, False, 5)
+
+    assert res["category"] == "skip"
+    assert "saknar text" in res["lines"][0]
+    conn = state_db.connect(db_env)
+    assert not state_db.wpu_decided(conn, "DA14259-00")
+    conn.close()
+
+
+def test_skips_fully_failed_wpu_without_missing_text_warning(
+    tmp_path: Path, db_env: Path
+) -> None:
+    text, ocr, wpu_dir = _setup(tmp_path)
+    pdf = wpu_dir / "DA14259-00.pdf"
+    pdf.write_bytes(b"x")
+    merge_wpu._PALME_MAP = {}
+    merge_wpu._USE_HUNSPELL = False
+
+    conn = state_db.connect(db_env)
+    state_db.mark_tesseract_failed(
+        conn, "DA14259-00", pdf_path=str(pdf), source="wpu"
+    )
+    state_db.mark_tesseract_blacklisted(conn, "DA14259-00")
+    state_db.mark_surya_failed(conn, "DA14259-00")
+    conn.close()
+
+    res = _process_one(str(pdf), str(text), str(ocr), False, False, 5)
+
+    assert res["category"] == "skip"
+    assert res["lines"] == []
+    conn = state_db.connect(db_env)
+    assert not state_db.wpu_decided(conn, "DA14259-00")
+    conn.close()
+
+
 def test_retries_after_text_appears(tmp_path: Path, db_env: Path) -> None:
     """Första körningen saknar text → skip utan markör. Andra körningen,
     efter att OCR producerat texten, ska göra ett riktigt beslut."""

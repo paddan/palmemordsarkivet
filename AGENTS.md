@@ -100,8 +100,10 @@ Repo-data:
 ./run_pipeline.sh                    # Hela pipelinen i ett: download → OCR → ingest
 ./run_pipeline.sh --test 5           # Testläge: bara 5 filer från palme + 5 från wpu
 ./download.sh                        # Hämta PDF:er från Google Sheet
-./ocr.sh                             # Tesseract → normalize → quality → Surya på dåliga sidor
-./ocr.sh --skip-redo                 # Bara Tesseract + normalize + quality
+./ocr.sh                             # Tesseract → Surya-fallback → normalize → quality → Surya på dåliga sidor
+./ocr.sh --skip-redo                 # Bara Tesseract + normalize + quality (ingen Surya)
+./ocr.sh --fallback-failed           # Surya-fallback i defaultkatalogen
+./ocr.sh --fallback-failed --in downloaded/wpu_files # WPU-fallback separat
 ./ocr.sh --redo --mode pages         # Surya på specifika sidor (threshold 50)
 ./ocr_tesseract.sh                   # Bara Tesseract-steget
 ./detect_redactions.sh               # Redaktionsdetektering på befintliga text/OCR-par
@@ -141,7 +143,12 @@ granskningskö använder `map_observation_candidates` och
 `map_observation_extractions` (per-sida-markör även när inga kandidater hittas).
 Inkrementell logik
 bygger på att jämföra `pdf_files.text_mtime` mot `normalized_at`/`scored_at`/etc.
-`--rebuild` tvingar omkörning. Modulen `src/db.py` exponerar alla CRUD- och delta-queries; konsumenter skriver aldrig egen SQL.
+`--rebuild` tvingar omkörning. `tesseract_blacklisted_at` är bara en spärr för
+fler Tesseract-försök; `ocr.sh` försöker Surya-fallback innan en fil betraktas
+som slutligt OCR-misslyckad. `surya_failed_at` markerar att även Surya inte fick
+fram text, och då hoppar `merge_wpu` sådana textlösa wpu-filer tyst. Modulen
+`src/db.py` exponerar alla CRUD- och delta-queries; konsumenter skriver aldrig
+egen SQL.
 
 **Utredningspärm → Graf**: sparade svar i Utredningspärmen visas kollapsade.
 När en post öppnas renderas källor som källkort med PDF/text-knappar och
@@ -169,7 +176,7 @@ LLM:en returnerar noll kandidater, så omkörningar inte debiterar tomma sidor i
 
 **Redaktionsdetektering (ocr_pages.py)**: Hittar svarta maskeringsblock i bilder och infogar `[MASKAD]` i texten. På som standard; `--no-detect-redactions` stänger av. Idempotens spåras via `pdf_files.redaction_checked_at` i state.db — `.redact`-markörfilerna är borttagna. `detect_redactions.sh` förfiltrerar listan baserat på databasen så filer som redan kollats spawnar inga subprocesser alls.
 
-**Per-dokument-cleanup (ocr.sh + Surya)**: Efter att `ocr_pages.py` är klar kör `ocr.sh` automatiskt `merge_pages.merge_one` + `normalize_text.process_file`. Idempotens och per-sida-text spåras i `pdf_pages`-tabellen i state.db — `page-NNN.txt`/`.json`-markörerna existerar inte längre.
+**Per-dokument-cleanup (ocr.sh + Surya)**: Efter att `ocr_pages.py` är klar kör `ocr.sh` automatiskt `merge_pages.merge_one` + `normalize_text.process_file`. Idempotens och per-sida-text spåras i `pdf_pages`-tabellen i state.db — `page-NNN.txt`/`.json`-markörerna existerar inte längre. Surya-redo betraktar alla befintliga `pdf_pages`-rader som redan försökt per sida (även `engine='llm'`), annars kan `run_pipeline.sh` starta Surya-processer som direkt hoppar alla sidor.
 
 **Pipeline-resume (`run_pipeline.sh`)**: OCR- och ingest-stegen körs alltid, även när download inte hittade nya PDF:er. Stegen är idempotenta och detta gör att en tidigare avbruten körning kan slutföras.
 

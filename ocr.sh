@@ -1,9 +1,10 @@
 #!/bin/bash
 # Full OCR-pipeline för palmemordsarkivet.
 #
-# Default-läge (utan flaggor): Tesseract → kvalitetsbedömning → Surya på dåliga
-# sidor → ny kvalitetsbedömning. Anropar ocr_tesseract.sh och quality.sh och
-# rekursivt sig själv (./ocr.sh --redo --mode pages).
+# Default-läge (utan flaggor): Tesseract → Surya-fallback för Tesseract-fel →
+# kvalitetsbedömning → Surya på dåliga sidor → ny kvalitetsbedömning.
+# Anropar ocr_tesseract.sh och quality.sh och rekursivt sig själv
+# (./ocr.sh --redo --mode pages).
 #
 # --redo-läge: kör om OCR på filer/sidor som ligger under en kvalitetströskel.
 #   --mode files  — ocrmypdf --redo-ocr på hela filer från quality-tabellen
@@ -12,6 +13,7 @@
 # Användning:
 #   ./ocr.sh                                # full pipeline (default)
 #   ./ocr.sh --skip-redo                    # bara Tesseract + bedömning
+#   ./ocr.sh --fallback-failed [--in DIR]   # bara Surya-fallback för Tesseract-fel
 #   ./ocr.sh --redo                         # bara redo-steget (default mode pages)
 #   ./ocr.sh --redo --mode files            # om-OCR av hela filer
 #   ./ocr.sh --help                         # alla flaggor
@@ -27,6 +29,7 @@ Användning: $(basename "$0") [flaggor]
 Default-läge (full pipeline):
   1. ./ocr_tesseract.sh                       # Tesseract på downloaded/files/
   1b./ocr_tesseract.sh --in downloaded/wpu_files # Tesseract på downloaded/wpu_files/ (om finns)
+  1c.Surya-fallback för filer där Tesseract inte fick fram text
   2. ./merge_wpu.sh                           # jämför wpu vs palme; raderar
                                               # förloraren (om downloaded/wpu_files/ finns)
   3. ./detect_redactions.sh                   # infoga [MASKAD] i text
@@ -36,12 +39,15 @@ Default-läge (full pipeline):
                                               # (palme + kvarvarande wpu)
   7. ./quality.sh --per-page                  # uppdaterad quality + quality_pages
 
-Steg 6 hoppas över om --skip-redo eller om Surya inte är installerat.
+Steg 1c och 6 hoppas över om --skip-redo eller om Surya inte är installerat.
 
 Flaggor (default visas inom parentes):
 
   --root DIR              projektrot (\$PWD om ej satt via ROOT)
   --skip-redo             hoppa Surya-steget i full pipeline
+  --fallback-failed       kör bara Surya-fallback för filer där Tesseract
+                          misslyckats/blacklistat och textfil saknas i --in
+                          (t.ex. --in downloaded/wpu_files)
   --redo                  hoppa direkt till redo-logiken (steg 3 ovan)
   --mode files|pages      bara med --redo (pages)
                             files = ocrmypdf --redo-ocr på hela filer från
@@ -71,6 +77,7 @@ EOF
 ROOT=${ROOT:-$(cd "$(dirname "$0")" && pwd)}
 THRESHOLD=${THRESHOLD:-50}
 SKIP_REDO=0
+FALLBACK_ONLY=0
 REDO_ONLY=0
 NO_UPDATE_PDF=0
 MODE=${MODE:-pages}
@@ -89,6 +96,7 @@ while [ $# -gt 0 ]; do
     --root)            ROOT="$2"; shift 2 ;;
     --threshold)       THRESHOLD="$2"; shift 2 ;;
     --skip-redo)       SKIP_REDO=1; shift ;;
+    --fallback-failed) FALLBACK_ONLY=1; shift ;;
     --redo)            REDO_ONLY=1; shift ;;
     --no-update-pdf)   NO_UPDATE_PDF=1; shift ;;
     --mode)            MODE="$2"; shift 2 ;;
@@ -123,9 +131,143 @@ step() {
   echo "===== $1 ====="
 }
 
+surya_available() {
+  local pybin="$ROOT/.venv/bin/python"
+  [ -x "$pybin" ] || pybin="python3"
+  "$pybin" -c "import surya" 2>/dev/null
+}
+
+run_surya_fallback() {
+  local label="$1"
+  local pdf_dir="$2"
+
+  [ -d "$pdf_dir" ] || return 0
+
+  PYBIN="$ROOT/.venv/bin/python"
+  [ -x "$PYBIN" ] || PYBIN="python3"
+
+  "$PYBIN" - "$label" "$pdf_dir" "$TXT" "$PAGES_OUT" "$ROOT" "$OCR" "$NO_UPDATE_PDF" <<'PYEOF'
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+label, pdf_dir, txt_dir, out_dir, root, ocr_dir, no_update = sys.argv[1:8]
+pdf_dir = Path(pdf_dir)
+txt_dir = Path(txt_dir)
+out_dir = Path(out_dir)
+root = Path(root)
+ocr_dir = Path(ocr_dir)
+
+sys.path.insert(0, str(root / "src"))
+import db as state_db  # noqa: E402
+from merge_pages import merge_one  # noqa: E402
+from normalize_text import process_file as normalize_file  # noqa: E402
+
+
+def has_text(txt_path: Path) -> bool:
+    if not txt_path.is_file() or txt_path.stat().st_size == 0:
+        return False
+    return bool(txt_path.read_text(encoding="utf-8", errors="replace").strip())
+
+
+def fmt_eta(seconds: float) -> str:
+    s = int(seconds)
+    if s >= 3600:
+        return f"{s // 3600}h{s % 3600 // 60:02d}m"
+    return f"{s // 60}m{s % 60:02d}s"
+
+
+conn = state_db.connect()
+state_db.init_schema(conn)
+
+candidates: list[tuple[str, Path]] = []
+for row in conn.execute(
+    """SELECT pdf_stem FROM pdf_files
+       WHERE (tesseract_failed=1 OR tesseract_blacklisted_at IS NOT NULL)
+         AND surya_failed_at IS NULL
+       ORDER BY pdf_stem"""
+):
+    stem = row["pdf_stem"]
+    pdf = pdf_dir / f"{stem}.pdf"
+    txt = txt_dir / f"{stem}.txt"
+    if pdf.is_file() and not has_text(txt):
+        candidates.append((stem, pdf))
+
+if not candidates:
+    print(f"Surya-fallback för Tesseract-fel ({label}): inga filer.")
+    conn.close()
+    sys.exit(0)
+
+print(f"Surya-fallback för Tesseract-fel ({label}): {len(candidates)} filer")
+start_ts = time.monotonic()
+for idx, (stem, pdf) in enumerate(candidates, 1):
+    elapsed = time.monotonic() - start_ts
+    eta = fmt_eta(elapsed / (idx - 1) * (len(candidates) - idx + 1)) if idx > 1 else "--"
+    print(f"[surya-fallback {idx}/{len(candidates)} | eta {eta}] {stem}")
+    cmd = [
+        sys.executable, str(root / "src" / "ocr_pages.py"),
+        "--in", str(pdf),
+        "--out-dir", str(out_dir),
+        "--engine", "surya",
+        "--ocr-dir", str(ocr_dir),
+    ]
+    if no_update == "1":
+        cmd.append("--no-update-pdf")
+
+    t0 = time.monotonic()
+    result = subprocess.run(cmd, check=False)
+    took = time.monotonic() - t0
+
+    try:
+        merge_one(stem, txt_dir, conn=conn, create_missing=True)
+    except Exception as exc:  # noqa: BLE001
+        print(f"  [merge_pages] FEL {stem}: {exc}", file=sys.stderr)
+
+    txt_file = txt_dir / f"{stem}.txt"
+    if has_text(txt_file):
+        try:
+            normalize_file(txt_file)
+            state_db.mark_normalized(conn, stem, text_mtime=txt_file.stat().st_mtime)
+        except Exception as exc:  # noqa: BLE001
+            print(f"  [normalize] FEL {stem}: {exc}", file=sys.stderr)
+        state_db.clear_ocr_failures(conn, stem)
+        status = "ok" if result.returncode == 0 else "text skapad trots felkod"
+        print(f"  -> {status} ({took:.0f}s)")
+    else:
+        try:
+            state_db.mark_surya_failed(conn, stem)
+            state_db.mark_tesseract_blacklisted(conn, stem)
+        except KeyError as exc:
+            print(f"  [state] FEL {stem}: {exc}", file=sys.stderr)
+        print(f"  -> FEL, ingen text efter Surya ({took:.0f}s)", file=sys.stderr)
+
+conn.close()
+PYEOF
+}
+
 # --------------------------------------------------------------------
 # Default-läge: full pipeline
 # --------------------------------------------------------------------
+if [ "$FALLBACK_ONLY" = "1" ]; then
+  if ! surya_available; then
+    echo "Surya är inte installerat."
+    echo "Installera med:  .venv/bin/pip install surya-ocr 'transformers<5'"
+    exit 1
+  fi
+
+  fallback_label="$IN"
+  if [ "$IN" = "$ROOT/downloaded/files" ] || [ "$IN" = "downloaded/files" ] || [ "$IN" = "./downloaded/files" ]; then
+    fallback_label="palmemordsarkivet"
+  elif [ "$IN" = "$ROOT/downloaded/wpu_files" ] || [ "$IN" = "downloaded/wpu_files" ] || [ "$IN" = "./downloaded/wpu_files" ]; then
+    fallback_label="wpu.nu"
+  fi
+
+  step "Surya-fallback för Tesseract-fel i $fallback_label"
+  run_surya_fallback "$fallback_label" "$IN"
+  exit 0
+fi
+
 if [ "$REDO_ONLY" = "0" ]; then
   t0=$(date +%s)
 
@@ -135,11 +277,21 @@ if [ "$REDO_ONLY" = "0" ]; then
   step "1/7  Tesseract-OCR (./ocr_tesseract.sh --jobs $JOBS)"
   ./ocr_tesseract.sh --jobs "$JOBS" --per-file-jobs "$PER_FILE_JOBS" ${retry_flag[@]+"${retry_flag[@]}"}
 
+  if [ "$SKIP_REDO" = "0" ] && surya_available; then
+    step "1c/7  Surya-fallback för Tesseract-fel i palme-PDF:er"
+    run_surya_fallback "palmemordsarkivet" "$ROOT/downloaded/files"
+  fi
+
   if [ -d "$ROOT/downloaded/wpu_files" ]; then
     # Wpu-filer får samma behandling som palme-filer: tesseract → generated/text/ + generated/ocr/.
     # Sen jämför merge_wpu och raderar förlorarens text/+ocr/-filer.
     step "1b/7  Tesseract-OCR av wpu-PDF:er"
     ./ocr_tesseract.sh --in "$ROOT/downloaded/wpu_files" --jobs "$JOBS" --per-file-jobs "$PER_FILE_JOBS" ${retry_flag[@]+"${retry_flag[@]}"}
+
+    if [ "$SKIP_REDO" = "0" ] && surya_available; then
+      step "1c/7  Surya-fallback för Tesseract-fel i wpu-PDF:er"
+      run_surya_fallback "wpu.nu" "$ROOT/downloaded/wpu_files"
+    fi
 
     step "2/7  Sammanfoga wpu.nu-text (./merge_wpu.sh)"
     ./merge_wpu.sh
@@ -157,7 +309,7 @@ if [ "$REDO_ONLY" = "0" ]; then
   if [ "$SKIP_REDO" = "1" ]; then
     echo
     echo "===== Hoppar över steg 6 (--skip-redo) ====="
-  elif ! "$ROOT/.venv/bin/python" -c "import surya" 2>/dev/null; then
+  elif ! surya_available; then
     echo
     echo "===== Hoppar över steg 6 (Surya inte installerat) ====="
     echo "Installera med:  .venv/bin/pip install surya-ocr 'transformers<5'"
@@ -236,18 +388,19 @@ for row in conn.execute(
 ):
     raw[row["pdf_stem"] + ".txt"].append(int(row["page_num"]))
 
-# Filtrera bort sidor där Surya redan har försökt (enligt pdf_pages-tabellen).
-# Annars loopar vi över samma sidor varje körning utan att göra något.
+# Filtrera bort sidor där en per-sida-motor redan har försökt (Surya/LLM/etc.).
+# ocr_pages.py använder pdf_pages som idempotensmarkör för alla motorer; om vi
+# bara filtrerar Surya här startar vi processer som sedan hoppar alla sidor.
 bad = defaultdict(list)
 skipped_already = 0
 for txt_name, pages in raw.items():
     stem = txt_name[:-4] if txt_name.endswith(".txt") else txt_name
     for p in pages:
         row = conn.execute(
-            "SELECT engine FROM pdf_pages WHERE pdf_stem=? AND page_num=?",
+            "SELECT 1 FROM pdf_pages WHERE pdf_stem=? AND page_num=?",
             (stem, p),
         ).fetchone()
-        if row and row["engine"] == "surya":
+        if row:
             skipped_already += 1
         else:
             bad[txt_name].append(p)
@@ -363,7 +516,7 @@ db.init_schema(conn)
 conn.execute('DELETE FROM pdf_pages WHERE pdf_stem=?', (sys.argv[1],))
 conn.execute(
     'UPDATE pdf_files SET tesseract_done_at=NULL, tesseract_failed=0, '
-    'tesseract_blacklisted_at=NULL WHERE pdf_stem=?',
+    'tesseract_blacklisted_at=NULL, surya_failed_at=NULL WHERE pdf_stem=?',
     (sys.argv[1],),
 )
 conn.commit()

@@ -11,7 +11,7 @@ Kommandon:
                                          normalize/quality-deltat)
   touch-mtime       <stem> <txt_path>  → uppdatera text_mtime efter om-OCR
   mark-failed       <stem> <pdf_path>  → registrera misslyckad OCR
-  mark-blacklisted  <stem>             → permanent uteslut från OCR
+  mark-blacklisted  <stem>             → spärra fler Tesseract-försök
   clear-failed                         → nollställ alla failed-flaggor, skriv count till stdout
   clear-blacklisted                    → återaktivera blacklistade filer, skriv count till stdout
   list-done                            → skriv en stem per rad (alla tesseract_done_at IS NOT NULL)
@@ -23,8 +23,8 @@ Legacy .ocr-done/.ocr-failed-markörfiler läses inte längre; state.db är käl
 
 from __future__ import annotations
 
-import sys
 import os
+import sys
 from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__)))

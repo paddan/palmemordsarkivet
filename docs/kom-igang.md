@@ -60,7 +60,7 @@ Eller steg för steg:
 ```bash
 ./download.sh          # 1. Ladda ner alla PDF:er (3 762 st, tar några timmar)
 ./download_wpu.sh      # 1b. (valfritt) Ladda ner WPU PDF:er (7 155 st)
-./ocr.sh               # 2. OCR → text (Tesseract + Surya på svåra sidor, tar flera timmar)
+./ocr.sh               # 2. OCR → text (Tesseract + Surya-fallback/svåra sidor, tar flera timmar)
 ./ingest.sh            # 3. Bygg vektorindex i LanceDB (kan ta flera timmar)
 ./web.sh               # 4. Starta webgränssnittet och ställ frågor
 ```

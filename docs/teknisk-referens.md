@@ -11,7 +11,7 @@ Alla pipeline-markörer och status lagras i SQLite (`generated/db/state.db`).
 Inspektera med t.ex. `sqlite3 generated/db/state.db`. Tabellerna:
 
 - `downloads` — palmemordsarkivet- och wpu-nedladdningar (Drive-ID eller URL, sha1 där det finns, filename, bytes)
-- `pdf_files` — per-PDF-status (redaction_checked_at, merged_at, normalized_at, text_mtime, tesseract_done_at, tesseract_failed, tesseract_blacklisted_at)
+- `pdf_files` — per-PDF-status (redaction_checked_at, merged_at, normalized_at, text_mtime, tesseract_done_at, tesseract_failed, tesseract_blacklisted_at, surya_failed_at)
 - `pdf_pages` — per-sida OCR-resultat (text, engine, score)
 - `quality` / `quality_pages` — kvalitetspoäng per fil och sida
 - `ingest` — vad som indexerats i LanceDB och med vilken text_mtime
@@ -85,7 +85,7 @@ nohup ./download.sh > log.txt 2>&1 &
 ./download_wpu.sh --dry-run  # lista utan att ladda ner
 ```
 
-Wpu-PDF:er får exakt samma OCR-behandling som palme-PDF:er: `ocr.sh` kör `ocr_tesseract.sh` på `downloaded/wpu_files/` också så varje wpu-fil får sin egen `generated/text/<stem>.txt` och `generated/ocr/<stem>.pdf`. Sen kör `merge_wpu.sh` som jämför kvalitetspoäng för matchande dokument-ID och **raderar förlorarens** text- och ocr-filer:
+Wpu-PDF:er får exakt samma OCR-behandling som palme-PDF:er: `ocr.sh` kör `ocr_tesseract.sh` på `downloaded/wpu_files/` också så varje wpu-fil får sin egen `generated/text/<stem>.txt` och `generated/ocr/<stem>.pdf`. Om Tesseract inte får fram text försöker `ocr.sh` Surya som helfils-fallback innan wpu-merge. Sen kör `merge_wpu.sh` som jämför kvalitetspoäng för matchande dokument-ID och **raderar förlorarens** text- och ocr-filer:
 
 | Jämförelse (margin 5 p) | Utfall |
 |---|---|
@@ -94,7 +94,12 @@ Wpu-PDF:er får exakt samma OCR-behandling som palme-PDF:er: `ocr.sh` kör `ocr_
 | inom margin (oavgjort) | båda behålls |
 | ingen matchning | wpu står ensam, inget händer |
 
-Surya-steget körs sen mot kvarvarande `generated/text/`-filer och hanterar palme- och wpu-filer identiskt.
+Om en wpu-PDF saknar text efter både Tesseract och Surya (`surya_failed_at` satt)
+hoppar `merge_wpu.sh` över den tyst; vanliga saknade textfiler varnas
+fortfarande som resume-problem.
+
+Surya-steget för låga kvalitetspoäng körs sen mot kvarvarande
+`generated/text/`-filer och hanterar palme- och wpu-filer identiskt.
 
 ```bash
 ./merge_wpu.sh             # kör om manuellt (parallellt, default cpu_count)
@@ -107,17 +112,20 @@ Surya-steget körs sen mot kvarvarande `generated/text/`-filer och hanterar palm
 
 #### Rekommenderad workflow: `ocr.sh`
 
-Kör hela OCR-pipelinen i ett enda kommando — Tesseract på allt, kvalitets-
-bedömning, Surya på sidor som inte når tröskeln, och slutbedömning:
+Kör hela OCR-pipelinen i ett enda kommando — Tesseract på allt, Surya-fallback
+för filer där Tesseract inte fick fram text, kvalitetsbedömning, Surya på sidor
+som inte når tröskeln, och slutbedömning:
 
 ```bash
 ./ocr.sh                         # full pipeline (rekommenderas)
 ./ocr.sh --threshold 60          # mer aggressiv om-OCR
 ./ocr.sh --skip-redo             # bara Tesseract + bedömning, ingen Surya
+./ocr.sh --fallback-failed       # Surya-fallback för Tesseract-fel i defaultkatalogen
+./ocr.sh --fallback-failed --in downloaded/wpu_files
 ./ocr.sh --help
 ```
 
-Surya-steget hoppas automatiskt över om paketet inte är installerat. Skriptet
+Surya-stegen hoppas automatiskt över om paketet inte är installerat. Skriptet
 är idempotent — kan avbrytas och köras om utan dubbelarbete.
 
 #### Manuell kontroll
@@ -135,15 +143,20 @@ du delarna direkt:
 ```bash
 ./ocr_tesseract.sh --jobs 8 --per-file-jobs 2 --psm 4
 ./ocr_tesseract.sh --retry-failed       # försök misslyckade filer igen
-./ocr_tesseract.sh --retry-blacklist    # försök även permanent uteslutna filer
+./ocr_tesseract.sh --retry-blacklist    # försök även Tesseract-blacklistade filer
 ./ocr_tesseract.sh --help
 ```
 
-Filer som upprepat misslyckas (t.ex. korrupt JPEG inuti PDF:en, eller PDF:er
-som ocrmypdf inte kan hantera) kan markeras permanent uteslutna via
-`tesseract_blacklisted_at` i `pdf_files`. De skippas då även av
-`--retry-failed`; `--retry-blacklist` nollställer både blacklist- och
-failed-status så de faktiskt körs igen.
+Filer som upprepat misslyckas i Tesseract (t.ex. korrupt JPEG inuti PDF:en,
+eller PDF:er som ocrmypdf inte kan hantera) markeras med
+`tesseract_blacklisted_at` i `pdf_files`. Det är bara en Tesseract-spärr:
+`ocr.sh` försöker fortfarande Surya-fallback om `surya_failed_at` är tomt.
+Först när även Surya-fallback inte producerar text sätts `surya_failed_at`.
+`--retry-failed` tar inte in Tesseract-blacklistade filer; `--retry-blacklist`
+nollställer Tesseract- och Surya-felstatus så filerna kan försökas separat igen.
+Vill du bara ge befintliga Tesseract-fel en Surya-chans utan hela pipelinen kör
+du `./ocr.sh --fallback-failed`; lägg till `--in downloaded/wpu_files` för en
+separat WPU-körning.
 
 #### Surya för värsta sidorna
 
@@ -153,9 +166,11 @@ markant högre kvalitet — i stickprov på 50 svåra filer: medelpoäng 60 → 
 49 av 50 bättre. Priset är fart (~30–100 s/sida på Apple Silicon MPS, mot
 ~1 s/sida för Tesseract).
 
-Surya körs per sida via `./ocr.sh --redo --mode pages` (default i full pipeline).
-Endast sidor med score < threshold OCR:as om, resultatet mergas tillbaka in i
-`generated/text/<stem>.txt` per dokument. Se `Per-sida OCR` nedan.
+Surya används på två ställen i full pipeline: först som helfils-fallback när
+Tesseract inte producerade någon text alls, och senare per sida via
+`./ocr.sh --redo --mode pages`. I per-sida-läget OCR:as bara sidor med score <
+threshold om, och resultatet mergas tillbaka in i `generated/text/<stem>.txt`
+per dokument. Se `Per-sida OCR` nedan.
 
 #### Per-sida OCR (`ocr_pages.sh`)
 
@@ -227,6 +242,9 @@ per-sida-text till `pdf_pages`-tabellen i state.db. Direkt efter att ett dokumen
 är klart slår `ocr.sh` automatiskt ihop dessa sidor in i
 `generated/text/<stem>.txt` en sida i taget och behåller övriga sidor.
 Idempotens spåras i state.db, och ingest fångar ändringarna via textfilens mtime.
+Surya-redo väljer bara dåliga sidor som saknar rad i `pdf_pages`; rader från
+Surya, LLM-korrektion eller andra per-sida-motorer räknas som redan försökt så
+pipeline-resume inte startar processer som direkt hoppar alla sidor.
 
 För att slå ihop alla väntande per-sida-resultat från state.db:
 
@@ -644,7 +662,7 @@ delas mellan Utredning-fliken och `llm_config.sh` så att valen alltid är ident
 | `download_wpu.sh` → `src/download_wpu.py` | Ladda ner alla PDF:er från wpu.nu → `downloaded/wpu_files/` |
 | `merge_wpu.sh` → `src/merge_wpu.py` | Jämför wpu- och palme-text per fil, behåll bäst kvalitet |
 | `setup_tessdata.sh` | Sätt upp projekt-lokal `tessdata/` med swe_best |
-| `ocr.sh` | Full OCR-pipeline (Tesseract → kvalitet → Surya på dåliga sidor); `--redo` kör om dåliga filer/sidor |
+| `ocr.sh` | Full OCR-pipeline (Tesseract → Surya-fallback för Tesseract-fel → kvalitet → Surya på dåliga sidor); `--redo` kör om dåliga filer/sidor |
 | `ocr_tesseract.sh` | Bara Tesseract-steget (textextraktion + ocrmypdf) |
 | `src/ocr_db_helper.py` | CLI-hjälpare för shell-skripten: tesseract-status och `text_mtime`-stämpling i `state.db` |
 | `ocr_pages.sh` → `src/ocr_pages.py` | Per-sida OCR (Tesseract/Surya), lagrar sidtext och metadata i `state.db` |

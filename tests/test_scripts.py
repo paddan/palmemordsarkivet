@@ -73,6 +73,49 @@ def test_ocr_refreshes_per_page_quality_after_surya() -> None:
     assert "./quality.sh --per-page" in after_surya
 
 
+def test_ocr_redo_pages_skips_any_existing_page_attempt() -> None:
+    project_root = Path(__file__).resolve().parents[1]
+    text = (project_root / "ocr.sh").read_text(encoding="utf-8")
+    filter_block = text.split("# Filtrera bort sidor där", 1)[1].split(
+        "total_bad = sum", 1
+    )[0]
+    assert 'if row:' in filter_block
+    assert 'row["engine"] == "surya"' not in filter_block
+
+
+def test_ocr_runs_surya_fallback_before_wpu_merge() -> None:
+    project_root = Path(__file__).resolve().parents[1]
+    text = (project_root / "ocr.sh").read_text(encoding="utf-8")
+    assert "run_surya_fallback" in text
+    assert "--fallback-failed" in text
+    assert "FALLBACK_ONLY=1" in text
+    assert "Surya-fallback för Tesseract-fel" in text
+    assert "surya_failed_at IS NULL" in text
+    assert "mark_surya_failed" in text
+    assert "clear_ocr_failures" in text
+    assert "create_missing=True" in text
+    assert text.index("run_surya_fallback") < text.index(
+        'step "2/7  Sammanfoga wpu.nu-text'
+    )
+
+
+def test_ocr_fallback_only_respects_in_directory() -> None:
+    project_root = Path(__file__).resolve().parents[1]
+    text = (project_root / "ocr.sh").read_text(encoding="utf-8")
+    fallback_block = text.split('if [ "$FALLBACK_ONLY" = "1" ]; then', 1)[1].split(
+        'if [ "$REDO_ONLY" = "0" ]; then', 1
+    )[0]
+    assert 'run_surya_fallback "$fallback_label" "$IN"' in fallback_block
+    assert (
+        'run_surya_fallback "palmemordsarkivet" "$ROOT/downloaded/files"'
+        not in fallback_block
+    )
+    assert (
+        'run_surya_fallback "wpu.nu" "$ROOT/downloaded/wpu_files"'
+        not in fallback_block
+    )
+
+
 def test_quality_help_mentions_state_db_not_legacy_files() -> None:
     project_root = Path(__file__).resolve().parents[1]
     result = subprocess.run(

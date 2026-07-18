@@ -160,3 +160,31 @@ def test_merge_one_missing_txt_returns_false(
     _add_page("doc", 1, "NY")
 
     assert merge_one("doc", txt_dir) is False
+
+
+def test_merge_one_can_create_missing_txt_from_page_rows(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    txt_dir = tmp_path / "text"
+    txt_dir.mkdir()
+    db_path = tmp_path / "state.db"
+    monkeypatch.setenv("STATE_DB", str(db_path))
+    conn = state_db.connect(db_path)
+    state_db.init_schema(conn)
+    state_db.upsert_pdf_file(
+        conn, pdf_stem="doc", source="files",
+        pdf_path="downloaded/files/doc.pdf",
+    )
+    conn.close()
+    _add_page("doc", 1, "Sida ett")
+    _add_page("doc", 3, "Sida tre")
+
+    assert merge_one("doc", txt_dir, create_missing=True) is True
+    assert (txt_dir / "doc.txt").read_text(encoding="utf-8") == "Sida ett\f\fSida tre"
+
+    conn = state_db.connect()
+    row = state_db.get_pdf_file(conn, "doc")
+    conn.close()
+    assert row is not None
+    assert row["merged_at"] is not None
+    assert row["text_mtime"] == (txt_dir / "doc.txt").stat().st_mtime

@@ -6,8 +6,9 @@ Skript för att ladda ner, OCR-tolka och söka i materialet på
 [palmemordsarkivet.se](https://palmemordsarkivet.se) — ett publikt Google Sheet
 med 3 762 PDF-filer (~35 000 sidor) som länkas via "Länk till kopia".
 
-Pipelinen laddar ner arkivet, OCR-tolkar varje sida (Tesseract + Surya på svåra
-sidor), indexerar texten i en lokal vektor-databas och ger dig ett
+Pipelinen laddar ner arkivet, OCR-tolkar varje sida (Tesseract + Surya-fallback
+vid Tesseract-fel och på svåra sidor), indexerar texten i en lokal
+vektor-databas och ger dig ett
 webgränssnitt där du kan ställa frågor om Palme-mordet — med källhänvisningar
 tillbaka till original-PDF:erna. Som komplement kan materialet byggas upp som en
 kunskapsgraf och utforskas visuellt.
