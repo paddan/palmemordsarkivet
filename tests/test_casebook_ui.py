@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+
 import casebook_ui
 import db as _db
 
@@ -105,3 +107,61 @@ def test_graph_centers_query_params_roundtrip_filters_invalid_entities() -> None
 def test_decode_graph_centers_param_returns_empty_list_for_bad_input() -> None:
     assert casebook_ui.decode_graph_centers_param("") == []
     assert casebook_ui.decode_graph_centers_param("inte-base64") == []
+
+
+def _pdf_token(path) -> str:
+    return base64.urlsafe_b64encode(str(path).encode()).decode().rstrip("=")
+
+
+def test_resolve_pdf_query_path_accepts_pdf_under_root(tmp_path) -> None:
+    pdf = tmp_path / "downloaded" / "files" / "281.pdf"
+    pdf.parent.mkdir(parents=True)
+    pdf.write_bytes(b"%PDF")
+
+    assert casebook_ui.resolve_pdf_query_path(tmp_path, _pdf_token(pdf)) == pdf.resolve()
+
+
+def test_resolve_pdf_query_path_rejects_bad_or_unsafe_paths(tmp_path) -> None:
+    outside = tmp_path.parent / "outside.pdf"
+    outside.write_bytes(b"%PDF")
+    txt = tmp_path / "generated" / "text" / "281.txt"
+    txt.parent.mkdir(parents=True)
+    txt.write_text("text", encoding="utf-8")
+
+    assert casebook_ui.resolve_pdf_query_path(tmp_path, "inte-base64") is None
+    assert casebook_ui.resolve_pdf_query_path(tmp_path, _pdf_token(outside)) is None
+    assert casebook_ui.resolve_pdf_query_path(tmp_path, _pdf_token(txt)) is None
+
+
+def test_resolve_pdf_query_page_accepts_positive_int_only() -> None:
+    assert casebook_ui.resolve_pdf_query_page("12") == 12
+    assert casebook_ui.resolve_pdf_query_page(["7"]) == 7
+    assert casebook_ui.resolve_pdf_query_page("") is None
+    assert casebook_ui.resolve_pdf_query_page("0") is None
+    assert casebook_ui.resolve_pdf_query_page("-1") is None
+    assert casebook_ui.resolve_pdf_query_page("sju") is None
+
+
+def test_pdf_open_target_uses_browser_file_url_with_optional_page(tmp_path) -> None:
+    pdf = tmp_path / "281.pdf"
+    pdf.write_bytes(b"%PDF")
+
+    assert casebook_ui.pdf_open_target(pdf) == pdf.resolve().as_uri()
+    assert casebook_ui.pdf_open_target(pdf, page=12) == f"{pdf.resolve().as_uri()}#page=12"
+
+
+def test_open_pdf_in_browser_uses_new_browser_tab(tmp_path, monkeypatch) -> None:
+    pdf = tmp_path / "281.pdf"
+    pdf.write_bytes(b"%PDF")
+    calls = []
+
+    assert hasattr(casebook_ui, "open_pdf_in_browser")
+    monkeypatch.setattr(
+        casebook_ui.webbrowser,
+        "open",
+        lambda url, new=0: calls.append((url, new)) or True,
+    )
+
+    casebook_ui.open_pdf_in_browser(pdf, page=12)
+
+    assert calls == [(f"{pdf.resolve().as_uri()}#page=12", 2)]

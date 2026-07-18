@@ -6,9 +6,13 @@ from db import connect, init_schema, record_page
 from redactions import (
     MASK_TOKEN,
     count_redactions,
+    document_label,
     documents_by_redaction,
+    documents_table_html,
+    filter_documents,
     page_redactions,
     redaction_snippets,
+    selected_document,
 )
 
 
@@ -55,6 +59,54 @@ def test_documents_by_redaction_aggregates_and_sorts(tmp_path) -> None:
     assert docs[0]["redactions"] == 3
     assert docs[0]["pages_with_redactions"] == 2
     assert docs[1]["redactions"] == 1
+
+
+def test_filter_and_select_documents_for_lightweight_ui() -> None:
+    docs = [
+        {"pdf_stem": "Liggaren_4626-7844", "redactions": 518, "pages_with_redactions": 78},
+        {"pdf_stem": "Pol-1986-03-17 Ingvar Carlsson", "redactions": 21, "pages_with_redactions": 1},
+    ]
+
+    filtered = filter_documents(docs, "ingvar")
+
+    assert filtered == [docs[1]]
+    assert filter_documents(docs, "") == docs
+    assert selected_document(docs, "Liggaren_4626-7844") == docs[0]
+    assert selected_document(docs, "saknas") is None
+    assert document_label(docs[1]) == "Pol-1986-03-17 Ingvar Carlsson — 21 maskeringar på 1 sida"
+
+
+def test_documents_table_html_makes_rows_clickable_without_checkboxes() -> None:
+    docs = [
+        {"pdf_stem": "Liggaren_4626-7844", "redactions": 518, "pages_with_redactions": 78},
+        {"pdf_stem": "Pol-1986-03-17 Ingvar Carlsson", "redactions": 21, "pages_with_redactions": 1},
+    ]
+
+    html = documents_table_html(docs, selected_stem=docs[1]["pdf_stem"])
+
+    assert 'href="/Maskeringar?redaction_doc=Liggaren_4626-7844#maskeringar-detalj"' in html
+    assert 'href="/Maskeringar?redaction_doc=Pol-1986-03-17%20Ingvar%20Carlsson#maskeringar-detalj"' in html
+    assert "redaction-row redaction-selected" in html
+    assert "<input" not in html
+    assert "checkbox" not in html
+
+
+def test_documents_table_html_uses_real_table_headers_and_cells() -> None:
+    docs = [
+        {"pdf_stem": "Liggaren_4626-7844", "redactions": 518, "pages_with_redactions": 78},
+    ]
+
+    html = documents_table_html(docs)
+
+    assert "<table" in html
+    assert "<thead>" in html
+    assert '<th scope="col">Dokument</th>' in html
+    assert '<th scope="col">Maskeringar</th>' in html
+    assert '<th scope="col">Sidor</th>' in html
+    assert "<tbody>" in html
+    assert "<td" in html
+    assert "background:rgba(128,128,128,.18)" in html
+    assert "#fff" not in html
 
 
 def test_page_redactions_lists_pages_with_snippets(tmp_path) -> None:

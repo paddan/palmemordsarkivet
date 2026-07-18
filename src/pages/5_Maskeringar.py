@@ -1,7 +1,7 @@
 """Maskeringsutforskaren — bläddra bland svärtade (maskerade) partier.
 
 Listar dokument efter hur många ``[MASKAD]``-markörer OCR-pipelinens
-redaktionsdetektering hittat, och visar kontexten runt varje maskering.
+redaktionsdetektering hittat, och visar kontexten först för klickad tabellrad.
 """
 
 from __future__ import annotations
@@ -40,25 +40,36 @@ if not docs:
 total = sum(d["redactions"] for d in docs)
 st.caption(f"{total:,} maskeringar i {len(docs):,} dokument.")
 
-needle = st.text_input("Filtrera dokument", placeholder="del av filnamn/nr…").strip().lower()
-shown = [d for d in docs if needle in d["pdf_stem"].lower()] if needle else docs
+needle = st.text_input("Filtrera dokument", placeholder="del av filnamn/nr…")
+shown = _redactions.filter_documents(docs, needle)
 st.caption(f"Visar {len(shown):,} av {len(docs):,} dokument, mest maskerade först.")
 
-for d in shown[:200]:
-    stem = d["pdf_stem"]
-    header = (f"{stem} — {d['redactions']} maskeringar "
-              f"på {d['pages_with_redactions']} sidor")
-    with st.expander(header, expanded=False):
-        source = {"source": f"{stem}.txt", "title": stem,
-                  "nr": stem.split(" — ")[0].strip()}
-        _casebook_ui.render_source_cards(
-            ROOT, [source], conn, key_prefix=f"redact_card_{stem}"
-        )
-        for page in _redactions.page_redactions(conn, stem):
-            st.markdown(f"**Sida {page['page_num']}** "
-                        f"({page['redactions']} maskeringar)")
-            for snippet in page["snippets"]:
-                st.markdown(f"> {snippet}")
+if not shown:
+    st.info("Inga dokument matchar filtret.")
+    st.stop()
 
-if len(shown) > 200:
-    st.caption("(Visar de 200 mest maskerade — filtrera för att se fler.)")
+selected_stem = st.query_params.get("redaction_doc", "")
+st.caption("Klicka på en dokumentrad för att visa källknappar och kontextutdrag.")
+st.markdown(
+    _redactions.documents_table_html(shown, selected_stem=selected_stem),
+    unsafe_allow_html=True,
+)
+
+selected = _redactions.selected_document(shown, selected_stem)
+if selected is None:
+    st.info("Klicka på en dokumentrad i tabellen för att visa källknappar och kontextutdrag.")
+    st.stop()
+
+stem = selected["pdf_stem"]
+st.markdown('<div id="maskeringar-detalj"></div>', unsafe_allow_html=True)
+st.subheader(_redactions.document_label(selected))
+source = {"source": f"{stem}.txt", "title": stem,
+          "nr": stem.split(" — ")[0].strip()}
+_casebook_ui.render_source_cards(
+    ROOT, [source], conn, key_prefix=f"redact_card_{stem}"
+)
+for page in _redactions.page_redactions(conn, stem):
+    st.markdown(f"**Sida {page['page_num']}** "
+                f"({page['redactions']} maskeringar)")
+    for snippet in page["snippets"]:
+        st.markdown(f"> {snippet}")

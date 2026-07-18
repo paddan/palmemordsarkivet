@@ -182,7 +182,7 @@ Run:
 
 **Files:** separata planer/specar per batch.
 
-- [ ] SQLite-migrationer: skapa versionsstyrd migreringsrunner och gamla-db-fixtures.
+- [x] SQLite-migrationer: skapa versionsstyrd migreringsrunner och gamla-db-fixtures (`2026-07-18-sqlite-migrationer`).
 - [ ] `src/Utredning.py`-split: extrahera rendering, RAG-runner och tool-loop utan beteendeforandring.
 - [ ] Paket/importstadning: minska `sys.path.insert`, behall wrappers.
 - [ ] RAG-eval: lagg 10-20 golden-fragor med forvantade kallor.

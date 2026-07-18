@@ -26,6 +26,12 @@ Inspektera med t.ex. `sqlite3 generated/db/state.db`. Tabellerna:
 - `map_observation_candidates` — granskningskö för LLM-extraherade kartförslag. Raderna har `status` (`pending`, `approved`, `rejected`) och blir inte publicerade kartobservationer förrän `approve_map_observation_candidate` skapar en rad i `map_observations`
 - `map_observation_extractions` — per-sida-markör för kartobservations-extraktionen. Även sidor där LLM:en hittar noll kandidater markeras här så omkörningar inte skickar samma tomma sida igen
 
+Schemat är versionsstyrt i `src/db.py`. `init_schema(conn)` skapar en färsk
+databas direkt, migrerar äldre databaser via pending migrations och skriver
+aktuell version både till tabellen `schema_version` och `PRAGMA user_version`.
+Om databasen har högre version än koden stödjer avbryts initieringen med fel,
+så äldre kod inte tyst skriver mot ett nyare schema.
+
 **Livscykel:** radera inte `generated/db/state.db` mitt under en pågående
 pipeline-körning — befintliga processer fortsätter skriva mot den unlinkade inoden
 medan nya processer skapar en tom db, vilket ger inkonsekvent state.
@@ -315,7 +321,10 @@ Fliken **Utredning** (Claude-backend) har en "Utredningsläge (MCP)"-toggle i si
 I MCP-läget får du en chatt där Claude minns tidigare frågor i konversationen
 (implementerat via Claude Agent SDK:s `resume`-fält — `session_id` från senaste
 svaret skickas med nästa fråga). Sidebar-knappen "Ny konversation" nollställer
-historiken och startar en ny session.
+historiken och startar en ny session. När MCP-läget är aktivt döljs
+RAG-specifika sidofältskontroller (reranker, top-K/top-N, facetter och fuzzy);
+kunskapsgrafens toggle ligger kvar eftersom grafen kan byggas även för
+MCP-svar.
 
 #### Utredning-fliken
 
@@ -345,10 +354,12 @@ ollama serve &
 ollama pull llama3.1:8b
 ```
 
-Citat i svaret renderas som små inline-knappar — klick öppnar original-PDF:en
-lokalt (via `open`) i en gömd iframe så huvudsidan inte laddas om. Om samma
-dokument-ID delas av flera filer (t.ex. en palme- och en wpu-version) och svaret
-inte entydigt pekar ut vilken, visas en knapp per fil märkt med titeldelen.
+Citat i svaret renderas som små inline-knappar — klick skickas via en gömd
+iframe så huvudsidan inte laddas om. Openern validerar PDF-token och sidnummer,
+bygger en `file://...#page=N`-URL när sida finns och öppnar PDF:en i en ny
+webbläsarflik. Om samma dokument-ID delas av flera
+filer (t.ex. en palme- och en wpu-version) och svaret inte entydigt pekar ut
+vilken, visas en knapp per fil märkt med titeldelen.
 
 #### Utredningspärm och bokmärken
 
@@ -369,7 +380,8 @@ Graf-fliken; länken skickar de sparade center-entiteterna i query-parametern
 Källlistorna i både RAG- och MCP-läget har dessutom knappen **Bokmärk**. Den
 sparar eller uppdaterar källan i `source_bookmarks`, deduplicerat på
 `source` + `page` (okänd sida lagras som 0 internt men visas som tom sida i UI).
-Bokmärkena visas på Utredningspärm-sidan och kan öppna matchande PDF lokalt.
+Bokmärkena visas på Utredningspärm-sidan och kan öppna matchande PDF i ny
+webbläsarflik.
 
 #### Anteckningar på källor
 
@@ -383,8 +395,8 @@ samlas på en egen flik (**Anteckningar**) i Utredningspärmen där de kan läsa
 
 #### Sökfilter: facetter och OCR-tolerant fuzzy-sökning
 
-I RAG-läget har Utredning-flikens sidofält två sökfilter (gäller inte
-MCP-läget):
+I RAG-läget har Utredning-flikens sidofält två sökfilter. De visas inte i
+MCP-läget eftersom MCP-verktygen väljer egna sökparametrar per verktygsanrop:
 
 - **Facetter** — en multiselect med personer, platser och organisationer ur
   kunskapsgrafen (`doc_entities`). Väljs en eller flera entiteter *prefiltreras*
@@ -408,8 +420,9 @@ MCP-läget):
 #### Maskeringsutforskaren (Maskeringar-fliken)
 
 Sidan `pages/5_Maskeringar.py` listar dokument sorterade efter hur många
-`[MASKAD]`-markörer redaktionsdetekteringen infogat, med kontextutdrag runt
-varje maskering — användbart för att se *vad som dolts*. All aggregering sker i
+`[MASKAD]`-markörer redaktionsdetekteringen infogat. Kontextutdrag och
+källknappar renderas först för den dokumentrad användaren klickar i tabellen,
+så sidan inte bygger hundratals dolda detaljblock vid sidbyte. All aggregering sker i
 `src/redactions.py` direkt mot `pdf_pages` i state.db (ingen ny pipeline-körning
 behövs).
 
@@ -421,6 +434,9 @@ dem mot varandra. System-prompten (i `src/compare.py`) ber modellen lyfta fram
 **motstridiga** och **överensstämmande** uppgifter med källhänvisningar, i
 stället för att syntetisera bort konflikterna. Backend följer det val som
 sparats i `generated/llm_config.json` (sätts i Utredning-flikens sidofält).
+Inline-referenser renderas med samma `?pdf=&page=`-opener som Utredning-sidan,
+så klick på en referens öppnar matchande PDF i ny webbläsarflik på refererad
+sida utan att jämförelsesvaret laddas om.
 
 #### Karta (Karta-fliken)
 
@@ -479,7 +495,7 @@ sidofältet styr om sektionen (toggeln) visas alls.
 Grundgrafen visar **endast svarets entiteter** och relationerna mellan dem —
 inte deras hela grannskap. Grafen är interaktiv: dubbelklick på en entitetsnod
 fäller ut dess grannskap (relationer + dokument som nämner den), dubbelklick
-på en dokumentnod öppnar PDF:en lokalt. Centernoder (svarets entiteter +
+på en dokumentnod öppnar PDF:en i ny webbläsarflik. Centernoder (svarets entiteter +
 utfällda) märks med ★ i namnet. Inbyggd verktygsrad ger fullskärm och
 zoom-passning.
 
@@ -491,7 +507,8 @@ I grafsektionen finns en sidopanel med:
 - **Återställ** — tar bort utfällda noder. Utfällda noder sparas per svar och
   nollställs automatiskt vid nytt svar.
 - **Dokumentlänkar** — grafens dokumentnoder som klickbara länkar; öppnar
-  PDF:en lokalt via samma `?pdf=`-mekanism som citatlänkarna i svaret.
+  PDF:en i ny webbläsarflik via samma `?pdf=`-mekanism som citatlänkarna i svaret
+  (utan sidnummer om grafnoden inte har sida).
 
 Grafen är frivillig: är Neo4j nere eller LLM-konfig saknas visas en kort notis
 i stället, och sidofältets toggle "Visa kunskapsgraf" (på som standard)
@@ -679,7 +696,7 @@ delas mellan Utredning-fliken och `llm_config.sh` så att valen alltid är ident
 | `src/config.py` | Läser/skriver `generated/llm_config.json` (delas av Utredning-sidan och llm_correct) |
 | `src/backends.py` | Delad backend-katalog (Claude/OpenAI/DeepSeek/Ollama/custom) + `fetch_models`/`available_models` — delas av Utredning-sidan och `llm_config.sh` |
 | `llm_config.sh` → `src/llm_config_cli.py` | Visa/ändra `generated/llm_config.json` utan webgränssnittet (interaktiv meny i terminal) |
-| `src/citations.py` | Slår upp `[Nr X, sida Y]`-citat mot PDF:er och renderar citatlänkar |
+| `src/citations.py` | Slår upp `[Nr X, sida Y]` och WPU-prefix som `[Pol-..., sida Y]` mot PDF:er och renderar citatlänkar |
 | `src/Utredning.py` | Streamlit-flik för frågor (RAG + MCP-toggle), svarsgraf, sparknapp, källbokmärken samt facett-/fuzzy-sökfilter |
 | `src/casebook_ui.py` | Delade Streamlit-komponenter för utredningspärm, källbokmärken och anteckningar |
 | `src/pages/2_Utredningspärm.py` | Streamlit-sida för sparade fråga/svar-spår, bokmärkta källor och anteckningar |
@@ -698,7 +715,8 @@ delas mellan Utredning-fliken och `llm_config.sh` så att valen alltid är ident
 | `src/pages/3_Graf.py` | Streamlit-grafsida: sök entitet → interaktivt nätverk, fäll ut noder |
 | `neo4j/docker-compose.yml` | Neo4j 5 för kunskapsgrafen med Docker (Browser på :7474) |
 | `web.sh` | Wrapper för Streamlit-servern |
-| `src/db.py` | SQLite-state: schema + CRUD + delta-queries, inklusive utredningspärm, källbokmärken och anteckningar |
+| `src/db.py` | SQLite-state: versionsstyrt schema + CRUD + delta-queries, inklusive utredningspärm, källbokmärken och anteckningar |
+| `tests/fixtures/state_db_v4.sql` + `tests/fixtures/state_db_v5_missing_surya.sql` | Gamla state-db-fixtures som verifierar schema-migreringar |
 | `tessdata/swe.user-words` | Palme-specifika ord (committat) |
 | `tessdata/tesseract.config` | `preserve_interword_spaces 1` (committat) |
 | `data/karta/platser.json` + `data/karta/rorelser.json` | Seed-filer för kartans platser och observationer |
@@ -728,7 +746,7 @@ via `.venv/`; saknas verktygen avslutar scriptet med en installationshint.
 Testerna täcker: `score_text` (quality), `chunk_text` (ingest), `extract_drive_id`/`sniff_extension` (download),
 `detect_redactions_image` (ocr_pages), `merge_one` (merge_pages), `merge_wpu` (merge_wpu),
 LLM-korrektionslogiken (llm_correct), re-ingest-flödet (ingest), state-databasen inkl.
-delta-urval och `text_mtime`-stämpling (db, ocr_db_helper, normalize, quality),
+schema-migrationer, delta-urval och `text_mtime`-stämpling (db, ocr_db_helper, normalize, quality),
 citatuppslag/-länkning (citations), RRF-hybridsökningen (ask) och `get_page` (mcp_server),
 entitetsextraktion (extract_entities), graf-laddning (load_neo4j) och
 nyckelentiteter ur svar (answer_entities).

@@ -37,7 +37,7 @@ Pipeline: download → OCR (Tesseract + optional Surya) → detect redactions �
 
 ```
 src/
-  db.py                # SQLite-state: schema + CRUD + delta-queries för pipeline + utredningspärm
+  db.py                # SQLite-state: versionsstyrt schema + CRUD + delta-queries för pipeline + utredningspärm
   download.py          # Google Drive PDF downloader (state via db.py)
   quality.py           # OCR quality scoring (0–100 heuristics + optional hunspell)
   ocr_pages.py         # Per-page OCR pipeline (Tesseract/Surya) + redaktionsdetektering
@@ -58,8 +58,8 @@ src/
   pages/
     2_Utredningspärm.py # Sparade fråga/svar-spår, källbokmärken och anteckningar
     3_Graf.py          # Fristående grafsida
-    5_Maskeringar.py   # Maskeringsutforskaren (dokument sorterade efter antal [MASKAD])
-    6_Jämförelse.py    # Vittnesjämförelse (korsförhörsläge — letar motstridiga uppgifter)
+    5_Maskeringar.py   # Maskeringsutforskaren (klickbar tabellrad + valt dokuments [MASKAD]-kontext)
+    6_Jämförelse.py    # Vittnesjämförelse (korsförhörsläge + klickbara PDF-referenser)
     7_Karta.py         # Karta över mordkvällens observationer med formulär och tidslinje
   rag/
     ingest.py          # LanceDB vector index builder
@@ -69,7 +69,7 @@ src/
     load_neo4j.py       # Ladda doc_entities → Neo4j (MERGE, idempotent) + namnkanonisering
     viz.py              # Ego-nätverk för flera center (Cypher → noder/kanter, dedup) + Cytoscape-konvertering
     answer_entities.py  # LLM (Haiku) listar nyckelentiteter ur ett RAG-svar → inline-grafen i Utredning
-tests/                 # pytest (test_quality, test_chunk, test_download, test_merge_pages, test_detect_redactions, test_reingest, test_normalize_text, test_answer_entities, test_redactions, test_facets, test_search_fuzzy, test_compare)
+tests/                 # pytest (inkl. gamla state-db-fixtures för migrationsskydd)
 *.sh                   # Bash-wrappers (aktiverar .venv, läser API-nycklar, vidarebefordrar flaggor)
 tessdata/              # swe_best.traineddata, swe.user-words, tesseract.config
 ```
@@ -131,7 +131,9 @@ Env-variabler: `CLAUDE_CODE_OAUTH_TOKEN` (Pro/Max, räknas mot prenumeration) el
 
 ## Non-obvious Design Decisions
 
-**MCP-läge (Utredning.py)**: Konversationskontinuitet uppnås genom att fånga `session_id` från `ResultMessage` och skicka tillbaka det som `ClaudeAgentOptions(resume=...)` på nästa fråga. "Ny konversation" nollställer `chat_history` + `mcp_session_id`.
+**MCP-läge (Utredning.py)**: Konversationskontinuitet uppnås genom att fånga `session_id` från `ResultMessage` och skicka tillbaka det som `ClaudeAgentOptions(resume=...)` på nästa fråga. "Ny konversation" nollställer `chat_history` + `mcp_session_id`. När `mcp_mode` är aktivt ska sidofältet dölja RAG-specifika kontroller (reranker, top-K/top-N, facetter, fuzzy) men behålla kunskapsgrafens toggle eftersom grafen kan byggas för MCP-svar.
+
+**PDF-opener för citat/källor**: inline-citat och källkort använder `casebook_ui.render_pdf_opener` + `citations.pdf_anchor`. När sidnummer finns ska länken bära `page=N`; openern validerar både PDF-token och sida, bygger `file://...#page=N` och öppnar PDF:en med `webbrowser.open(..., new=2)` så den hamnar i en ny webbläsarflik i stället för macOS Preview. Utredning, Jämförelse, Utredningspärm och grafens dokumentöppningar ska använda samma opener.
 
 **Kunskapsgraf byggs lazy (Utredning.py)**: `_render_answer_graph` tar svaret, inte färdiga centers. Den dyra entitetsextraktionen (`_compute_answer_centers` → Claude Haiku) och Neo4j-frågorna körs **först när användaren öppnar graf-toggeln** — inte automatiskt efter varje svar. Resultatet cachas per svar i session state och returneras så utredningspärmen kan spara det.
 
@@ -141,6 +143,9 @@ kvalitetspoäng, LLM-korrigeringar och ingest-tracking. Utredningspärmen
 lever också här i `casebook_entries` och `source_bookmarks`. Karta-flikens
 granskningskö använder `map_observation_candidates` och
 `map_observation_extractions` (per-sida-markör även när inga kandidater hittas).
+Schemat är versionsstyrt i `src/db.py`: `init_schema` skapar färsk databas,
+kör pending migrations mot äldre databaser, uppdaterar `schema_version` och
+`PRAGMA user_version`, och vägrar databaser från nyare kodversioner.
 Inkrementell logik
 bygger på att jämföra `pdf_files.text_mtime` mot `normalized_at`/`scored_at`/etc.
 `--rebuild` tvingar omkörning. `tesseract_blacklisted_at` är bara en spärr för

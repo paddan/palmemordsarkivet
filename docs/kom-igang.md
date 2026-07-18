@@ -89,7 +89,8 @@ snabbt komma tillbaka till samma PDF eller sida senare, och skriva fria
 **anteckningar** på en källa via ✏️-rutan på källkorten (samlas på en egen flik
 i Utredningspärmen).
 
-I Utredning-flikens sidofält finns två extra sökfilter för RAG-läget:
+I Utredning-flikens sidofält finns två extra sökfilter för RAG-läget
+(de döljs när **Utredningsläge (MCP)** är aktivt):
 **facetter** (begränsa träffarna till dokument som nämner en viss person/plats/
 organisation ur kunskapsgrafen) och **OCR-tolerant fuzzy-sökning** (fångar
 söktermer som OCR:en felstavat, t.ex. *Engstrcm* för *Engström* — första
@@ -97,9 +98,11 @@ körningen bygger ett index och tar en stund). Med likhetströskeln (sliden unde
 toggeln) avgör du hur tolerant matchningen är: sänk den mot ~0.6 för korta namn
 med ett OCR-fel som *Palme*→*Paine*, höj den för mindre brus. Två fristående
 flikar hjälper dig dessutom
-att gräva: **Maskeringar** visar var arkivet svärtat över text, och
+att gräva: **Maskeringar** listar svärtad text i en tabell och visar detaljer
+för klickad dokumentrad, och
 **Jämförelse** ställer flera källor mot varandra och lyfter fram motstridiga
-uppgifter.
+uppgifter. Referenserna i jämförelsesvaret är klickbara och öppnar matchande
+PDF i en ny webbläsarflik, på refererad sida när sidnumret är känt.
 
 ### Karta
 

@@ -20,11 +20,6 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "src" / "rag"))
 
-import backends as _backends  # noqa: E402
-import casebook_ui as _casebook_ui  # noqa: E402
-import citations as _citations  # noqa: E402
-import compare as _compare  # noqa: E402
-import config as _llm_config  # noqa: E402
 from ask import CLAUDE_MODEL, EMBED_MODEL, TABLE, rerank, search  # noqa: E402
 from claude_agent_sdk import (  # noqa: E402
     AssistantMessage,
@@ -34,9 +29,16 @@ from claude_agent_sdk import (  # noqa: E402
     query,
 )
 
+import backends as _backends  # noqa: E402
+import casebook_ui as _casebook_ui  # noqa: E402
+import citations as _citations  # noqa: E402
+import compare as _compare  # noqa: E402
+import config as _llm_config  # noqa: E402
+
 st.set_page_config(page_title="Palmemordsarkivet — Jämförelse", layout="wide")
 st.title("Vittnesjämförelse")
 st.caption("Ställ källorna mot varandra och se var de säger emot varandra.")
+_casebook_ui.render_pdf_opener(ROOT)
 
 conn = _casebook_ui.state_conn()
 

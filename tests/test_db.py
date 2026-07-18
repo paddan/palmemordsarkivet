@@ -1,5 +1,7 @@
+import sqlite3
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
@@ -57,6 +59,7 @@ from db import (
     redaction_checked,
     reject_map_observation_candidate,
     retry_tesseract_blacklisted,
+    schema_version,
     seed_map_data_if_empty,
     touch_text_mtime,
     update_map_observation,
@@ -177,6 +180,78 @@ def test_init_schema_is_idempotent(tmp_path):
         assert {"downloads", "pdf_files", "pdf_pages",
                 "quality", "quality_pages", "ingest",
                 "schema_version"}.issubset(tables)
+    finally:
+        conn.close()
+
+
+def test_init_schema_migrates_legacy_v4_fixture(tmp_path):
+    db_path = tmp_path / "legacy_v4.db"
+    fixture = Path(__file__).parent / "fixtures" / "state_db_v4.sql"
+    raw = sqlite3.connect(db_path)
+    try:
+        raw.executescript(fixture.read_text(encoding="utf-8"))
+        raw.commit()
+    finally:
+        raw.close()
+
+    conn = connect(db_path)
+    try:
+        init_schema(conn)
+
+        assert schema_version(conn) == SCHEMA_VERSION
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+        migrated = get_pdf_file(conn, "00001-0001")
+        assert migrated["pdf_path"] == "downloaded/files/00001-0001.pdf"
+        assert migrated["tesseract_failed"] == 0
+        assert migrated["tesseract_done_at"] is None
+        versions = [
+            row["version"]
+            for row in conn.execute(
+                "SELECT version FROM schema_version ORDER BY version"
+            )
+        ]
+        assert versions == [4, SCHEMA_VERSION]
+    finally:
+        conn.close()
+
+
+def test_init_schema_migrates_v5_database_missing_surya_column(tmp_path):
+    db_path = tmp_path / "legacy_v5_missing_surya.db"
+    fixture = Path(__file__).parent / "fixtures" / "state_db_v5_missing_surya.sql"
+    raw = sqlite3.connect(db_path)
+    try:
+        raw.executescript(fixture.read_text(encoding="utf-8"))
+        raw.commit()
+    finally:
+        raw.close()
+
+    conn = connect(db_path)
+    try:
+        init_schema(conn)
+
+        assert schema_version(conn) == SCHEMA_VERSION
+        migrated = get_pdf_file(conn, "wpu-legacy")
+        assert migrated["tesseract_failed"] == 1
+        assert migrated["tesseract_blacklisted_at"] == "2026-07-01T00:10:00+00:00"
+        assert migrated["surya_failed_at"] is None
+    finally:
+        conn.close()
+
+
+def test_init_schema_rejects_newer_database(tmp_path):
+    conn = connect(tmp_path / "future.db")
+    try:
+        conn.execute(
+            "CREATE TABLE schema_version(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)"
+        )
+        conn.execute(
+            "INSERT INTO schema_version(version, applied_at) VALUES (?, '2026-07-18T00:00:00+00:00')",
+            (SCHEMA_VERSION + 1,),
+        )
+        conn.commit()
+
+        with pytest.raises(RuntimeError, match="nyare schema-version"):
+            init_schema(conn)
     finally:
         conn.close()
 

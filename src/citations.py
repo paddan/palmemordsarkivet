@@ -11,10 +11,11 @@ import html
 import re
 from pathlib import Path
 
-# Nr kan vara digitalt med valfritt antal led av "." eller "," (t.ex. 281,10 eller 1322.7).
-# Valfria hakparenteser runt citatet konsumeras av regexen så hela [Nr X, sida Y]
-# ersätts av <a>-taggen — undviker att Markdown-parsern manglar [<a>...</a>].
-CITE_RE = re.compile(r"\[?Nr ([\w\-]+(?:[.,][\w\-]+)*),\s*sida (\d+)\]?")
+# Nr kan vara digitalt med valfritt antal led av "." eller "," (t.ex. 281,10
+# eller 1322.7), men WPU-referenser skrivs ibland som dokumentprefix utan
+# "Nr" (t.ex. Pol-1996-12-19). Valfria hakparenteser runt varje träff
+# konsumeras av regexen så Markdown-parsern inte manglar [<a>...</a>].
+CITE_RE = re.compile(r"\[?(?:Nr\s+)?([\w\-]+(?:[.,_][\w\-]+)*),\s*sida (\d+)\]?")
 
 # generated/ocr/ skriver över downloaded/-katalogerna → föredras (har OCR-textlager)
 PDF_DIRS = ("downloaded/files", "downloaded/wpu_files", "generated/ocr")
@@ -73,6 +74,7 @@ def extract_cited_sources(answer: str, mapping: dict[str, Path]) -> list[dict]:
     seen: dict[str, dict] = {}
     for m in CITE_RE.finditer(answer):
         nr = m.group(1)
+        page = int(m.group(2))
         for pdf in resolve_nr_all(nr, mapping):
             stem = pdf.stem
             if stem in seen:
@@ -80,20 +82,25 @@ def extract_cited_sources(answer: str, mapping: dict[str, Path]) -> list[dict]:
             parts = [p.strip() for p in stem.split(" — ")]
             seen[stem] = {
                 "source": stem + ".txt",
-                "page": None,
+                "page": page,
                 "nr": nr,
                 "titel": parts[1] if len(parts) > 1 else stem,
             }
     return list(seen.values())
 
 
-def pdf_anchor(pdf: Path, label: str, title: str = "Öppna PDF") -> str:
-    """HTML-länk som öppnar en PDF lokalt via ?pdf=<base64>-handlern högst upp
-    i Utredning-scriptet (laddas i den gömda pdf_opener-iframen). ``label`` ska
-    redan vara HTML-säker."""
+def pdf_anchor(
+    pdf: Path, label: str, title: str = "Öppna PDF", page: int | None = None
+) -> str:
+    """HTML-länk till PDF-handlern som öppnar PDF:en i ny webbläsarflik.
+
+    Handlern körs på sidan som renderar citatet och laddas i den gömda
+    ``pdf_opener``-iframen. ``label`` ska redan vara HTML-säker.
+    """
     token = base64.urlsafe_b64encode(str(pdf).encode()).decode().rstrip("=")
+    page_param = f"&page={page}" if page and page > 0 else ""
     return (
-        f'<a href="?pdf={token}" target="pdf_opener" '
+        f'<a href="?pdf={token}{page_param}" target="pdf_opener" '
         f'style="{_LINK_STYLE}" title="{html.escape(title, quote=True)}">{label}</a>'
     )
 
@@ -103,8 +110,9 @@ def linkify_citations(
     mapping: dict[str, Path],
     known_sources: set[str] | None = None,
 ) -> str:
-    """Förvandla "Nr X, sida Y" till små inline-knappar som öppnar PDF lokalt
-    via ?pdf=<base64>-handlern högst upp i Utredning-scriptet.
+    """Förvandla "Nr X, sida Y" till små inline-knappar som öppnar PDF i
+    ny webbläsarflik via ?pdf=<base64>&page=N-handlern på sidan som renderar
+    svaret.
     Fungerar i både RAG- och MCP-läge — slår upp nr → PDF via ``mapping``.
 
     ``known_sources`` (källfilnamn som faktiskt hämtades för svaret, finns bara
@@ -112,11 +120,12 @@ def linkify_citations(
     Återstår fler än en kandidat renderas en länk per fil så användaren kan välja.
     """
 
-    def _anchor(pdf: Path, label: str, title: str) -> str:
-        return pdf_anchor(pdf, label, title)
+    def _anchor(pdf: Path, label: str, title: str, page: int) -> str:
+        return pdf_anchor(pdf, label, title, page=page)
 
     def repl(m: re.Match) -> str:
         nr = m.group(1)
+        page = int(m.group(2))
         cands = resolve_nr_all(nr, mapping)
         # Smalna av tvetydiga träffar till de källor som faktiskt hämtades.
         if known_sources and len(cands) > 1:
@@ -127,13 +136,15 @@ def linkify_citations(
             return html.escape(m.group(0), quote=False)
         label = html.escape(m.group(0), quote=False)
         if len(cands) == 1:
-            return _anchor(cands[0], label, "Öppna PDF")
+            return _anchor(cands[0], label, "Öppna PDF", page)
         # Genuint tvetydigt nr (flera dokument delar prefix): en länk per fil,
         # märkt med den särskiljande titeldelen ur stammen.
         links = []
         for pdf in cands:
             suffix = pdf.stem[len(nr):].lstrip("_- ") or pdf.stem
-            links.append(_anchor(pdf, html.escape(suffix[:30], quote=False), pdf.stem))
+            links.append(
+                _anchor(pdf, html.escape(suffix[:30], quote=False), pdf.stem, page)
+            )
         return f"{label} ({' '.join(links)})"
 
     parts: list[str] = []

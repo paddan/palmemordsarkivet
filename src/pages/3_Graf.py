@@ -7,7 +7,6 @@ Degraderar snällt om Neo4j inte är igång.
 """
 from __future__ import annotations
 
-import subprocess
 import sys
 from pathlib import Path
 
@@ -186,10 +185,7 @@ else:
                 if n["type"] == "Dokument":
                     pdf = _find_pdf(n.get("stem") or "")
                     if pdf:
-                        try:
-                            subprocess.Popen(["open", str(pdf)])
-                        except OSError as e:
-                            st.error(f"Kan inte öppna fil: {e}")
+                        _casebook_ui.open_pdf_in_browser(pdf)
                 elif nid not in center_ids:
                     st.session_state["graph_centers"].append(
                         {"norm": nid, "namn": n["namn"], "label": n["type"]})
@@ -211,7 +207,4 @@ if docs:
             with cols[1]:
                 if cands and st.button("Öppna PDF", key=f"pdf_{i}",
                                        use_container_width=True):
-                    try:
-                        subprocess.Popen(["open", str(cands[0])])
-                    except OSError as e:
-                        st.error(f"Kan inte öppna fil: {e}")
+                    _casebook_ui.open_pdf_in_browser(cands[0])

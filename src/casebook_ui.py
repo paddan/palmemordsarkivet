@@ -7,11 +7,13 @@ import binascii
 import json
 import re
 import subprocess
+import webbrowser
 from pathlib import Path
+
+import streamlit as st
 
 import citations as _citations
 import db as _state_db
-import streamlit as st
 
 
 def state_conn():
@@ -36,6 +38,44 @@ def find_txt(root: Path, source_txt: str) -> Path | None:
     stem = source_txt[:-4] if source_txt.endswith(".txt") else source_txt
     p = root / "generated" / "text" / f"{stem}.txt"
     return p if p.is_file() else None
+
+
+def resolve_pdf_query_path(root: Path, token: str | list[str] | tuple[str, ...]) -> Path | None:
+    """Avkoda och validera en ``?pdf=``-token mot projektroten."""
+    if isinstance(token, (list, tuple)):
+        token = token[0] if token else ""
+    try:
+        raw = str(token)
+        raw += "=" * (-len(raw) % 4)
+        path = Path(base64.urlsafe_b64decode(raw).decode()).resolve()
+        root = root.resolve()
+    except (binascii.Error, OSError, UnicodeDecodeError, ValueError):
+        return None
+    if path.is_file() and path.suffix.lower() == ".pdf" and path.is_relative_to(root):
+        return path
+    return None
+
+
+def resolve_pdf_query_page(value: str | list[str] | tuple[str, ...] | None) -> int | None:
+    """Validera sidnummer från ``?page=``. Sidnummer är 1-baserade."""
+    if isinstance(value, (list, tuple)):
+        value = value[0] if value else None
+    if value is None:
+        return None
+    try:
+        page = int(value)
+    except (TypeError, ValueError):
+        return None
+    return page if page > 0 else None
+
+
+def pdf_open_target(path: Path, page: int | str | None = None) -> str:
+    """Webbläsar-URL för lokal PDF, med sidfragment när sida är känd."""
+    target = path.resolve().as_uri()
+    page_num = resolve_pdf_query_page(str(page)) if page is not None else None
+    if page_num is None:
+        return target
+    return f"{target}#page={page_num}"
 
 
 def source_bookmark_payload(source: dict) -> dict:
@@ -119,11 +159,40 @@ def bookmark_source_button(conn, source: dict, key: str) -> None:
         st.rerun()
 
 
+def open_pdf_in_browser(path: Path, page: int | str | None = None) -> None:
+    """Öppna en lokal PDF i ny webbläsarflik så ``#page=N`` bevaras."""
+    try:
+        opened = webbrowser.open(pdf_open_target(path, page), new=2)
+    except webbrowser.Error as e:
+        st.error(f"Kan inte öppna PDF i webbläsare: {e}")
+        return
+    if not opened:
+        st.error("Kan inte öppna PDF i webbläsare.")
+
+
 def _open_path(path: Path) -> None:
     try:
         subprocess.Popen(["open", str(path)])
     except OSError as e:
         st.error(f"Kan inte öppna fil: {e}")
+
+
+def render_pdf_opener(root: Path) -> None:
+    """Installera den dolda PDF-openern som inline-citatlänkar riktas till."""
+    st.markdown(
+        '<iframe name="pdf_opener" style="display:none" '
+        'width="0" height="0" tabindex="-1" aria-hidden="true"></iframe>',
+        unsafe_allow_html=True,
+    )
+    if "pdf" not in st.query_params:
+        return
+    path = resolve_pdf_query_path(root, st.query_params["pdf"])
+    if path:
+        open_pdf_in_browser(
+            path,
+            page=resolve_pdf_query_page(st.query_params.get("page")),
+        )
+    st.query_params.clear()
 
 
 def render_annotation_widget(conn, source: dict, key: str) -> None:
@@ -146,11 +215,13 @@ def render_annotation_widget(conn, source: dict, key: str) -> None:
             label_visibility="collapsed",
             placeholder="Din anteckning om den här källan…",
         )
-        if st.button("Spara anteckning", key=f"{key}_save", use_container_width=True):
-            if note.strip():
-                _state_db.record_source_annotation(conn, note=note, **payload)
-                st.toast("Anteckning sparad")
-                st.rerun()
+        if (
+            st.button("Spara anteckning", key=f"{key}_save", use_container_width=True)
+            and note.strip()
+        ):
+            _state_db.record_source_annotation(conn, note=note, **payload)
+            st.toast("Anteckning sparad")
+            st.rerun()
 
 
 def render_source_cards(root: Path, sources: list[dict], conn, *, key_prefix: str) -> None:
@@ -172,7 +243,7 @@ def render_source_cards(root: Path, sources: list[dict], conn, *, key_prefix: st
                     key=f"{key_prefix}_pdf_{i}",
                     use_container_width=True,
                 ):
-                    _open_path(pdf)
+                    open_pdf_in_browser(pdf, page=source.get("page"))
             with cols[2]:
                 if txt and st.button(
                     "Öppna text",
@@ -250,6 +321,7 @@ def render_casebook_page(root: Path, conn) -> None:
     st.set_page_config(page_title="Palmemordsarkivet — Utredningspärm", layout="wide")
     st.title("Utredningspärm")
     st.caption("Sparade svar och bokmärkta källor från utredningsarbetet.")
+    render_pdf_opener(root)
 
     entries = _state_db.list_casebook_entries(conn, limit=100)
     bookmarks = _state_db.list_source_bookmarks(conn, limit=200)
@@ -330,7 +402,7 @@ def _render_bookmarks(root: Path, bookmarks: list[dict], conn) -> None:
                     key=f"bookmark_page_pdf_{bm['id']}",
                     use_container_width=True,
                 ):
-                    _open_path(pdf)
+                    open_pdf_in_browser(pdf, page=bm.get("page"))
             with cols[2]:
                 if st.button(
                     "Ta bort",
@@ -364,7 +436,7 @@ def _render_annotations(root: Path, annotations: list[dict], conn) -> None:
                     key=f"annot_page_pdf_{a['id']}",
                     use_container_width=True,
                 ):
-                    _open_path(pdf)
+                    open_pdf_in_browser(pdf, page=a.get("page"))
             with cols[2]:
                 if st.button(
                     "Ta bort",
@@ -375,7 +447,9 @@ def _render_annotations(root: Path, annotations: list[dict], conn) -> None:
                     st.rerun()
 
 
-def pdf_anchor(root: Path, source_txt: str, label: str, title: str) -> str:
+def pdf_anchor(
+    root: Path, source_txt: str, label: str, title: str, page: int | None = None
+) -> str:
     """Rendera PDF-länk för källor där filen finns lokalt."""
     pdf = find_pdf(root, source_txt)
-    return _citations.pdf_anchor(pdf, label, title=title) if pdf else label
+    return _citations.pdf_anchor(pdf, label, title=title, page=page) if pdf else label

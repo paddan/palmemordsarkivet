@@ -42,6 +42,9 @@ fast pipeline får Claude tillgång till verktyg (`search_archive`, `get_page`)
 som den anropar hur många gånger den vill — provar olika söktermer, följer
 upp intressanta träffar och läser hela sidor för mer kontext. Bättre täckning
 på komplexa flerstegs-frågor, men långsammare (~1–3 min).
+När utredningsläget är aktivt döljs RAG-specifika sidofältsval som reranker,
+top-K/top-N, facetter och fuzzy-sökning; kvar finns MCP-relevanta val som ny
+konversation och kunskapsgraf.
 
 ![Web-gränssnitt — MCP-läge](utredningsläge.png)
 
@@ -59,14 +62,18 @@ skrivit på källor (✏️-rutan på källkorten) — flera anteckningar per k�
 ### Maskeringar
 
 Fliken **Maskeringar** listar dokument efter hur mycket text som svärtats över
-(`[MASKAD]`), med kontextutdrag runt varje maskering. Det som dolts är ofta lika
-intressant som innehållet.
+(`[MASKAD]`). Klicka på en dokumentrad i tabellen för att visa källknappar och
+kontextutdrag runt maskeringarna. Det som dolts är ofta lika intressant som
+innehållet.
 
 ### Jämförelse
 
 Fliken **Jämförelse** är ett korsförhörsläge: ange ett ämne så hämtas flera
 källor och AI:n ställer dem mot varandra och lyfter fram var de **säger emot**
 varandra — i stället för att jämka ihop uppgifterna som i vanliga svar.
+Referenserna i svaret är klickbara och öppnar matchande PDF.
+PDF:en öppnas i en ny webbläsarflik; när sidnumret är känt skickas det med så
+webbläsarens PDF-visare kan hoppa till rätt sida.
 
 ### Karta
 

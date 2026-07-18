@@ -9,11 +9,13 @@ eller manuellt:
 from __future__ import annotations
 
 import asyncio
-import base64
 import os
-import subprocess
 import sys
 from pathlib import Path
+
+import lancedb
+import streamlit as st
+from sentence_transformers import SentenceTransformer
 
 MCP_SERVER = Path(__file__).resolve().parent / "rag" / "mcp_server.py"
 
@@ -27,10 +29,6 @@ import search_fuzzy as _search_fuzzy  # noqa: E402
 from errors_log import log_error  # noqa: E402
 from graph import answer_entities as _answer_entities  # noqa: E402
 from graph import viz as _viz  # noqa: E402
-
-import lancedb
-import streamlit as st
-from sentence_transformers import SentenceTransformer
 
 try:
     from st_link_analysis import EdgeStyle, NodeStyle, st_link_analysis
@@ -166,14 +164,7 @@ def linkify_citations(text: str, known_sources: set[str] | None = None) -> str:
 table, embed_model = load()
 st.caption(f"Index: {table.count_rows():,} chunks")
 
-# Gömd iframe: citatlänkar har target="pdf_opener" och laddas hit istället för
-# i huvudsidan. Streamlit serverar requesten i iframen, kör pdf-handlern högst
-# upp i scriptet (öppnar PDF via subprocess) — huvudsidan rörs inte.
-st.markdown(
-    '<iframe name="pdf_opener" style="display:none" '
-    'width="0" height="0" tabindex="-1" aria-hidden="true"></iframe>',
-    unsafe_allow_html=True,
-)
+_casebook_ui.render_pdf_opener(ROOT)
 
 # Backend-katalogen bor i src/backends.py (delas med llm_config_cli). Claude-
 # defaulten knyts lokalt till ask.CLAUDE_MODEL så Utredning-sidans val följer den modell
@@ -342,13 +333,6 @@ with st.sidebar:
         for k in [k for k in st.session_state if k.startswith("turn_")]:
             del st.session_state[k]
         st.rerun()
-    do_rerank = st.toggle(
-        "Använd cross-encoder reranker",
-        key="do_rerank",
-        help="Långsammare första gången (laddar ~568 MB) men bättre precision. "
-        "Klicka för att byta till RAG-läget när utredningsläget är aktivt.",
-        on_change=_on_rerank_change,
-    )
     show_graph = st.toggle(
         "Visa kunskapsgraf",
         value=True,
@@ -358,58 +342,72 @@ with st.sidebar:
         "öppnar den — inte automatiskt efter varje svar. "
         "Kräver att Neo4j är igång (./neo4j.sh).",
     )
-    top_k = st.slider(
-        "Hämta top-K kandidater",
-        5,
-        50,
-        20,
-        help="Antal chunks som vektorsökningen plockar fram ur indexet i första "
-        "steget. Högre K → fler alternativ för rerankern att välja bland "
-        "(bättre täckning) men långsammare. Utan reranker används bara de "
-        "första top-N av dessa.",
-    )
-    top_n = st.slider(
-        "Skicka top-N till AI",
-        1,
-        15,
-        6,
-        help="Antal chunks (efter ev. reranking) som faktiskt skickas som "
-        "kontext till språkmodellen. Högre N → mer underlag men längre "
-        "prompt, högre kostnad och risk att modellen tappar fokus.",
-    )
 
-    # Sökfilter (RAG-läget): facetter ur kunskapsgrafen + OCR-tolerant fuzzy.
-    st.subheader("Sökfilter")
-    st.caption("Gäller RAG-läget (inte utredningsläget).")
-    _facet_data = _load_facets()
-    _facet_options: list[str] = []
+    do_rerank = st.session_state.get("do_rerank", True)
+    top_k = 20
+    top_n = 6
+    selected_facets: list[str] = []
     _facet_to_name: dict[str, str] = {}
-    for _typ in _facets.FACET_TYPES:
-        for _namn, _cnt in _facet_data.get(_typ, [])[:50]:
-            _label = f"{_typ}: {_namn} ({_cnt})"
-            _facet_options.append(_label)
-            _facet_to_name[_label] = _namn
-    selected_facets = st.multiselect(
-        "Begränsa till entiteter",
-        _facet_options,
-        help="Visa bara träffar ur dokument som nämner valda personer/platser/"
-        "organisationer (ur kunskapsgrafen). Tomt = ingen begränsning.",
-    )
-    fuzzy_on = st.toggle(
-        "OCR-tolerant fuzzy-sökning",
-        value=False,
-        help="Lägg till träffar där söktermer förekommer felstavade av OCR "
-        "(t.ex. 'Engstrcm' för 'Engström'). Första körningen bygger ett index "
-        "(~30 s, ~100 MB minne).",
-    )
-    fuzzy_threshold = st.slider(
-        "Fuzzy-likhet (tröskel)",
-        0.50, 0.95, 0.70, step=0.05,
-        help="Lägre = fångar fler felstavningar men mer brus. Korta namn med "
-        "ett OCR-fel (t.ex. 'Palme'→'Paine') kräver ~0.6; längre ord klarar "
-        "högre tröskel. Påverkar bara när fuzzy-sökning är på.",
-        disabled=not fuzzy_on,
-    )
+    fuzzy_on = False
+    fuzzy_threshold = 0.70
+
+    if not mcp_mode:
+        do_rerank = st.toggle(
+            "Använd cross-encoder reranker",
+            key="do_rerank",
+            help="Långsammare första gången (laddar ~568 MB) men bättre precision.",
+            on_change=_on_rerank_change,
+        )
+        top_k = st.slider(
+            "Hämta top-K kandidater",
+            5,
+            50,
+            20,
+            help="Antal chunks som vektorsökningen plockar fram ur indexet i första "
+            "steget. Högre K → fler alternativ för rerankern att välja bland "
+            "(bättre täckning) men långsammare. Utan reranker används bara de "
+            "första top-N av dessa.",
+        )
+        top_n = st.slider(
+            "Skicka top-N till AI",
+            1,
+            15,
+            6,
+            help="Antal chunks (efter ev. reranking) som faktiskt skickas som "
+            "kontext till språkmodellen. Högre N → mer underlag men längre "
+            "prompt, högre kostnad och risk att modellen tappar fokus.",
+        )
+
+        # Sökfilter (RAG-läget): facetter ur kunskapsgrafen + OCR-tolerant fuzzy.
+        st.subheader("Sökfilter")
+        _facet_data = _load_facets()
+        _facet_options: list[str] = []
+        for _typ in _facets.FACET_TYPES:
+            for _namn, _cnt in _facet_data.get(_typ, [])[:50]:
+                _label = f"{_typ}: {_namn} ({_cnt})"
+                _facet_options.append(_label)
+                _facet_to_name[_label] = _namn
+        selected_facets = st.multiselect(
+            "Begränsa till entiteter",
+            _facet_options,
+            help="Visa bara träffar ur dokument som nämner valda personer/platser/"
+            "organisationer (ur kunskapsgrafen). Tomt = ingen begränsning.",
+        )
+        fuzzy_on = st.toggle(
+            "OCR-tolerant fuzzy-sökning",
+            value=False,
+            help="Lägg till träffar där söktermer förekommer felstavade av OCR "
+            "(t.ex. 'Engstrcm' för 'Engström'). Första körningen bygger ett index "
+            "(~30 s, ~100 MB minne).",
+        )
+        fuzzy_threshold = st.slider(
+            "Fuzzy-likhet (tröskel)",
+            0.50, 0.95, 0.70, step=0.05,
+            help="Lägre = fångar fler felstavningar men mer brus. Korta namn med "
+            "ett OCR-fel (t.ex. 'Palme'→'Paine') kräver ~0.6; längre ord klarar "
+            "högre tröskel. Påverkar bara när fuzzy-sökning är på.",
+            disabled=not fuzzy_on,
+        )
 
 if backend["kind"] == "claude":
     if not (
@@ -432,28 +430,6 @@ ss.setdefault("chat_history", [])
 ss.setdefault("mcp_session_id", None)
 ss.setdefault("openai_chat_messages", [])
 ss.setdefault("answer_centers", [])
-
-# Klick på inline-citatknapp i svaret: ?pdf=<base64-encoded path> → öppna PDF.
-# PDF-sökvägen kodas direkt i URL:en så det fungerar även om session_state
-# försvinner vid full sidladdning. Validerar att path ligger under ROOT.
-qp = st.query_params
-if "pdf" in qp:
-    try:
-        token = qp["pdf"]
-        token += "=" * (-len(token) % 4)
-        path = Path(base64.urlsafe_b64decode(token).decode()).resolve()
-        # is_relative_to följer den fullt resolvade strängen — slipper symlink-fel
-        # där path.parents kan innehålla ROOT trots att resolve() pekar utanför.
-        if (
-            path.is_file()
-            and path.suffix.lower() == ".pdf"
-            and path.is_relative_to(ROOT.resolve())
-        ):
-            subprocess.Popen(["open", str(path)])
-    except (ValueError, OSError):
-        pass
-    st.query_params.clear()
-
 
 def _mcp_tool_label(name: str, inp: dict) -> str:
     """Människoläsbar etikett för ett MCP-verktygsanrop (namnet är prefixat
@@ -851,8 +827,8 @@ def _render_cytoscape_graph(nodes: list[dict], edges: list[dict],
     """Interaktiv Cytoscape-graf (st-link-analysis).
 
     Dubbelklick på en entitetsnod fäller ut dess grannskap; dubbelklick på en
-    dokumentnod öppnar PDF:en lokalt. Expand-händelser dedupas på timestamp
-    eftersom komponentens returvärde består över reruns."""
+    dokumentnod öppnar PDF:en i ny webbläsarflik. Expand-händelser dedupas på
+    timestamp eftersom komponentens returvärde består över reruns."""
     elements = _viz.to_cytoscape_elements(nodes, edges)
     node_styles = [
         NodeStyle(typ, _viz.NODE_COLORS[typ], "name", _viz.NODE_ICONS[typ])
@@ -886,10 +862,7 @@ def _render_cytoscape_graph(nodes: list[dict], edges: list[dict],
         if n["type"] == "Dokument":
             pdf = find_pdf(n.get("stem") or "")
             if pdf:
-                try:
-                    subprocess.Popen(["open", str(pdf)])
-                except OSError as e:
-                    st.error(f"Kan inte öppna fil: {e}")
+                _casebook_ui.open_pdf_in_browser(pdf)
         elif nid not in expanded_norms:
             ss[extra_key].append({"norm": nid, "namn": n["namn"],
                                   "label": n["type"]})

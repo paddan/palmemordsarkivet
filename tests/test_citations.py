@@ -92,6 +92,16 @@ def test_pdf_anchor_format(tmp_path: Path) -> None:
     assert "&quot;PDF&quot;" in out
 
 
+def test_pdf_anchor_can_include_page_query_param(tmp_path: Path) -> None:
+    from citations import pdf_anchor
+
+    pdf = tmp_path / "281 — Titel.pdf"
+
+    out = pdf_anchor(pdf, "281", page=4)
+
+    assert "&page=4" in out
+
+
 # ---------------------------------------------------------------------------
 # linkify_citations
 # ---------------------------------------------------------------------------
@@ -101,6 +111,7 @@ def test_linkify_single_match_renders_anchor(tmp_path: Path) -> None:
     out = linkify_citations("Se [Nr 281, sida 4].", mapping)
     assert "<a href=" in out
     assert "[Nr 281, sida 4]" in out
+    assert "&page=4" in out
 
 
 def test_linkify_escapes_unknown_html_but_keeps_citation_anchor(tmp_path: Path) -> None:
@@ -145,6 +156,42 @@ def test_linkify_ambiguous_renders_one_link_per_candidate(tmp_path: Path) -> Non
     assert out.count("<a href=") == 2
 
 
+def test_linkify_pol_reference_without_nr_prefix(tmp_path: Path) -> None:
+    mapping = _mapping(tmp_path, [
+        "Pol-1996-12-19_KK17882-00-B_Förhör-advokat-Per-Svensson",
+    ])
+
+    out = linkify_citations("Se [Pol-1996-12-19, sida 40].", mapping)
+
+    assert out.count("<a href=") == 1
+    assert "Pol-1996-12-19, sida 40" in out
+
+
+def test_linkify_multiple_references_inside_same_brackets(tmp_path: Path) -> None:
+    mapping = _mapping(tmp_path, [
+        "282.1 — Förhör med advokat Pelle Svensson",
+        "Pol-1996-12-19_KK17882-00-B_Förhör-advokat-Per-Svensson",
+        "Pol-1997-12-05_DH16321-00-Q_Okänd_påstår_att_Lennart_G_vet_vart_GF_har_mordvapnet",
+        "Pol-1997-12-05_KH18116-00_resningsansökan_mot_CP",
+    ])
+
+    out = linkify_citations(
+        "[Nr 282.1, sida 30; Pol-1996-12-19, sida 40] och "
+        "[Pol-1997-12-05, sida 20].",
+        mapping,
+        known_sources={
+            "282.1 — Förhör med advokat Pelle Svensson.txt",
+            "Pol-1996-12-19_KK17882-00-B_Förhör-advokat-Per-Svensson.txt",
+            "Pol-1997-12-05_DH16321-00-Q_Okänd_påstår_att_Lennart_G_vet_vart_GF_har_mordvapnet.txt",
+        },
+    )
+
+    assert out.count("<a href=") == 3
+    assert "Nr 282.1, sida 30" in out
+    assert "Pol-1996-12-19, sida 40" in out
+    assert "Pol-1997-12-05, sida 20" in out
+
+
 # ---------------------------------------------------------------------------
 # extract_cited_sources
 # ---------------------------------------------------------------------------
@@ -155,7 +202,20 @@ def test_extract_cited_sources_dedups_per_stem(tmp_path: Path) -> None:
     srcs = extract_cited_sources(answer, mapping)
     assert len(srcs) == 1
     assert srcs[0]["source"] == "281 — Titel.txt"
+    assert srcs[0]["page"] == 1
     assert srcs[0]["titel"] == "Titel"
+
+
+def test_extract_cited_sources_handles_pol_reference_without_nr(tmp_path: Path) -> None:
+    mapping = _mapping(tmp_path, [
+        "Pol-1996-12-19_KK17882-00-B_Förhör-advokat-Per-Svensson",
+    ])
+
+    srcs = extract_cited_sources("[Pol-1996-12-19, sida 40]", mapping)
+
+    assert len(srcs) == 1
+    assert srcs[0]["source"] == "Pol-1996-12-19_KK17882-00-B_Förhör-advokat-Per-Svensson.txt"
+    assert srcs[0]["page"] == 40
 
 
 def test_extract_cited_sources_empty_for_no_citations(tmp_path: Path) -> None:

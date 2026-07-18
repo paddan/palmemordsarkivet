@@ -13,15 +13,16 @@ import json
 import os
 import re
 import sqlite3
-from contextlib import suppress
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import NamedTuple
 
 ROOT = Path(__file__).resolve().parents[1]
 
 DEFAULT_DB: Path = Path(os.environ.get("STATE_DB", str(ROOT / "generated" / "db" / "state.db")))
 
-SCHEMA_VERSION: int = 5
+SCHEMA_VERSION: int = 6
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -260,6 +261,87 @@ def now() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat()
 
 
+class _Migration(NamedTuple):
+    version: int
+    name: str
+    apply: Callable[[sqlite3.Connection], None]
+
+
+def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+        (table,),
+    ).fetchone()
+    return row is not None
+
+
+def _state_tables(conn: sqlite3.Connection) -> set[str]:
+    return {
+        row[0]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' "
+            "AND name NOT LIKE 'sqlite_%'"
+        )
+    }
+
+
+def _ensure_schema_version_table(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS schema_version (
+            version    INTEGER PRIMARY KEY,
+            applied_at TEXT NOT NULL
+        )
+        """
+    )
+
+
+def schema_version(conn: sqlite3.Connection) -> int:
+    """Returnera högsta tillämpade schema-version, eller 0 för omarkerad db."""
+    if not _table_exists(conn, "schema_version"):
+        return 0
+    row = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()
+    return int(row[0] or 0)
+
+
+def _record_schema_version(conn: sqlite3.Connection, version: int) -> None:
+    conn.execute(
+        "INSERT OR IGNORE INTO schema_version(version, applied_at) VALUES (?, ?)",
+        (version, now()),
+    )
+
+
+def _set_sqlite_user_version(conn: sqlite3.Connection, version: int) -> None:
+    conn.execute(f"PRAGMA user_version = {int(version)}")
+
+
+def _column_names(conn: sqlite3.Connection, table: str) -> set[str]:
+    return {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+
+
+def _add_column_if_missing(
+    conn: sqlite3.Connection, table: str, column: str, typedef: str
+) -> None:
+    if column not in _column_names(conn, table):
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {typedef}")
+
+
+def _migration_006_pdf_file_ocr_status(conn: sqlite3.Connection) -> None:
+    """Lägg till OCR-felstatus som tidigare låg i ad hoc-ALTER."""
+    for col, typedef in [
+        ("tesseract_done_at", "TEXT"),
+        ("tesseract_failed", "INTEGER DEFAULT 0"),
+        ("tesseract_blacklisted_at", "TEXT"),
+        ("surya_failed_at", "TEXT"),
+    ]:
+        _add_column_if_missing(conn, "pdf_files", col, typedef)
+
+
+MIGRATIONS: tuple[_Migration, ...] = (
+    _Migration(6, "pdf_files OCR-felstatus", _migration_006_pdf_file_ocr_status),
+)
+
+
 def connect(path: Path | None = None) -> sqlite3.Connection:
     """Öppna SQLite-anslutning med WAL, foreign keys och rimliga defaults.
 
@@ -283,21 +365,30 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
 
 
 def init_schema(conn: sqlite3.Connection) -> None:
-    """Idempotent schema-init. Säker att köra flera gånger."""
+    """Idempotent schema-init och versionsstyrda uppgraderingar."""
+    _ensure_schema_version_table(conn)
+    current = schema_version(conn)
+    if current > SCHEMA_VERSION:
+        raise RuntimeError(
+            f"state.db har nyare schema-version {current} än koden stödjer "
+            f"({SCHEMA_VERSION})"
+        )
+
+    existing_tables = _state_tables(conn) - {"schema_version"}
     conn.executescript(SCHEMA_SQL)
-    conn.execute(
-        "INSERT OR IGNORE INTO schema_version(version, applied_at) VALUES (?, ?)",
-        (SCHEMA_VERSION, now()),
-    )
-    # Lägg till kolumner som tillkommit efter första driftsättning.
-    for col, typedef in [
-        ("tesseract_done_at", "TEXT"),
-        ("tesseract_failed", "INTEGER DEFAULT 0"),
-        ("tesseract_blacklisted_at", "TEXT"),
-        ("surya_failed_at", "TEXT"),
-    ]:
-        with suppress(sqlite3.OperationalError):
-            conn.execute(f"ALTER TABLE pdf_files ADD COLUMN {col} {typedef}")
+
+    if current == 0 and not existing_tables:
+        _record_schema_version(conn, SCHEMA_VERSION)
+        _set_sqlite_user_version(conn, SCHEMA_VERSION)
+        conn.commit()
+        return
+
+    for migration in MIGRATIONS:
+        if migration.version > current:
+            migration.apply(conn)
+            _record_schema_version(conn, migration.version)
+
+    _set_sqlite_user_version(conn, schema_version(conn))
     conn.commit()
 
 

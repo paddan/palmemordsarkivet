@@ -197,6 +197,53 @@ def test_graph_page_accepts_casebook_centers_query_param() -> None:
     assert "linked_centers" in text
 
 
+def test_compare_page_installs_shared_pdf_opener_for_citation_links() -> None:
+    project_root = Path(__file__).resolve().parents[1]
+    text = (project_root / "src" / "pages" / "6_Jämförelse.py").read_text(encoding="utf-8")
+    assert "_casebook_ui.render_pdf_opener(ROOT)" in text
+
+
+def test_utredning_installs_shared_pdf_opener_for_citation_links() -> None:
+    project_root = Path(__file__).resolve().parents[1]
+    text = (project_root / "src" / "Utredning.py").read_text(encoding="utf-8")
+    assert "_casebook_ui.render_pdf_opener(ROOT)" in text
+    assert "urlsafe_b64decode" not in text
+
+
+def test_casebook_page_installs_shared_pdf_opener_for_saved_answers() -> None:
+    project_root = Path(__file__).resolve().parents[1]
+    text = (project_root / "src" / "casebook_ui.py").read_text(encoding="utf-8")
+    page_block = text.split("def render_casebook_page", 1)[1].split(
+        "def _render_saved_answers", 1
+    )[0]
+    assert "render_pdf_opener(root)" in page_block
+
+
+def test_utredning_sidebar_hides_rag_only_controls_in_mcp_mode() -> None:
+    project_root = Path(__file__).resolve().parents[1]
+    text = (project_root / "src" / "Utredning.py").read_text(encoding="utf-8")
+
+    marker = (
+        'if not mcp_mode:\n'
+        '        do_rerank = st.toggle(\n'
+        '            "Använd cross-encoder reranker"'
+    )
+    assert marker in text
+    rag_block = text.split(marker, 1)[1].split('if backend["kind"] == "claude":', 1)[0]
+
+    for label in (
+        "Hämta top-K kandidater",
+        "Skicka top-N till AI",
+        "Sökfilter",
+        "Begränsa till entiteter",
+        "OCR-tolerant fuzzy-sökning",
+    ):
+        assert label in rag_block
+
+    mcp_sidebar_block = text.split('mcp_mode = st.toggle(', 1)[1].split(marker, 1)[0]
+    assert "Visa kunskapsgraf" in mcp_sidebar_block
+
+
 # ---------------------------------------------------------------------------
 # ocr_db_helper.py — text_mtime-stämpling
 # ---------------------------------------------------------------------------
