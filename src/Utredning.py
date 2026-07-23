@@ -338,7 +338,7 @@ with st.sidebar:
         value=True,
         key="show_graph",
         help="Visar en hopfällbar grafsektion under svaret. Själva grafen "
-        "(entitetsextraktion med Claude Haiku + Neo4j) byggs först när du "
+        "(entitetsextraktion med vald LLM-backend + Neo4j) byggs först när du "
         "öppnar den — inte automatiskt efter varje svar. "
         "Kräver att Neo4j är igång (./neo4j.sh).",
     )

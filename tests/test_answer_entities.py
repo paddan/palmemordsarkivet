@@ -1,15 +1,15 @@
 """Tester för answer_entities — parsning och LLM-konfigval."""
 from __future__ import annotations
 
-import sys
 import asyncio
+import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from graph.answer_entities import parse_entity_list
+from graph.answer_entities import parse_entity_list  # noqa: E402
 
 
 class _FakeAsyncOpenAIClient:
@@ -73,12 +73,31 @@ def test_parse_degenerate_input_is_fast() -> None:
     assert time.monotonic() - start < 1.0
 
 
-def test_resolve_entity_cfg_prefers_haiku(monkeypatch) -> None:
+def test_resolve_entity_cfg_uses_haiku_when_claude_selected(monkeypatch) -> None:
     from graph.answer_entities import DEFAULT_CLAUDE_MODEL, resolve_entity_cfg
     monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "tok")
-    cfg = resolve_entity_cfg({"provider": "openai", "model": "gpt-4o"})
+    cfg = resolve_entity_cfg({"provider": "claude", "model": "claude-opus-4-8"})
     assert cfg == {"provider": "claude", "model": DEFAULT_CLAUDE_MODEL,
                    "base_url": "", "api_key": ""}
+
+
+def test_resolve_entity_cfg_respects_selected_deepseek_with_claude_creds(
+    monkeypatch,
+) -> None:
+    from graph.answer_entities import resolve_entity_cfg
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "tok")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "ds-x")
+    cfg = resolve_entity_cfg({
+        "provider": "openai",
+        "model": "deepseek-v4-flash",
+        "base_url": "https://api.deepseek.com/v1",
+    })
+    assert cfg == {
+        "provider": "openai",
+        "model": "deepseek-v4-flash",
+        "base_url": "https://api.deepseek.com/v1",
+        "api_key": "ds-x",
+    }
 
 
 def test_resolve_entity_cfg_falls_back_to_openai(monkeypatch) -> None:

@@ -483,11 +483,12 @@ När Neo4j är igång (`./neo4j.sh` + `./load_graph.sh`) erbjuds ett ego-nätver
 kunskapsgrafen som en hopfälld sektion (toggle) i fullbredd mellan svaret och
 källistan — i både RAG-läget och utredningsläget. **Grafen byggs först när
 användaren öppnar toggeln, inte automatiskt efter varje svar.** Det är då, och
-bara då, som Claude Haiku listar svarets nyckelentiteter
-(`src/graph/answer_entities.py`), namnen slås upp i grafen
-(`viz.lookup_centers`) och ritas med Cytoscape (st-link-analysis, ingår i
-extran `.[graph]`). Resultatet (center-noderna) cachas per svar i session state
-så att öppna/stänga eller andra reruns inte kör om den dyra extraktionen.
+bara då, som den valda LLM-backenden listar svarets nyckelentiteter
+(`src/graph/answer_entities.py`). DeepSeek/OpenAI använder vald modell och
+Claude använder Haiku för den lilla extraktionsuppgiften. Namnen slås upp i
+grafen (`viz.lookup_centers`) och ritas med Cytoscape (st-link-analysis, ingår
+i extran `.[graph]`). Resultatet (center-noderna) cachas per svar i session
+state så att öppna/stänga eller andra reruns inte kör om den dyra extraktionen.
 Cytoscape-komponenten kan dessutom inte monteras dold (ingen resize-hantering),
 så grafen ritas oavsett bara när sektionen är synlig. `Visa kunskapsgraf` i
 sidofältet styr om sektionen (toggeln) visas alls.
@@ -711,7 +712,7 @@ delas mellan Utredning-fliken och `llm_config.sh` så att valen alltid är ident
 | `load_graph.sh` → `src/graph/load_neo4j.py` | Ladda kunskapsgrafen från state.db till Neo4j |
 | `neo4j.sh` | Starta/stoppa Neo4j via podman (genererar lösenord → `neo4j/.password`) |
 | `src/graph/viz.py` | Bygg ego-nätverk (flera center) + Cytoscape-konvertering för grafvyerna |
-| `src/graph/answer_entities.py` | LLM (Claude Haiku) listar nyckelentiteter ur ett RAG-svar — driver inline-grafen i Utredning-fliken |
+| `src/graph/answer_entities.py` | Vald LLM-backend listar nyckelentiteter ur ett RAG-svar — DeepSeek/OpenAI använder vald modell, Claude använder Haiku |
 | `src/pages/3_Graf.py` | Streamlit-grafsida: sök entitet → interaktivt nätverk, fäll ut noder |
 | `neo4j/docker-compose.yml` | Neo4j 5 för kunskapsgrafen med Docker (Browser på :7474) |
 | `web.sh` | Wrapper för Streamlit-servern |

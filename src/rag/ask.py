@@ -99,7 +99,7 @@ def search_hybrid(table, model, q: str, top_k: int) -> list[dict]:
         fts_hits = (
             table.search(q, query_type="fts")
             .limit(top_k)
-            .select(SELECT_COLS)
+            .select([*SELECT_COLS, "_score"])
             .to_list()
         )
     except (RuntimeError, ValueError, OSError) as e:

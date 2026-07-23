@@ -8,14 +8,17 @@ from __future__ import annotations
 import json
 import os
 import sys
-from urllib.parse import urlparse
 from pathlib import Path
+from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 
 from claude_agent_sdk import (  # noqa: E402
-    AssistantMessage, ClaudeAgentOptions, TextBlock, query,
+    AssistantMessage,
+    ClaudeAgentOptions,
+    TextBlock,
+    query,
 )
 
 try:
@@ -81,13 +84,11 @@ def parse_entity_list(raw: str) -> list[str]:
 def resolve_entity_cfg(saved: dict) -> dict | None:
     """Välj LLM för entitetslistningen.
 
-    Default Claude Haiku — snabb, billig mikrouppgift, oberoende av vilken
-    modell som genererade svaret. Saknas Claude-creds används openai-providern
-    i llm_config om den är körbar (nyckel eller lokal base_url), annars None
-    (anroparen degraderar tyst — Utredning-sidan får aldrig krascha på grafen)."""
-    if os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") or os.environ.get("ANTHROPIC_API_KEY"):
-        return {"provider": "claude", "model": DEFAULT_CLAUDE_MODEL,
-                "base_url": "", "api_key": ""}
+    Den sparade providern styr: en vald OpenAI-kompatibel backend (inklusive
+    DeepSeek) används när endpointens credentials finns. Claude använder Haiku
+    för den lilla uppgiften, men bara när Claude faktiskt är vald. Saknas den
+    valda providerns credentials returneras None och anroparen degraderar tyst.
+    """
     if saved.get("provider") == "openai":
         base_url = saved.get("base_url", "")
         api_key = _api_key_for_openai_base_url(base_url)
@@ -97,6 +98,12 @@ def resolve_entity_cfg(saved: dict) -> dict | None:
             return {"provider": "openai",
                     "model": saved.get("model") or OPENAI_DEFAULT_MODEL,
                     "base_url": base_url, "api_key": api_key}
+    if saved.get("provider") == "claude" and (
+        os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
+        or os.environ.get("ANTHROPIC_API_KEY")
+    ):
+        return {"provider": "claude", "model": DEFAULT_CLAUDE_MODEL,
+                "base_url": "", "api_key": ""}
     return None
 
 

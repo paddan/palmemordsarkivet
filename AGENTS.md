@@ -68,7 +68,7 @@ src/
     extract_entities.py # Per-sida entitets-/relationsextraktion via LLM → doc_entities i state.db
     load_neo4j.py       # Ladda doc_entities → Neo4j (MERGE, idempotent) + namnkanonisering
     viz.py              # Ego-nätverk för flera center (Cypher → noder/kanter, dedup) + Cytoscape-konvertering
-    answer_entities.py  # LLM (Haiku) listar nyckelentiteter ur ett RAG-svar → inline-grafen i Utredning
+    answer_entities.py  # Vald LLM-backend listar nyckelentiteter ur ett RAG-svar → inline-grafen i Utredning
 tests/                 # pytest (inkl. gamla state-db-fixtures för migrationsskydd)
 *.sh                   # Bash-wrappers (aktiverar .venv, läser API-nycklar, vidarebefordrar flaggor)
 tessdata/              # swe_best.traineddata, swe.user-words, tesseract.config
@@ -135,7 +135,7 @@ Env-variabler: `CLAUDE_CODE_OAUTH_TOKEN` (Pro/Max, räknas mot prenumeration) el
 
 **PDF-opener för citat/källor**: inline-citat och källkort använder `casebook_ui.render_pdf_opener` + `citations.pdf_anchor`. När sidnummer finns ska länken bära `page=N`; openern validerar både PDF-token och sida, bygger `file://...#page=N` och öppnar PDF:en med `webbrowser.open(..., new=2)` så den hamnar i en ny webbläsarflik i stället för macOS Preview. Utredning, Jämförelse, Utredningspärm och grafens dokumentöppningar ska använda samma opener.
 
-**Kunskapsgraf byggs lazy (Utredning.py)**: `_render_answer_graph` tar svaret, inte färdiga centers. Den dyra entitetsextraktionen (`_compute_answer_centers` → Claude Haiku) och Neo4j-frågorna körs **först när användaren öppnar graf-toggeln** — inte automatiskt efter varje svar. Resultatet cachas per svar i session state och returneras så utredningspärmen kan spara det.
+**Kunskapsgraf byggs lazy (Utredning.py)**: `_render_answer_graph` tar svaret, inte färdiga centers. Den dyra entitetsextraktionen (`_compute_answer_centers` → vald backend i `generated/llm_config.json`) och Neo4j-frågorna körs **först när användaren öppnar graf-toggeln** — inte automatiskt efter varje svar. DeepSeek/OpenAI använder vald modell; Claude använder Haiku för den lilla extraktionsuppgiften. Resultatet cachas per svar i session state och returneras så utredningspärmen kan spara det.
 
 **SQLite-state (`generated/db/state.db`)**: all operativ pipeline-state lever här —
 downloads, per-PDF-status (redaktion/merge/normalize), per-sida OCR-resultat,

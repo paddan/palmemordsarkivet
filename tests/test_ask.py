@@ -10,12 +10,14 @@ from ask import _hit_key, format_context, search_hybrid
 class _FakeQuery:
     def __init__(self, rows: list[dict]):
         self._rows = rows
+        self.selected: list[str] | None = None
 
     def limit(self, n: int) -> "_FakeQuery":
         self._rows = self._rows[:n]
         return self
 
     def select(self, cols) -> "_FakeQuery":
+        self.selected = list(cols)
         return self
 
     def to_list(self) -> list[dict]:
@@ -30,13 +32,17 @@ class _FakeTable:
         self._vec = vec_rows
         self._fts = fts_rows or []
         self._fts_error = fts_error
+        self.vec_query: _FakeQuery | None = None
+        self.fts_query: _FakeQuery | None = None
 
     def search(self, q, query_type: str | None = None):
         if query_type == "fts":
             if self._fts_error is not None:
                 raise self._fts_error
-            return _FakeQuery(self._fts)
-        return _FakeQuery(self._vec)
+            self.fts_query = _FakeQuery(self._fts)
+            return self.fts_query
+        self.vec_query = _FakeQuery(self._vec)
+        return self.vec_query
 
 
 class _FakeModel:
@@ -93,6 +99,19 @@ def test_rrf_respects_top_k() -> None:
     table = _FakeTable(vec_rows=vec, fts_rows=fts)
     hits = search_hybrid(table, _FakeModel(), "fråga", top_k=4)
     assert len(hits) == 4
+
+
+def test_fts_search_selects_score_to_avoid_lancedb_warning() -> None:
+    table = _FakeTable(
+        vec_rows=[_hit("v.txt", 1, 0)],
+        fts_rows=[_hit("f.txt", 1, 0)],
+    )
+
+    search_hybrid(table, _FakeModel(), "fråga", top_k=2)
+
+    assert table.fts_query is not None
+    assert table.fts_query.selected is not None
+    assert "_score" in table.fts_query.selected
 
 
 def test_fts_failure_falls_back_to_vector_hits() -> None:
