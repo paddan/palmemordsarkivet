@@ -1319,7 +1319,7 @@ def list_map_observations(
     return [_row_dict(row) for row in rows]
 
 
-def record_map_observation(
+def _insert_map_observation(
     conn: sqlite3.Connection,
     *,
     person: str,
@@ -1332,7 +1332,7 @@ def record_map_observation(
     sida: int | None = None,
     note: str | None = None,
 ) -> int:
-    """Spara en källhänvisad kartobservation och returnera rad-id."""
+    """Infoga en kartobservation utan att avsluta anroparens transaktion."""
     clean_person = person.strip()
     if not clean_person:
         raise ValueError("person får inte vara tom")
@@ -1360,8 +1360,37 @@ def record_map_observation(
             stamp,
         ),
     )
-    conn.commit()
     return int(cur.lastrowid)
+
+
+def record_map_observation(
+    conn: sqlite3.Connection,
+    *,
+    person: str,
+    place_name: str | None = None,
+    lat: float,
+    lon: float,
+    time: str | None = None,
+    uncertainty: str | None = None,
+    nr: str | None = None,
+    sida: int | None = None,
+    note: str | None = None,
+) -> int:
+    """Spara en källhänvisad kartobservation och returnera rad-id."""
+    observation_id = _insert_map_observation(
+        conn,
+        person=person,
+        place_name=place_name,
+        lat=lat,
+        lon=lon,
+        time=time,
+        uncertainty=uncertainty,
+        nr=nr,
+        sida=sida,
+        note=note,
+    )
+    conn.commit()
+    return observation_id
 
 
 def update_map_observation(conn: sqlite3.Connection, obs_id: int, **fields) -> bool:
@@ -1783,46 +1812,48 @@ def reject_map_observation_candidate(conn: sqlite3.Connection, candidate_id: int
 
 def approve_map_observation_candidate(conn: sqlite3.Connection, candidate_id: int) -> int:
     """Skapa en publicerad kartobservation från en granskad kandidat."""
-    row = conn.execute(
-        """
-        SELECT id, person, raw_place, place_name, lat, lon, time, uncertainty,
-               nr, sida, note, quote
-        FROM map_observation_candidates
-        WHERE id=? AND status='pending'
-        """,
-        (candidate_id,),
-    ).fetchone()
-    if row is None:
-        raise ValueError("kandidaten saknas eller är redan granskad")
-    if row["lat"] is None or row["lon"] is None:
-        raise ValueError("lat/lon krävs innan kandidaten kan godkännas")
-    if not row["time"]:
-        raise ValueError("time krävs innan kandidaten kan godkännas")
-    if not row["nr"] or row["sida"] is None:
-        raise ValueError("nr och sida krävs innan kandidaten kan godkännas")
-    note = row["note"] or row["quote"]
-    observation_id = record_map_observation(
-        conn,
-        person=row["person"],
-        place_name=row["place_name"] or row["raw_place"],
-        lat=row["lat"],
-        lon=row["lon"],
-        time=row["time"],
-        uncertainty=row["uncertainty"],
-        nr=row["nr"],
-        sida=row["sida"],
-        note=note,
-    )
-    stamp = now()
-    conn.execute(
-        """
-        UPDATE map_observation_candidates
-        SET status='approved', map_observation_id=?, updated_at=?, reviewed_at=?
-        WHERE id=?
-        """,
-        (observation_id, stamp, stamp, candidate_id),
-    )
-    conn.commit()
+    with conn:
+        row = conn.execute(
+            """
+            SELECT id, person, raw_place, place_name, lat, lon, time, uncertainty,
+                   nr, sida, note, quote
+            FROM map_observation_candidates
+            WHERE id=? AND status='pending'
+            """,
+            (candidate_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("kandidaten saknas eller är redan granskad")
+        if row["lat"] is None or row["lon"] is None:
+            raise ValueError("lat/lon krävs innan kandidaten kan godkännas")
+        if not row["time"]:
+            raise ValueError("time krävs innan kandidaten kan godkännas")
+        if not row["nr"] or row["sida"] is None:
+            raise ValueError("nr och sida krävs innan kandidaten kan godkännas")
+        note = row["note"] or row["quote"]
+        observation_id = _insert_map_observation(
+            conn,
+            person=row["person"],
+            place_name=row["place_name"] or row["raw_place"],
+            lat=row["lat"],
+            lon=row["lon"],
+            time=row["time"],
+            uncertainty=row["uncertainty"],
+            nr=row["nr"],
+            sida=row["sida"],
+            note=note,
+        )
+        stamp = now()
+        cur = conn.execute(
+            """
+            UPDATE map_observation_candidates
+            SET status='approved', map_observation_id=?, updated_at=?, reviewed_at=?
+            WHERE id=? AND status='pending'
+            """,
+            (observation_id, stamp, stamp, candidate_id),
+        )
+        if cur.rowcount != 1:
+            raise ValueError("kandidaten saknas eller är redan granskad")
     return observation_id
 
 

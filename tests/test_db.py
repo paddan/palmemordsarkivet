@@ -1090,6 +1090,47 @@ def test_update_reject_and_approve_map_observation_candidate(tmp_path):
     assert list_map_observation_candidates(conn, status="rejected")[0]["id"] == reject_id
 
 
+def test_approve_candidate_rolls_back_observation_when_status_update_fails(tmp_path):
+    conn = _fresh(tmp_path)
+    candidate_id = record_map_observation_candidate(
+        conn,
+        pdf_stem="2055 — Grandbesökare",
+        page_num=3,
+        person="Olof Palme",
+        raw_place="Grand",
+        place_name="Biografen Grand",
+        lat=59.34057,
+        lon=18.06024,
+        time="21:15",
+        uncertainty="ca",
+        nr="2055",
+        sida=3,
+        quote="Olof Palme sågs vid Grand omkring 21.15.",
+        note="Källbelagd observation.",
+        confidence="medium",
+        place_match="exact",
+        model="test-model",
+    )
+    conn.execute(
+        """
+        CREATE TRIGGER fail_candidate_approval
+        BEFORE UPDATE OF status ON map_observation_candidates
+        WHEN NEW.status = 'approved'
+        BEGIN
+            SELECT RAISE(ABORT, 'simulerat uppdateringsfel');
+        END
+        """
+    )
+    conn.commit()
+
+    with pytest.raises(sqlite3.IntegrityError, match="simulerat uppdateringsfel"):
+        approve_map_observation_candidate(conn, candidate_id)
+    conn.rollback()
+
+    assert list_map_observations(conn, person="Olof Palme") == []
+    assert list_map_observation_candidates(conn, status="pending")[0]["id"] == candidate_id
+
+
 def test_approve_candidate_requires_time_source_and_coordinates(tmp_path):
     conn = _fresh(tmp_path)
     candidate_id = record_map_observation_candidate(
