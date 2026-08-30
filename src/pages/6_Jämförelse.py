@@ -125,7 +125,7 @@ async def _run_compare(topic: str, hits: list[dict], cfg: dict, placeholder) -> 
     else:
         await _stream_openai(user_msg, placeholder, parts, cfg)
     known = {h["source"] for h in hits}
-    final = _citations.linkify_citations("".join(parts), _nr_to_pdf(), known_sources=known)
+    final: str = _citations.linkify_citations("".join(parts), _nr_to_pdf(), known_sources=known)
     placeholder.markdown(final, unsafe_allow_html=True)
     return final
 

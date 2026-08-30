@@ -7,7 +7,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from graph.viz import assemble_graph, dedup_rels, search_entities
+from graph.viz import (  # noqa: E402 — kräver src på sys.path ovan
+    assemble_graph,
+    dedup_rels,
+    search_entities,
+)
 
 
 def test_assemble_graph_center_with_relations_and_docs() -> None:

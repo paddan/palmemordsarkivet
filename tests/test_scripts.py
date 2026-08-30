@@ -1,175 +1,104 @@
-"""Regressionstester för pipeline-wrappers."""
+"""Regressionstester för Python-entrypoints och borttagna shell-script."""
 
 from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
-def _stub(root: Path, name: str) -> None:
-    path = root / name
-    path.write_text(
-        f"#!/bin/bash\nprintf '%s\\n' {name!r} >> {str(root / 'calls')!r}\n",
-        encoding="utf-8",
-    )
-    path.chmod(0o755)
-
-
-def test_run_pipeline_resumes_pending_steps_without_new_downloads(tmp_path: Path) -> None:
-    project_root = Path(__file__).resolve().parents[1]
-    script = tmp_path / "run_pipeline.sh"
-    script.write_text(
-        (project_root / "run_pipeline.sh").read_text(encoding="utf-8"),
-        encoding="utf-8",
-    )
-    script.chmod(0o755)
-
-    for name in ("download.sh", "download_wpu.sh", "ocr.sh", "ingest.sh"):
-        _stub(tmp_path, name)
-
-    result = subprocess.run(
-        [str(script)],
-        cwd=tmp_path,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-
-    assert result.returncode == 0, result.stderr
-    calls = (tmp_path / "calls").read_text(encoding="utf-8").splitlines()
-    assert "ocr.sh" in calls
-    assert "ingest.sh" in calls
+SHELL_TO_PYTHON = {
+    "build_user_words.sh": "build_user_words.py",
+    "detect_redactions.sh": "detect_redactions.py",
+    "download.sh": "download.py",
+    "download_wpu.sh": "download_wpu.py",
+    "extract_entities.sh": "extract_entities.py",
+    "extract_map_observations.sh": "extract_map_observations.py",
+    "ingest.sh": "ingest.py",
+    "install.sh": "install.py",
+    "llm_config.sh": "llm_config.py",
+    "llm_correct.sh": "llm_correct.py",
+    "load_graph.sh": "load_graph.py",
+    "merge_pages.sh": "merge_pages.py",
+    "merge_wpu.sh": "merge_wpu.py",
+    "neo4j.sh": "neo4j.py",
+    "normalize.sh": "normalize.py",
+    "ocr.sh": "ocr.py",
+    "ocr_pages.sh": "ocr_pages.py",
+    "ocr_tesseract.sh": "ocr_tesseract.py",
+    "quality.sh": "quality.py",
+    "run_pipeline.sh": "run_pipeline.py",
+    "setup_tessdata.sh": "setup_tessdata.py",
+    "test.sh": "test.py",
+    "web.sh": "web.py",
+}
 
 
-def test_run_pipeline_refreshes_quality_after_llm(tmp_path: Path) -> None:
-    project_root = Path(__file__).resolve().parents[1]
-    script = tmp_path / "run_pipeline.sh"
-    script.write_text(
-        (project_root / "run_pipeline.sh").read_text(encoding="utf-8"),
-        encoding="utf-8",
-    )
-    script.chmod(0o755)
-
-    for name in ("download.sh", "ocr.sh", "llm_correct.sh", "quality.sh", "ingest.sh"):
-        _stub(tmp_path, name)
-
-    result = subprocess.run(
-        [str(script), "--skip-wpu", "--with-llm", "--skip-redo"],
-        cwd=tmp_path,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-
-    assert result.returncode == 0, result.stderr
-    calls = (tmp_path / "calls").read_text(encoding="utf-8").splitlines()
-    assert calls.index("llm_correct.sh") < calls.index("quality.sh") < calls.index("ingest.sh")
+def test_shell_scripts_are_removed() -> None:
+    # web.sh är en återinförd tunn genväg (användarbegärd) till scripts/web.py —
+    # inte en migrerad produktionsscript, så den ska inte krävas borttagen.
+    for shell in SHELL_TO_PYTHON:
+        if shell == "web.sh":
+            continue
+        assert not (PROJECT_ROOT / shell).exists(), f"{shell} ska vara borttagen"
 
 
-def test_ocr_refreshes_per_page_quality_after_surya() -> None:
-    project_root = Path(__file__).resolve().parents[1]
-    text = (project_root / "ocr.sh").read_text(encoding="utf-8")
-    after_surya = text.split('step "7/7  Uppdaterad kvalitetsbedömning"', 1)[1]
-    assert "./quality.sh --per-page" in after_surya
+def test_python_replacements_exist() -> None:
+    for py in SHELL_TO_PYTHON.values():
+        path = PROJECT_ROOT / "scripts" / py
+        assert path.exists(), f"{py} saknas"
 
 
-def test_ocr_redo_pages_skips_any_existing_page_attempt() -> None:
-    project_root = Path(__file__).resolve().parents[1]
-    text = (project_root / "ocr.sh").read_text(encoding="utf-8")
-    filter_block = text.split("# Filtrera bort sidor där", 1)[1].split(
-        "total_bad = sum", 1
-    )[0]
-    assert 'if row:' in filter_block
-    assert 'row["engine"] == "surya"' not in filter_block
+def test_representative_entrypoints_answer_help() -> None:
+    for name in ("run_pipeline.py", "ocr.py", "ingest.py", "quality.py", "download.py"):
+        path = PROJECT_ROOT / "scripts" / name
+        result = subprocess.run(
+            [sys.executable, str(path), "--help"],
+            cwd=PROJECT_ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert result.returncode == 0, f"{name} --help: {result.stderr}"
 
 
-def test_ocr_runs_surya_fallback_before_wpu_merge() -> None:
-    project_root = Path(__file__).resolve().parents[1]
-    text = (project_root / "ocr.sh").read_text(encoding="utf-8")
-    assert "run_surya_fallback" in text
-    assert "--fallback-failed" in text
-    assert "FALLBACK_ONLY=1" in text
-    assert "Surya-fallback för Tesseract-fel" in text
-    assert "surya_failed_at IS NULL" in text
-    assert "mark_surya_failed" in text
-    assert "clear_ocr_failures" in text
-    assert "create_missing=True" in text
-    assert text.index("run_surya_fallback") < text.index(
-        'step "2/7  Sammanfoga wpu.nu-text'
-    )
+# ---------------------------------------------------------------------------
+# Flaggeparitet: varje legacy-flagga ska finnas i registryns parametrar.
+# ---------------------------------------------------------------------------
+
+EXPECTED_OPERATION_FLAGS = {
+    "ocr": (
+        "--skip-redo", "--fallback-failed", "--redo", "--mode", "--source",
+        "--no-update-pdf", "--in", "--ocr", "--txt", "--pages-out",
+        "--jobs", "--per-file-jobs", "--threshold", "--from-list",
+        "--retry-failed",
+    ),
+    "ocr-tesseract": (
+        "--in", "--ocr", "--txt", "--tessdata", "--user-words",
+        "--user-words-auto", "--tess-config", "--psm", "--langs",
+        "--jobs", "--per-file-jobs", "--min-text-chars", "--image-dpi",
+        "--errors-log", "--files-from", "--retry-failed", "--retry-blacklist",
+    ),
+    "ingest": (
+        "--rebuild", "--limit", "--text-dir", "--db-dir", "--chunk-chars",
+        "--chunk-overlap", "--model", "--unusable-list", "--reindex-since",
+    ),
+}
 
 
-def test_ocr_fallback_only_respects_in_directory() -> None:
-    project_root = Path(__file__).resolve().parents[1]
-    text = (project_root / "ocr.sh").read_text(encoding="utf-8")
-    fallback_block = text.split('if [ "$FALLBACK_ONLY" = "1" ]; then', 1)[1].split(
-        'if [ "$REDO_ONLY" = "0" ]; then', 1
-    )[0]
-    assert 'run_surya_fallback "$fallback_label" "$IN"' in fallback_block
-    assert (
-        'run_surya_fallback "palmemordsarkivet" "$ROOT/downloaded/files"'
-        not in fallback_block
-    )
-    assert (
-        'run_surya_fallback "wpu.nu" "$ROOT/downloaded/wpu_files"'
-        not in fallback_block
-    )
+def test_operation_flag_parity_with_legacy_scripts() -> None:
+    from operations.registry import get_registry
 
-
-def test_quality_help_mentions_state_db_not_legacy_files() -> None:
-    project_root = Path(__file__).resolve().parents[1]
-    result = subprocess.run(
-        [str(project_root / "quality.sh"), "--help"],
-        cwd=project_root,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert result.returncode == 0
-    assert "state.db" in result.stdout
-    assert "quality.csv" not in result.stdout
-    assert "quality_pages.jsonl" not in result.stdout
-    assert "--out FILE" not in result.stdout
-    assert "--pages-out FILE" not in result.stdout
-
-
-def test_download_wpu_help_only_lists_supported_flags() -> None:
-    project_root = Path(__file__).resolve().parents[1]
-    result = subprocess.run(
-        [str(project_root / "download_wpu.sh"), "--help"],
-        cwd=project_root,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert result.returncode == 0
-    assert "--dry-run" in result.stdout
-    assert "--limit" in result.stdout
-    assert "id-only" not in result.stdout
-    assert "da-only" not in result.stdout
-
-
-def test_install_help_mentions_dev_flag() -> None:
-    project_root = Path(__file__).resolve().parents[1]
-    result = subprocess.run(
-        [str(project_root / "install.sh"), "--help"],
-        cwd=project_root,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert result.returncode == 0
-    assert "--dev" in result.stdout
-    assert "pytest, ruff och mypy" in result.stdout
-
-
-def test_test_sh_makes_static_tools_opt_in() -> None:
-    project_root = Path(__file__).resolve().parents[1]
-    text = (project_root / "test.sh").read_text(encoding="utf-8")
-    assert "--static" in text
-    assert "RUN_STATIC=false" in text
-    assert '.venv/bin/$tool' in text
-    assert 'command -v "$tool"' not in text
+    registry = get_registry()
+    for operation_id, expected in EXPECTED_OPERATION_FLAGS.items():
+        flags = {
+            flag
+            for parameter in registry.get(operation_id).parameters
+            for flag in parameter.flags
+        }
+        missing = [flag for flag in expected if flag not in flags]
+        assert not missing, f"{operation_id} saknar flaggor i registryn: {missing}"
 
 
 def test_legacy_migration_files_are_removed() -> None:
@@ -180,6 +109,43 @@ def test_legacy_migration_files_are_removed() -> None:
         project_root / "cleanup_legacy_state.sh",
     ):
         assert not path.exists(), f"{path} ska vara borttagen"
+
+
+def _run_setup_tessdata(*args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [sys.executable, str(PROJECT_ROOT / "scripts" / "setup_tessdata.py"), *args],
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def test_setup_tessdata_unknown_flag_exits_2() -> None:
+    result = _run_setup_tessdata("--okänd-flagga")
+    assert result.returncode == 2
+    assert "Traceback" not in result.stderr
+
+
+def test_setup_tessdata_root_without_value_is_clean_error() -> None:
+    # Regression: tidigare IndexError-traceback när --root saknade värde.
+    result = _run_setup_tessdata("--root")
+    assert result.returncode == 2
+    assert "Traceback" not in result.stderr
+    assert "--root" in result.stderr
+
+
+def test_setup_tessdata_dest_without_value_is_clean_error() -> None:
+    result = _run_setup_tessdata("--dest")
+    assert result.returncode == 2
+    assert "Traceback" not in result.stderr
+    assert "--dest" in result.stderr
+
+
+def test_setup_tessdata_help_exits_0() -> None:
+    result = _run_setup_tessdata("--help")
+    assert result.returncode == 0
+    assert "--root" in result.stdout
 
 
 def test_graph_page_handles_missing_link_analysis_import() -> None:

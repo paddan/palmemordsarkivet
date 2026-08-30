@@ -7,7 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-import backends
+import backends  # noqa: E402 — kräver src på sys.path ovan
 
 
 def test_catalog_has_expected_backends() -> None:

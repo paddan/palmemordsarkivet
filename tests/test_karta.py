@@ -3,16 +3,16 @@ from karta import (
     candidate_review_payload,
     candidate_source_payload,
     classify_timeline_observations,
-    observations_at_coord,
     db_observation_payload,
     legend_person_html,
     map_form_defaults,
     observation_source_payload,
     observation_source_payloads,
+    observations_at_coord,
     observations_by_person,
-    search_sources,
     person_color,
     popup_html,
+    search_sources,
     validate_observation,
 )
 

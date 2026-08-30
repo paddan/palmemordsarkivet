@@ -19,6 +19,7 @@ import os
 import re
 import sys
 import time
+from contextlib import suppress
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -33,7 +34,7 @@ from tenacity import (
 import db as state_db
 
 try:  # valfri snyggare format-sniff
-    import filetype as _filetype  # type: ignore
+    import filetype as _filetype
 except Exception:  # pragma: no cover
     _filetype = None
 
@@ -194,7 +195,7 @@ def sniff_extension(path: Path) -> str:
         try:
             kind = _filetype.guess(str(path))
             if kind is not None:
-                ext = "." + kind.extension
+                ext: str = "." + kind.extension
                 # Normalisera tiff -> tif så vi matchar magic-listans val
                 if ext == ".tiff":
                     ext = ".tif"
@@ -217,31 +218,27 @@ def sniff_extension(path: Path) -> str:
     return ""
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("out", nargs="?",
-                    default=os.environ.get("OUT", "downloaded/files"),
-                    help="målmapp (positionellt eller via env OUT, default: downloaded/files)")
-    ap.add_argument("--out", dest="out_flag",
-                    help="alternativ till positionellt argument")
-    ap.add_argument("--sheet-id",
-                    default=os.environ.get("SHEET_ID", SHEET_ID),
-                    help=f"Google Sheets-ID (default: {SHEET_ID[:12]}…)")
-    ap.add_argument("--limit", type=int, default=0,
-                    help="begränsa till N filer (0 = alla, används för testkörningar)")
-    args = ap.parse_args()
+def _ctx(context):
+    """Returnera ``context`` eller en terminal-context för förgrundskörning."""
+    if context is not None:
+        return context
+    from operations.context import ensure_terminal_context
 
-    out_dir = Path(args.out_flag or args.out)
-    out_dir.mkdir(parents=True, exist_ok=True)
+    return ensure_terminal_context(None)
+
+
+def run_download(*, out: Path, sheet_id: str, limit: int, context=None) -> int:
+    """Ladda ned arkivets PDF:er till ``out``. Idempotent via state.db."""
+    ctx = _ctx(context)
+    out.mkdir(parents=True, exist_ok=True)
 
     conn = state_db.connect()
     state_db.init_schema(conn)
-    source = "wpu" if out_dir.name == "wpu_files" else "files"
+    source = "wpu" if out.name == "wpu_files" else "files"
 
-    csv_url = f"https://docs.google.com/spreadsheets/d/{args.sheet_id}/export?format=csv"
-    print(f"Laddar ned palmemordsarkivet-PDF:er → {out_dir}/")
-    print("Hämtar kalkylbladet…")
+    csv_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv"
+    ctx.log(f"Laddar ned palmemordsarkivet-PDF:er → {out}/")
+    ctx.log("Hämtar kalkylbladet…")
     r = requests.get(csv_url, timeout=60)
     r.raise_for_status()
     r.encoding = "utf-8"
@@ -251,7 +248,7 @@ def main() -> int:
         (i for i, row in enumerate(rows) if LINK_COLUMN in row), None
     )
     if header_idx is None:
-        print(f"Kunde inte hitta kolumnen {LINK_COLUMN!r}", file=sys.stderr)
+        ctx.log(f"Kunde inte hitta kolumnen {LINK_COLUMN!r}", level="error")
         return 1
 
     header = rows[header_idx]
@@ -271,10 +268,10 @@ def main() -> int:
         }
         todo.append((build_filename(values), file_id))
 
-    print(f"Hittade {len(todo)} filer")
-    if args.limit:
-        todo = todo[:args.limit]
-        print(f"Test-läge: begränsar till {args.limit} filer")
+    ctx.log(f"Hittade {len(todo)} filer")
+    if limit:
+        todo = todo[:limit]
+        ctx.log(f"Test-läge: begränsar till {limit} filer")
 
     download_rows = list(conn.execute(
         "SELECT drive_id, sha1, filename, note FROM downloads WHERE source=?",
@@ -298,7 +295,7 @@ def main() -> int:
     }
 
     # Filnamns-stem-fallback för befintliga nedladdningar (pre-manifest)
-    existing_stems = {p.with_suffix("").name for p in out_dir.iterdir() if p.is_file()}
+    existing_stems = {p.with_suffix("").name for p in out.iterdir() if p.is_file()}
 
     session = requests.Session()
     failed = []
@@ -336,13 +333,14 @@ def main() -> int:
         else:
             eta_s = ""
         mb = bytes_total / 1_048_576
-        print(
+        ctx.progress(i, total, f"{tag} {prefix[:80]}")
+        ctx.log(
             f"[{i:>5}/{total} {pct:5.1f}%] {tag} {prefix[:80]}"
-            f"  ({mb:.1f} MB{eta_s}){extra}",
-            flush=True,
+            f"  ({mb:.1f} MB{eta_s}){extra}"
         )
 
     for prefix, file_id in todo:
+        ctx.check_cancelled()
         # Idempotency 1: manifestet (drive_id)
         if file_id in manifest_ids:
             continue
@@ -351,7 +349,7 @@ def main() -> int:
             continue
 
         progress("[hämtar]   ", prefix, f"  id={file_id}")
-        tmp = out_dir / f"_tmp_{file_id}"
+        tmp = out / f"_tmp_{file_id}"
         try:
             sha1 = drive_download(file_id, tmp, session)
             size = tmp.stat().st_size
@@ -360,7 +358,7 @@ def main() -> int:
             # Dubblett-check: samma sha1 finns redan under annat namn
             if sha1 in manifest_sha1s:
                 other = manifest_sha1s[sha1]
-                print(f"  [dubblett] {prefix} == {other} (sha1={sha1[:10]})", flush=True)
+                ctx.log(f"  [dubblett] {prefix} == {other} (sha1={sha1[:10]})")
                 log_error("download", prefix, f"duplicate sha1 of {other}")
                 tmp.unlink()
                 # Notera ändå i state.db så vi inte kör om
@@ -373,10 +371,10 @@ def main() -> int:
                 n_dup += 1
             else:
                 ext = sniff_extension(tmp) or ".bin"
-                dst = out_dir / f"{prefix}{ext}"
+                dst = out / f"{prefix}{ext}"
                 i = 2
                 while dst.exists():
-                    dst = out_dir / f"{prefix} ({i}){ext}"
+                    dst = out / f"{prefix} ({i}){ext}"
                     i += 1
                 tmp.rename(dst)
                 existing_stems.add(dst.with_suffix("").name)
@@ -394,14 +392,12 @@ def main() -> int:
         except Exception as e:
             n_fail += 1
             err_str = str(e)
-            print(f"  FEL: {err_str}", file=sys.stderr, flush=True)
+            ctx.log(f"  FEL: {err_str}", level="error")
             log_error("download", prefix, err_str)
             failed.append((prefix, file_id, err_str))
             if tmp.exists():
-                try:
+                with suppress(OSError):
                     tmp.unlink()
-                except OSError:
-                    pass
             # Permanenta fel registreras i state.db så att filen hoppas över
             # vid nästa körning. HTML-svar från Drive är avsiktligt retrybara:
             # de kan vara rate-limit lika gärna som borttagna filer.
@@ -419,20 +415,46 @@ def main() -> int:
     n_already = n_done - n_perm_skip
 
     summary_parts = []
-    if n_new:        summary_parts.append(f"{n_new} nya")
-    if n_dup:        summary_parts.append(f"{n_dup} dubbletter")
-    if n_already:    summary_parts.append(f"{n_already} redan hämtade")
-    if n_perm_skip:  summary_parts.append(f"{n_perm_skip} permanent misslyckade (skippas)")
+    if n_new:
+        summary_parts.append(f"{n_new} nya")
+    if n_dup:
+        summary_parts.append(f"{n_dup} dubbletter")
+    if n_already:
+        summary_parts.append(f"{n_already} redan hämtade")
+    if n_perm_skip:
+        summary_parts.append(f"{n_perm_skip} permanent misslyckade (skippas)")
 
     if failed:
-        print(f"\n{len(failed)} filer misslyckades:")
+        ctx.log(f"\n{len(failed)} filer misslyckades:", level="error")
         for prefix, fid, err in failed:
-            print(f"  {fid}  {prefix}: {err}")
+            ctx.log(f"  {fid}  {prefix}: {err}", level="error")
         if summary_parts:
-            print(f"Övrigt: {', '.join(summary_parts)}.")
+            ctx.log(f"Övrigt: {', '.join(summary_parts)}.")
         return 2
-    print(f"Klart. {', '.join(summary_parts)}." if summary_parts else "Klart.")
+    ctx.log(f"Klart. {', '.join(summary_parts)}." if summary_parts else "Klart.")
     return 0
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("out", nargs="?",
+                    default=os.environ.get("OUT", "downloaded/files"),
+                    help="målmapp (positionellt eller via env OUT, default: downloaded/files)")
+    ap.add_argument("--out", dest="out_flag",
+                    help="alternativ till positionellt argument")
+    ap.add_argument("--sheet-id",
+                    default=os.environ.get("SHEET_ID", SHEET_ID),
+                    help=f"Google Sheets-ID (default: {SHEET_ID[:12]}…)")
+    ap.add_argument("--limit", type=int, default=0,
+                    help="begränsa till N filer (0 = alla, används för testkörningar)")
+    args = ap.parse_args()
+
+    return run_download(
+        out=Path(args.out_flag or args.out),
+        sheet_id=args.sheet_id,
+        limit=args.limit,
+    )
 
 
 if __name__ == "__main__":

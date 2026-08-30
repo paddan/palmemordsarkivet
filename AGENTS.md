@@ -69,9 +69,26 @@ src/
     load_neo4j.py       # Ladda doc_entities → Neo4j (MERGE, idempotent) + namnkanonisering
     viz.py              # Ego-nätverk för flera center (Cypher → noder/kanter, dedup) + Cytoscape-konvertering
     answer_entities.py  # Vald LLM-backend listar nyckelentiteter ur ett RAG-svar → inline-grafen i Utredning
-tests/                 # pytest (inkl. gamla state-db-fixtures för migrationsskydd)
-*.sh                   # Bash-wrappers (aktiverar .venv, läser API-nycklar, vidarebefordrar flaggor)
-tessdata/              # swe_best.traineddata, swe.user-words, tesseract.config
+  operations/
+    models.py           # Parameter-/operations-/progressmodeller (delas av CLI + admin)
+    registry.py         # Enda katalogen över operationer och parametrar
+    cli.py              # Parsergenerering + förgrundskörning
+    context.py          # Progress, logg, subprocesser och kontrollerad avbrytning
+    exceptions.py       # OperationCancelled, OperationFailed
+    job_service.py      # Skapa/starta/inspektera/stoppa bakgrundsjobb
+    worker.py           # Fristående worker + heartbeat
+    adapters.py         # Mappar registry-parametrar till domänmodulernas run-funktioner
+    tesseract.py        # Migrerad ocr_tesseract-logik
+    detect_redactions.py # Migrerad redaktionsorkestrering
+    ocr.py              # Full OCR + Surya-fallback/redo
+    pipeline.py         # Full pipeline-orkestrering
+    neo4j.py            # Lokal Podman/Neo4j-livscykel
+  admin_ui.py           # Testbara adminpresentatörer och formulärhelpers
+  pages/
+    8_Admin.py          # Lokal Streamlit-adminsida (bakgrundsjobb + operationer)
+scripts/                # Python-entrypoints (ersätter *.sh) + jobs.py
+tests/                  # pytest (inkl. gamla state-db-fixtures för migrationsskydd)
+tessdata/               # swe_best.traineddata, swe.user-words, tesseract.config
 ```
 
 Data-kataloger (gitignored):
@@ -86,48 +103,65 @@ Repo-data:
 
 ## Commands
 
+Alla shell-script är ersatta av Python-entrypoints i `scripts/`. Kör med `.venv/bin/python`:
+
 ```bash
 # Tests
-./test.sh                             # pytest
-./test.sh --static                    # pytest + ruff/mypy via .venv
-.venv/bin/pytest tests/               # bara pytest
+.venv/bin/python scripts/test.py            # pytest
+.venv/bin/python scripts/test.py --static   # pytest + ruff/mypy via .venv
+.venv/bin/pytest tests/                     # bara pytest
 
 # Setup
-./install.sh                         # Installera pipeline/webgränssnitt (brew, Python-paket, tessdata)
-./install.sh --dev                   # Installera även pytest/ruff/mypy för utveckling
+.venv/bin/python scripts/install.py         # Installera (brew, Python-paket, tessdata)
+.venv/bin/python scripts/install.py --dev   # Installera även pytest/ruff/mypy
 
 # Workflow
-./run_pipeline.sh                    # Hela pipelinen i ett: download → OCR → ingest
-./run_pipeline.sh --test 5           # Testläge: bara 5 filer från palme + 5 från wpu
-./download.sh                        # Hämta PDF:er från Google Sheet
-./ocr.sh                             # Tesseract → Surya-fallback → normalize → quality → Surya på dåliga sidor
-./ocr.sh --skip-redo                 # Bara Tesseract + normalize + quality (ingen Surya)
-./ocr.sh --fallback-failed           # Surya-fallback i defaultkatalogen
-./ocr.sh --fallback-failed --in downloaded/wpu_files # WPU-fallback separat
-./ocr.sh --redo --mode pages         # Surya på specifika sidor (threshold 50)
-./ocr_tesseract.sh                   # Bara Tesseract-steget
-./detect_redactions.sh               # Redaktionsdetektering på befintliga text/OCR-par
-./quality.sh [--top 30] [--per-page]
-./llm_correct.sh [--threshold 60]    # Codex Haiku korrigerar dåliga sidor
-./merge_pages.sh --all               # Slå ihop per-sida-text från state.db → text/
-./build_user_words.sh                # Bygg tessdata/swe.user-words.auto från text/*.txt
-./ingest.sh [--rebuild] [--reindex-since 2026-05-01]
-./ask.sh "fråga" [--hybrid] [--no-rerank]
-./web.sh                             # Starta Streamlit
+.venv/bin/python scripts/run_pipeline.py                   # Hela pipelinen
+.venv/bin/python scripts/run_pipeline.py --test 5          # Testläge: 5 filer
+.venv/bin/python scripts/download.py                       # Hämta PDF:er (Google Sheet)
+.venv/bin/python scripts/ocr.py                            # Full OCR-pipeline
+.venv/bin/python scripts/ocr.py --skip-redo                # Ingen Surya
+.venv/bin/python scripts/ocr_tesseract.py                  # Bara Tesseract
+.venv/bin/python scripts/detect_redactions.py              # Redaktionsdetektering
+.venv/bin/python scripts/quality.py --top 30 --per-page
+.venv/bin/python scripts/llm_correct.py --threshold 60
+.venv/bin/python scripts/merge_pages.py --all
+.venv/bin/python scripts/build_user_words.py
+.venv/bin/python scripts/ingest.py --rebuild
+.venv/bin/python scripts/web.py                            # Starta Streamlit
+
+# Bakgrundsjobb (adminsidan och CLI delar samma registry)
+.venv/bin/python scripts/jobs.py start run-pipeline --jobs 4
+.venv/bin/python scripts/jobs.py status
+.venv/bin/python scripts/jobs.py log --follow
+.venv/bin/python scripts/jobs.py cancel
+.venv/bin/python scripts/jobs.py list
 
 # wpu.nu (valfritt)
-./download_wpu.sh && ./merge_wpu.sh
+.venv/bin/python scripts/download_wpu.py && .venv/bin/python scripts/merge_wpu.py
 
-# Kartobservations-kandidater (valfritt; LLM extraherar förslag till granskning)
-./extract_map_observations.sh [--dry-run] [--limit N]
+# Kartobservations-kandidater (valfritt)
+.venv/bin/python scripts/extract_map_observations.py --dry-run --limit 5
 
-# Kunskapsgraf (valfritt; installera först podman + Python-extra .[graph])
-./extract_entities.sh [--limit N] [--dry-run]
-./neo4j.sh
-./load_graph.sh
+# Kunskapsgraf (valfritt; installera podman + .[graph])
+.venv/bin/python scripts/extract_entities.py --limit 5 --dry-run
+.venv/bin/python scripts/neo4j.py status
+.venv/bin/python scripts/load_graph.py
 ```
 
+Alla entrypoints delar registry i `src/operations/registry.py`; adminsidan (`src/pages/8_Admin.py`)
+och CLI använder samma operationer/parametrar/defaults. Inför inga nya shell-wrappers.
+
 Env-variabler: `CLAUDE_CODE_OAUTH_TOKEN` (Pro/Max, räknas mot prenumeration) eller `ANTHROPIC_API_KEY`. Valfritt: `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`.
+
+**Jobbinvarianter (bakgrundsjobb/admin):**
+
+- Endast ett aktivt skrivande jobb åt gången — `admin_jobs.active_slot` är atomisk via partiellt unikt index; all jobb-SQL ligger i `src/db.py`.
+- Workern startas fristående (`start_new_session=True`) och överlever webbläsare/Streamlit-omstarter. Heartbeat skrivs var 5:e sekund; heartbeat äldre än 15 s utan levande process → `interrupted`.
+- Hemliga parametrar (API-nycklar, token, lösenord) sparas aldrig i `params_json` eller loggar; bakgrundsjobb läser dem ur processmiljön, och kommandorader redigeras före loggning.
+- Jobbloggar: `generated/admin_jobs/<job-id>.log` (append-only, tidsstämplad).
+- Cancel sker kontrollerat via `cancel_requested` → SIGTERM till processgrupp → SIGKILL efter grace; ett jobb får aldrig `succeeded` efter begärd cancel.
+- Adminsidan och CLI:n genereras ur samma `src/operations/registry.py` — lägg aldrig till operationer eller flaggor på bara ena sidan.
 
 ## Non-obvious Design Decisions
 
@@ -149,7 +183,7 @@ kör pending migrations mot äldre databaser, uppdaterar `schema_version` och
 Inkrementell logik
 bygger på att jämföra `pdf_files.text_mtime` mot `normalized_at`/`scored_at`/etc.
 `--rebuild` tvingar omkörning. `tesseract_blacklisted_at` är bara en spärr för
-fler Tesseract-försök; `ocr.sh` försöker Surya-fallback innan en fil betraktas
+fler Tesseract-försök; `scripts/ocr.py` försöker Surya-fallback innan en fil betraktas
 som slutligt OCR-misslyckad. `surya_failed_at` markerar att även Surya inte fick
 fram text, och då hoppar `merge_wpu` sådana textlösa wpu-filer tyst. Modulen
 `src/db.py` exponerar alla CRUD- och delta-queries; konsumenter skriver aldrig
@@ -179,11 +213,11 @@ LLM:en returnerar noll kandidater, så omkörningar inte debiterar tomma sidor i
 
 **mtime-tracking (ingest.py)**: Varje `.txt`-fil jämförs mot mtime som lagras i `ingest`-tabellen i state.db (auktoritativt); nyare fil → re-ingest. LanceDB-tabellen har fortfarande en `mtime`-kolumn men den läses inte längre för delta-beslut. Om ingest-state saknas men källan finns i LanceDB behandlas filen som re-indexering, så gamla chunks ersätts i stället för att dupliceras. Legacy-rader med sentinel-mtime `0.0` re-indexeras bara med `--reindex-since`.
 
-**Redaktionsdetektering (ocr_pages.py)**: Hittar svarta maskeringsblock i bilder och infogar `[MASKAD]` i texten. På som standard; `--no-detect-redactions` stänger av. Idempotens spåras via `pdf_files.redaction_checked_at` i state.db — `.redact`-markörfilerna är borttagna. `detect_redactions.sh` förfiltrerar listan baserat på databasen så filer som redan kollats spawnar inga subprocesser alls.
+**Redaktionsdetektering (ocr_pages.py)**: Hittar svarta maskeringsblock i bilder och infogar `[MASKAD]` i texten. På som standard; `--no-detect-redactions` stänger av. Idempotens spåras via `pdf_files.redaction_checked_at` i state.db — `.redact`-markörfilerna är borttagna. `scripts/detect_redactions.py` förfiltrerar listan baserat på databasen så filer som redan kollats spawnar inga subprocesser alls.
 
-**Per-dokument-cleanup (ocr.sh + Surya)**: Efter att `ocr_pages.py` är klar kör `ocr.sh` automatiskt `merge_pages.merge_one` + `normalize_text.process_file`. Idempotens och per-sida-text spåras i `pdf_pages`-tabellen i state.db — `page-NNN.txt`/`.json`-markörerna existerar inte längre. Surya-redo betraktar alla befintliga `pdf_pages`-rader som redan försökt per sida (även `engine='llm'`), annars kan `run_pipeline.sh` starta Surya-processer som direkt hoppar alla sidor.
+**Per-dokument-cleanup (`scripts/ocr.py` + Surya)**: Efter att `ocr_pages.py` är klar kör `scripts/ocr.py` automatiskt `merge_pages.merge_one` + `normalize_text.process_file`. Idempotens och per-sida-text spåras i `pdf_pages`-tabellen i state.db — `page-NNN.txt`/`.json`-markörerna existerar inte längre. Surya-redo betraktar alla befintliga `pdf_pages`-rader som redan försökt per sida (även `engine='llm'`), annars kan `scripts/run_pipeline.py` starta Surya-processer som direkt hoppar alla sidor.
 
-**Pipeline-resume (`run_pipeline.sh`)**: OCR- och ingest-stegen körs alltid, även när download inte hittade nya PDF:er. Stegen är idempotenta och detta gör att en tidigare avbruten körning kan slutföras.
+**Pipeline-resume (`scripts/run_pipeline.py`)**: OCR- och ingest-stegen körs alltid, även när download inte hittade nya PDF:er. Stegen är idempotenta och detta gör att en tidigare avbruten körning kan slutföras.
 
 ## Common Gotchas
 

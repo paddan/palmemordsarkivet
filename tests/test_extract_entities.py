@@ -7,10 +7,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-import asyncio
+import asyncio  # noqa: E402 — kräver src på sys.path ovan
 
-import graph.extract_entities as ee
-from graph.extract_entities import parse_extraction
+import graph.extract_entities as ee  # noqa: E402 — kräver src på sys.path ovan
+from graph.extract_entities import parse_extraction  # noqa: E402 — kräver src på sys.path ovan
 
 
 class _FakeAsyncOpenAI:
@@ -136,6 +136,7 @@ def test_resolve_provider_cfg_provider_switch_drops_saved_model() -> None:
 
 def test_extract_doc_stores_payload(tmp_path, monkeypatch) -> None:
     import asyncio
+
     import db
     from graph import extract_entities as ee
 
@@ -166,6 +167,7 @@ def test_extract_doc_stores_payload(tmp_path, monkeypatch) -> None:
 def test_extract_doc_continues_after_llm_error(tmp_path, monkeypatch) -> None:
     """Ett LLM-fel på en sida får inte stoppa batchen — sidan loggas och hoppas."""
     import asyncio
+
     import db
     from graph import extract_entities as ee
 
@@ -200,6 +202,7 @@ def test_fmt_eta() -> None:
 
 def test_extract_doc_calls_on_page_even_on_error(tmp_path, monkeypatch) -> None:
     import asyncio
+
     from graph import extract_entities as ee
 
     calls = {"n": 0}
@@ -226,6 +229,7 @@ def test_extract_doc_calls_on_page_even_on_error(tmp_path, monkeypatch) -> None:
 
 def test_extract_doc_timeout_is_logged_and_skipped(tmp_path, monkeypatch) -> None:
     import asyncio
+
     import db
     from graph import extract_entities as ee
 
@@ -249,6 +253,7 @@ def test_extract_doc_timeout_is_logged_and_skipped(tmp_path, monkeypatch) -> Non
 
 def test_extract_doc_parallel_jobs_process_all_pages(tmp_path, monkeypatch) -> None:
     import asyncio
+
     import db
     from graph import extract_entities as ee
 

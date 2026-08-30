@@ -295,3 +295,49 @@ def test_dry_run_does_not_delete(tmp_path: Path, db_env: Path) -> None:
     conn = state_db.connect(db_env)
     assert not state_db.wpu_decided(conn, "DA14259-00")  # ingen marker
     conn.close()
+
+
+def test_run_merge_wpu_aborts_on_cancelled_context(
+    tmp_path: Path, db_env: Path, monkeypatch
+) -> None:
+    """En cancellad context ska få as_completed-loopen att avbryta."""
+    from operations.exceptions import OperationCancelled
+
+    text, _, wpu_dir = _setup(tmp_path)
+    (wpu_dir / "DA14259-00.pdf").write_bytes(b"x")
+
+    class CancellingCtx:
+        def log(self, *args, **kwargs) -> None:
+            pass
+
+        def check_cancelled(self) -> None:
+            raise OperationCancelled("avbrutet")
+
+    class FakePool:
+        def __init__(self, **kwargs) -> None:
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args) -> bool:
+            return False
+
+        def submit(self, *args, **kwargs):
+            return "framtida"
+
+    monkeypatch.setattr(merge_wpu, "ProcessPoolExecutor", FakePool)
+    monkeypatch.setattr(merge_wpu, "as_completed", lambda futures: iter(["framtida"]))
+    monkeypatch.setattr(merge_wpu, "has_hunspell_swe", lambda: False)
+
+    with pytest.raises(OperationCancelled):
+        merge_wpu.run_merge_wpu(
+            dry_run=True,
+            rebuild=False,
+            margin=5.0,
+            wpu_dir=wpu_dir,
+            text_dir=text,
+            ocr_dir=tmp_path / "ocr",
+            jobs=1,
+            context=CancellingCtx(),
+        )

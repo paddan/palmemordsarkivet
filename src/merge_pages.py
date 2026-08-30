@@ -17,7 +17,6 @@ from __future__ import annotations
 import argparse
 import sqlite3
 import sys
-import time
 from pathlib import Path
 
 import db as state_db
@@ -110,6 +109,9 @@ def merge_one(
         conn = state_db.connect()
         state_db.init_schema(conn)
 
+    # Anslutningen är aldrig None här: antingen öppnades en egen ovan
+    # eller så skickades en in av anroparen.
+    assert conn is not None
     try:
         updates = find_updates(conn, stem)
         if not updates:
@@ -151,6 +153,45 @@ def merge_one(
             conn.close()
 
 
+def _ctx(context):
+    """Returnera ``context`` eller en terminal-context för förgrundskörning."""
+    if context is not None:
+        return context
+    from operations.context import ensure_terminal_context
+
+    return ensure_terminal_context(None)
+
+
+def run_merge_pages(
+    *, stem: str | None, merge_all: bool, txt_dir: Path, context=None
+) -> int:
+    """Slå ihop per-sida-text från pdf_pages in i text/<stem>.txt."""
+    ctx = _ctx(context)
+
+    if merge_all:
+        conn = state_db.connect()
+        state_db.init_schema(conn)
+        stems = sorted({r["pdf_stem"] for r in conn.execute(
+            "SELECT DISTINCT pdf_stem FROM pdf_pages"
+        )})
+        updated = 0
+        total = len(stems)
+        label = f"Slår ihop {total} dokument…"
+        ctx.log(label)
+        for i, stem in enumerate(stems, 1):
+            ctx.check_cancelled()
+            ctx.progress(i, total, stem)
+            if merge_one(stem, txt_dir, conn=conn):
+                updated += 1
+        conn.close()
+        ctx.log(f"Klart. {updated} av {total} filer uppdaterades.")
+    else:
+        # CLI:t kräver --all eller --stem; utan --all måste stem finnas.
+        assert stem is not None
+        merge_one(stem, txt_dir)
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -162,33 +203,9 @@ def main() -> int:
                     help=f"katalog med text/<stem>.txt (default: {TEXT_DIR})")
     args = ap.parse_args()
 
-    txt_dir = Path(args.txt_dir)
-
-    if args.all:
-        conn = state_db.connect()
-        state_db.init_schema(conn)
-        stems = sorted({r["pdf_stem"] for r in conn.execute(
-            "SELECT DISTINCT pdf_stem FROM pdf_pages"
-        )})
-        updated = 0
-        total = len(stems)
-        t0 = time.monotonic()
-        label = f"Slår ihop {total} dokument…"
-        print(label, end=" ", flush=True)
-        for i, stem in enumerate(stems, 1):
-            if merge_one(stem, txt_dir, conn=conn):
-                updated += 1
-            elapsed = time.monotonic() - t0
-            rate = i / elapsed if elapsed else 0
-            eta = int((total - i) / rate) if rate else 0
-            eta_s = f"{eta // 60}m{eta % 60:02d}s"
-            print(f"\r{label} {i}/{total} eta {eta_s}", end="", flush=True)
-        print()
-        conn.close()
-        print(f"Klart. {updated} av {total} filer uppdaterades.")
-    else:
-        merge_one(args.stem, txt_dir)
-    return 0
+    return run_merge_pages(
+        stem=args.stem, merge_all=args.all, txt_dir=Path(args.txt_dir)
+    )
 
 
 if __name__ == "__main__":

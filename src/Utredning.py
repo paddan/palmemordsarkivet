@@ -1,9 +1,7 @@
 """Enkelt webgränssnitt för palmemordsarkivet via Streamlit.
 
 Kör med:
-    ./web.sh
-eller manuellt:
-    .venv/bin/streamlit run src/Utredning.py
+    .venv/bin/python scripts/web.py
 """
 
 from __future__ import annotations
@@ -12,6 +10,7 @@ import asyncio
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
 import lancedb
 import streamlit as st
@@ -38,7 +37,7 @@ except ImportError:  # pragma: no cover — ingår i extran .[graph]
 
 # importera funktioner ur rag/ask.py utan att köra dess main()
 sys.path.insert(0, str(Path(__file__).resolve().parent / "rag"))
-from ask import (  # type: ignore  # noqa: E402
+from ask import (  # noqa: E402
     CLAUDE_MODEL,
     EMBED_MODEL,
     MCP_SYSTEM_PROMPT,
@@ -76,7 +75,8 @@ def load():
 @st.cache_resource(show_spinner=False)
 def build_nr_to_pdf() -> dict[str, Path]:
     """Cachad nr → PDF-mapping (logiken bor i citations.build_nr_to_pdf)."""
-    return _citations.build_nr_to_pdf(ROOT)
+    mapping: dict[str, Path] = _citations.build_nr_to_pdf(ROOT)
+    return mapping
 
 
 def find_pdf(source_txt: str) -> Path | None:
@@ -87,12 +87,6 @@ def find_pdf(source_txt: str) -> Path | None:
         if p.is_file():
             return p
     return None
-
-
-@st.cache_data(ttl=30, show_spinner=False)
-def _fetch_models(base_url: str, api_key: str) -> list[str]:
-    """Cachad wrapper runt backends.fetch_models (cachen är streamlit-specifik)."""
-    return _backends.fetch_models(base_url, api_key)
 
 
 def find_txt(source_txt: str) -> Path | None:
@@ -108,14 +102,16 @@ casebook_conn = _casebook_ui.state_conn()
 @st.cache_data(show_spinner=False)
 def _load_facets() -> dict:
     """Entitetsfacetter ur kunskapsgrafen (doc_entities). Cachas per session."""
-    return _facets.entity_facets(_casebook_ui.state_conn())
+    facets: dict = _facets.entity_facets(_casebook_ui.state_conn())
+    return facets
 
 
 @st.cache_data(show_spinner=False)
 def _load_facet_index() -> dict:
     """Cachat ``casefold(namn) -> {pdf_stem}`` så doc_entities inte parsas om
     per vald facett och sökning."""
-    return _facets.entity_stem_index(_casebook_ui.state_conn())
+    index: dict = _facets.entity_stem_index(_casebook_ui.state_conn())
+    return index
 
 
 @st.cache_resource(show_spinner="Bygger fuzzy-index (engångskostnad ~30 s)…")
@@ -151,14 +147,16 @@ def _interleave_hits(primary: list[dict], extra: list[dict]) -> list[dict]:
 
 def extract_cited_sources(answer: str) -> list[dict]:
     """Bygg källlista ur ett MCP-svar genom att parsa unika Nr-citat."""
-    return _citations.extract_cited_sources(answer, build_nr_to_pdf())
+    sources: list[dict] = _citations.extract_cited_sources(answer, build_nr_to_pdf())
+    return sources
 
 
 def linkify_citations(text: str, known_sources: set[str] | None = None) -> str:
     """Förvandla "Nr X, sida Y" till inline-knappar — se citations.linkify_citations."""
-    return _citations.linkify_citations(
+    linked: str = _citations.linkify_citations(
         text, build_nr_to_pdf(), known_sources=known_sources
     )
+    return linked
 
 
 table, embed_model = load()
@@ -175,17 +173,11 @@ BACKENDS = {
     "Claude": {**_backends.BACKENDS["Claude"], "model": CLAUDE_MODEL},
 }
 
-_saved_llm = _llm_config.load()
 _BACKEND_KEYS = list(BACKENDS.keys())
 
-# Initiera session_state en gång från sparad config — ingen index=-parameter behövs.
-if "backend_name" not in st.session_state:
-    _saved_name = _saved_llm.get("backend_name", _BACKEND_KEYS[0])
-    st.session_state["backend_name"] = (
-        _saved_name if _saved_name in _BACKEND_KEYS else _BACKEND_KEYS[0]
-    )
-
-OPENAI_TOOLS = [
+# Verktygsscheman för OpenAI-kompatibla backends. Any-typade eftersom SDK:ns
+# TypedDicts är omständliga att matcha exakt för JSON-schema-liknande strukturer.
+OPENAI_TOOLS: list[Any] = [
     {
         "type": "function",
         "function": {
@@ -262,60 +254,16 @@ def _on_rerank_change() -> None:
 
 with st.sidebar:
     st.header("Inställningar")
-    backend_name = st.selectbox("AI-modell", _BACKEND_KEYS, key="backend_name")
-    backend = BACKENDS[backend_name]
-    _is_saved = backend_name == _saved_llm.get("backend_name")
-    if "models" in backend and not backend.get("configurable"):
-        _cur_model = _saved_llm.get("model") if _is_saved else backend["model"]
-        _api_key = os.environ.get(backend["env"], "") if backend.get("env") else ""
-        _model_list = _backends.available_models(backend, _api_key, fetcher=_fetch_models)
-        _model_idx = _model_list.index(_cur_model) if _cur_model in _model_list else 0
-        backend = {
-            **backend,
-            "model": st.selectbox("Modellnamn", _model_list, index=_model_idx, key=f"model_{backend_name}"),
-        }
-    if backend.get("configurable"):
-        _cur_url = _saved_llm.get("base_url") if _is_saved else backend["base_url"]
-        _cur_model = _saved_llm.get("model") if _is_saved else backend["model"]
-        _base_url = st.text_input(
-            "Endpoint-URL",
-            value=_cur_url,
-            help="OpenAI-kompatibel /v1-endpoint (Ollama, LM Studio, "
-            "llama.cpp, vLLM, fjärr-OpenAI-API, ...)",
-        )
-        _available_models = _fetch_models(_base_url, "")
-        if _available_models:
-            _model_idx = (
-                _available_models.index(_cur_model)
-                if _cur_model in _available_models
-                else 0
-            )
-            _model = st.selectbox("Modellnamn", _available_models, index=_model_idx, key=f"model_{backend_name}")
-        else:
-            _model = st.text_input(
-                "Modellnamn",
-                value=_cur_model,
-                help="T.ex. `llama3.1:8b` (Ollama), `gpt-4o-mini`, eller "
-                "vad providern kräver",
-            )
-        _api_key_override = st.text_input(
-            "API-nyckel (valfritt)",
-            value="",
-            type="password",
-            help="Lämna tomt för Ollama/lokala servrar utan auth",
-        )
-        backend = {
-            **backend,
-            "base_url": _base_url,
-            "model": _model,
-            "api_key_override": _api_key_override,
-        }
-    _llm_config.save({
-        "backend_name": backend_name,
-        "provider": backend["kind"],
-        "model": backend["model"],
-        "base_url": backend.get("base_url", ""),
-    })
+    _all_llm = _llm_config.load_all()
+    _profile_names = list(_all_llm["profiles"].keys())
+    if "llm_profile" not in st.session_state or st.session_state["llm_profile"] not in _profile_names:
+        st.session_state["llm_profile"] = _all_llm["default"]
+    _profile_name = st.selectbox("LLM-profil", _profile_names, key="llm_profile")
+    _profile = _all_llm["profiles"][_profile_name]
+    backend = _llm_config.resolve_runtime_profile(_profile, BACKENDS)
+    backend_name = backend["backend_name"]
+    _profile_runtime_key = _llm_config.profile_cache_key(_profile_name, _profile)
+    st.caption("Hantera profiler i **Admin → Inställningar → LLM-inställningar**.")
     mcp_mode = st.toggle(
         "Utredningsläge (MCP)",
         key="mcp_mode",
@@ -340,7 +288,7 @@ with st.sidebar:
         help="Visar en hopfällbar grafsektion under svaret. Själva grafen "
         "(entitetsextraktion med vald LLM-backend + Neo4j) byggs först när du "
         "öppnar den — inte automatiskt efter varje svar. "
-        "Kräver att Neo4j är igång (./neo4j.sh).",
+        "Kräver att Neo4j är igång (.venv/bin/python scripts/neo4j.py).",
     )
 
     do_rerank = st.session_state.get("do_rerank", True)
@@ -443,7 +391,8 @@ def _mcp_tool_label(name: str, inp: dict) -> str:
 
 
 async def stream_mcp(
-    q: str, status_box, text_placeholder, parts: list[str], resume_id: str | None
+    q: str, status_box, text_placeholder, parts: list[str], resume_id: str | None,
+    cfg: dict,
 ) -> tuple[str | None, int]:
     """Utredningsläge: Claude anropar search_archive/get_page autonomt.
 
@@ -469,7 +418,7 @@ async def stream_mcp(
     }
     options = ClaudeAgentOptions(
         system_prompt=MCP_SYSTEM_PROMPT,
-        model=CLAUDE_MODEL,
+        model=cfg["model"],
         mcp_servers={
             "arkiv": {"command": sys.executable, "args": [str(MCP_SERVER)], "env": env}
         },
@@ -496,10 +445,10 @@ async def stream_mcp(
     return new_session_id, tool_count
 
 
-async def stream_claude(user_msg: str, placeholder, parts: list[str]) -> None:
+async def stream_claude(user_msg: str, placeholder, parts: list[str], cfg: dict) -> None:
     options = ClaudeAgentOptions(
         system_prompt=SYSTEM_PROMPT,
-        model=CLAUDE_MODEL,
+        model=cfg["model"],
         allowed_tools=[],
         thinking=ThinkingConfigAdaptive(type="adaptive"),
         effort="high",
@@ -518,9 +467,7 @@ async def stream_openai(user_msg: str, placeholder, parts: list[str], cfg) -> No
     from openai import AsyncOpenAI, NotFoundError  # noqa: PLC0415
 
     # Samma nyckeluppslagning som MCP-läget: sidofältets fält vinner över env.
-    api_key = cfg.get("api_key_override") or (
-        os.environ.get(cfg["env"]) if cfg.get("env") else "ollama"
-    )
+    api_key = cfg.get("api_key") or "ollama"
     base_url = cfg["base_url"]
     model = cfg["model"]
     async with AsyncOpenAI(api_key=api_key or "ollama", base_url=base_url) as client:
@@ -560,7 +507,7 @@ async def stream_to_string(hits, q, cfg, placeholder=None) -> str:
         placeholder = st.empty()
     parts: list[str] = []
     if cfg["kind"] == "claude":
-        await stream_claude(user_msg, placeholder, parts)
+        await stream_claude(user_msg, placeholder, parts, cfg)
     else:
         await stream_openai(user_msg, placeholder, parts, cfg)
     known = {h["source"] for h in hits}
@@ -569,13 +516,15 @@ async def stream_to_string(hits, q, cfg, placeholder=None) -> str:
     return final
 
 
-async def stream_mcp_to_string(q: str, resume_id: str | None) -> tuple[str, str | None]:
+async def stream_mcp_to_string(
+    q: str, resume_id: str | None, cfg: dict
+) -> tuple[str, str | None]:
     status_box = st.status("Söker i arkivet…", expanded=True)
     text_placeholder = st.empty()
     parts: list[str] = []
     try:
         new_id, tool_count = await stream_mcp(
-            q, status_box, text_placeholder, parts, resume_id
+            q, status_box, text_placeholder, parts, resume_id, cfg
         )
     except Exception as exc:
         err_str = str(exc)
@@ -603,7 +552,7 @@ async def stream_mcp_to_string(q: str, resume_id: str | None) -> tuple[str, str 
 
 
 def _run_tool(name: str, arguments: dict) -> str:
-    import mcp_server  # type: ignore  # noqa: PLC0415
+    import mcp_server  # noqa: PLC0415
 
     mcp_server._table = table
     mcp_server._model = embed_model
@@ -613,9 +562,11 @@ def _run_tool(name: str, arguments: dict) -> str:
             args.get("top_k", mcp_server.TOP_K_DEFAULT),
             args.get("top_n", mcp_server.TOP_N_DEFAULT),
         )
-        return mcp_server.search_archive(**args)
+        result: str = mcp_server.search_archive(**args)
+        return result
     if name == "get_page":
-        return mcp_server.get_page(**arguments)
+        page: str = mcp_server.get_page(**arguments)
+        return page
     return f"Okänt verktyg: {name}"
 
 
@@ -624,7 +575,7 @@ async def stream_openai_mcp(
     text_placeholder,
     parts: list[str],
     cfg: dict,
-    messages: list[dict],
+    messages: list[Any],
 ) -> None:
     """Utredningsläge för OpenAI-kompatibla backends.
 
@@ -634,10 +585,9 @@ async def stream_openai_mcp(
     import json  # noqa: PLC0415
 
     from openai import AsyncOpenAI  # noqa: PLC0415
+    from openai.types.chat import ChatCompletionMessageFunctionToolCall  # noqa: PLC0415
 
-    api_key = cfg.get("api_key_override") or (
-        os.environ.get(cfg["env"]) if cfg.get("env") else "ollama"
-    )
+    api_key = cfg.get("api_key") or "ollama"
     tool_count = 0
     try:
         async with AsyncOpenAI(api_key=api_key or "ollama", base_url=cfg["base_url"]) as client:
@@ -659,6 +609,10 @@ async def stream_openai_mcp(
                         }
                     )
                     for tc in msg.tool_calls:
+                        # Vi definierar bara function-verktyg; custom tool calls
+                        # (serverdefinierade) har inget .function-attribut.
+                        if not isinstance(tc, ChatCompletionMessageFunctionToolCall):
+                            continue
                         args = json.loads(tc.function.arguments)
                         tool_count += 1
                         if tc.function.name == "search_archive":
@@ -681,10 +635,10 @@ async def stream_openai_mcp(
                     messages.append({"role": "assistant", "content": final})
                     break
             else:
-                msg = "*[Svar avklippt — modellen nådde gränsen för antal verktygsanrop.]*"
-                parts.append(msg)
-                text_placeholder.markdown(msg)
-                messages.append({"role": "assistant", "content": msg})
+                truncated = "*[Svar avklippt — modellen nådde gränsen för antal verktygsanrop.]*"
+                parts.append(truncated)
+                text_placeholder.markdown(truncated)
+                messages.append({"role": "assistant", "content": truncated})
     except Exception as exc:
         error_msg = f"*Fel vid anrop till {cfg['model']}: {exc}*"
         parts.append(error_msg)
@@ -700,7 +654,7 @@ async def stream_openai_mcp(
     )
 
 
-async def stream_openai_mcp_to_string(cfg: dict, messages: list[dict]) -> str:
+async def stream_openai_mcp_to_string(cfg: dict, messages: list[Any]) -> str:
     status_box = st.status("Söker i arkivet…", expanded=True)
     text_placeholder = st.empty()
     parts: list[str] = []
@@ -760,12 +714,12 @@ def _graph_driver():
         return None
 
 
-def _compute_answer_centers(answer: str) -> list[dict]:
+def _compute_answer_centers(answer: str, profile: dict) -> list[dict]:
     """Svar → LLM-entitetslista → center-noder i grafen. Fel → tom lista."""
     driver = _graph_driver()
     if driver is None or not answer.strip():
         return []
-    cfg = _answer_entities.resolve_entity_cfg(_llm_config.load())
+    cfg = _answer_entities.resolve_entity_cfg(profile)
     if cfg is None:
         return []
     try:
@@ -773,7 +727,8 @@ def _compute_answer_centers(answer: str) -> list[dict]:
         if not names:
             return []
         with driver.session() as s:
-            return _viz.lookup_centers(s, names)
+            centers: list[dict] = _viz.lookup_centers(s, names)
+            return centers
     except Exception as exc:  # noqa: BLE001
         log_error("utredning.graph", answer[:60], str(exc))
         return []
@@ -871,10 +826,11 @@ def _render_cytoscape_graph(nodes: list[dict], edges: list[dict],
         st.rerun()
 
 
-def _render_answer_graph(answer: str, state_key: str) -> list[dict]:
+def _render_answer_graph(answer: str, state_key: str) -> list[dict] | None:
     """Rita ego-nätverk för svarets entiteter i en hopfällbar sektion i fullbredd
     mellan svaret och källorna. Returnerar de beräknade center-noderna (eller
-    en tom lista) så utredningspärmen kan spara dem.
+    en tom lista) så utredningspärmen kan spara dem. None betyder att grafen
+    misslyckades (t.ex. Neo4j stängdes mitt i ritningen).
 
     **Grafen byggs först när användaren öppnar toggeln** — då, och bara då, körs
     den dyra entitetsextraktionen (LLM) och Neo4j-frågorna. Resultatet cachas
@@ -895,7 +851,8 @@ def _render_answer_graph(answer: str, state_key: str) -> list[dict]:
         return []
     driver = _graph_driver()
     if driver is None:
-        st.caption("Kunskapsgraf otillgänglig — starta Neo4j med `./neo4j.sh`.")
+        st.caption("Kunskapsgraf otillgänglig — starta Neo4j med "
+                   "`.venv/bin/python scripts/neo4j.py`.")
         return []
     if not answer.strip():
         return []
@@ -908,16 +865,18 @@ def _render_answer_graph(answer: str, state_key: str) -> list[dict]:
     if not st.toggle("🕸 Visa kunskapsgraf", key=f"{state_key}_open",
                      help="Extraherar svarets entiteter och ritar deras nätverk "
                      "ur kunskapsgrafen. Byggs först när du öppnar den."):
-        return ss.get(centers_key, [])
+        saved: list[dict] = ss.get(centers_key, [])
+        return saved
 
     # Lat beräkning: kör entitetsextraktionen en gång per svar och cacha den.
     # Nytt svar nollställer även utfällda noder.
-    if ss.get(answer_key) != answer:
+    cache_identity = (answer, _profile_runtime_key)
+    if ss.get(answer_key) != cache_identity:
         with st.spinner("Bygger kunskapsgraf…"):
-            ss[centers_key] = _compute_answer_centers(answer)
-        ss[answer_key] = answer
+            ss[centers_key] = _compute_answer_centers(answer, backend)
+        ss[answer_key] = cache_identity
         ss[extra_key] = []
-    centers = ss.get(centers_key, [])
+    centers: list[dict] = ss.get(centers_key, [])
     ss.setdefault(extra_key, [])
 
     if not centers:
@@ -942,8 +901,9 @@ def _render_answer_graph(answer: str, state_key: str) -> list[dict]:
                     all_docs.append({**d, "center_norm": c["norm"]})
     except Exception as exc:  # noqa: BLE001
         log_error("utredning.graph", centers[0]["namn"], str(exc))
-        st.caption("Kunskapsgraf otillgänglig — starta Neo4j med `./neo4j.sh`.")
-        return
+        st.caption("Kunskapsgraf otillgänglig — starta Neo4j med "
+                   "`.venv/bin/python scripts/neo4j.py`.")
+        return None
 
     # Visa bara det svaret nämner: relationer mellan svarets entiteter.
     # Grannskap (alla relationer + dokument) bara för utfällda noder.
@@ -1027,9 +987,9 @@ if mcp_mode:
                 st.markdown(chat_q)
             with st.chat_message("assistant"):
                 answer, new_id = asyncio.run(
-                    stream_mcp_to_string(chat_q, ss.mcp_session_id)
+                    stream_mcp_to_string(chat_q, ss.mcp_session_id, backend)
                 )
-                centers: list[dict] = []
+                centers: list[dict] | None = []
                 if show_graph:
                     # Lat: grafen byggs först när toggeln öppnas. Samma state_key
                     # som turen får i historiken efter append.
@@ -1064,7 +1024,7 @@ if mcp_mode:
                 answer = asyncio.run(
                     stream_openai_mcp_to_string(backend, ss.openai_chat_messages)
                 )
-                centers: list[dict] = []
+                centers = []
                 if show_graph:
                     # Lat: grafen byggs först när toggeln öppnas. Samma state_key
                     # som turen får i historiken efter append.

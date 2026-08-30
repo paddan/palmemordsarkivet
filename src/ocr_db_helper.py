@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CLI-hjälpare för ocr_tesseract.sh — sköter DB-operationer parallellsäkert.
+"""CLI-hjälpare för ``scripts/ocr_tesseract.py`` — sköter DB-operationer parallellsäkert.
 
 Kommandon:
   check-done        <stem>             → exit 0 om done, exit 1 annars
@@ -33,7 +33,9 @@ import db
 
 
 def _source(pdf_path: str) -> str:
-    return db.source_for_path(pdf_path)
+    # db-modulen löses upp via sys.path-hack ovan; snäva av returtypen lokalt.
+    source: str = db.source_for_path(pdf_path)
+    return source
 
 
 def main() -> None:

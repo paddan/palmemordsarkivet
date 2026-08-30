@@ -119,7 +119,7 @@ def observations_by_person(obs: list[dict]) -> dict[str, list[dict]]:
 
 def classify_timeline_observations(obs: list[dict]) -> dict[str, list[dict]]:
     """Dela upp observationer i tidsatta, tidlösa och ogiltiga för tidslinjen."""
-    classified = {
+    classified: dict[str, list[dict]] = {
         "valid_timed": [],
         "missing_time": [],
         "invalid": [],

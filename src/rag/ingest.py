@@ -10,6 +10,7 @@ Kör:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as dt
 import json
 import math
@@ -27,7 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import db as state_db  # noqa: E402
 
 try:
-    from errors_log import log_error  # type: ignore
+    from errors_log import log_error
 except Exception:  # pragma: no cover
     def log_error(component: str, item: str, message: str) -> None:
         pass
@@ -50,7 +51,7 @@ NAME_FIELDS = ["nr", "titel", "bestallt", "upplagt", "anmarkning", "antal_sidor"
 def parse_filename(stem: str) -> dict:
     parts = [p.strip() for p in stem.split(" — ")]
     out = {f: "" for f in NAME_FIELDS}
-    for f, v in zip(NAME_FIELDS, parts):
+    for f, v in zip(NAME_FIELDS, parts, strict=False):
         out[f] = v
     if not out["nr"]:
         out["nr"] = stem[:40]
@@ -130,9 +131,7 @@ def should_reingest(
       denna tidpunkt — används för att täcka legacy-rader vid en känd re-OCR-våg.
     """
     if stored_mtime == 0:
-        if reindex_since is not None and disk_mtime > reindex_since:
-            return True
-        return False
+        return reindex_since is not None and disk_mtime > reindex_since
     return disk_mtime > stored_mtime
 
 
@@ -231,6 +230,270 @@ def _table_exists(db: lancedb.LanceDBConnection, name: str) -> bool:
     return name in names
 
 
+def _ctx(context):
+    """Returnera ``context`` eller en terminal-context för förgrundskörning."""
+    if context is not None:
+        return context
+    from operations.context import ensure_terminal_context
+
+    return ensure_terminal_context(None)
+
+
+def run_ingest(
+    *,
+    rebuild: bool,
+    limit: int | None,
+    text_dir: Path,
+    db_dir: Path,
+    chunk_chars: int,
+    chunk_overlap: int,
+    model_name: str,
+    unusable_list: Path,
+    reindex_since: float | None,
+    context=None,
+) -> int:
+    """Indexera text till LanceDB. Returnerar exitkod."""
+    ctx = _ctx(context)
+
+    # Fallback till standardmodellen när anroparen skickar ett tomt modellnamn
+    # (t.ex. registry-defaults eller pipeline) — annars byggs ett tomt index.
+    model_name = model_name or MODEL_NAME
+
+    if not text_dir.exists():
+        ctx.log(f"Saknar {text_dir}/ — kör ocr först.", level="error")
+        return 1
+
+    db_dir.mkdir(exist_ok=True)
+    db = lancedb.connect(str(db_dir))
+
+    schema = pa.schema([
+        pa.field("vector", pa.list_(pa.float32(), EMBED_DIM)),
+        pa.field("text", pa.string()),
+        pa.field("source", pa.string()),
+        pa.field("page", pa.int32()),
+        pa.field("chunk_idx", pa.int32()),
+        pa.field("mtime", pa.float64()),
+        *[pa.field(f, pa.string()) for f in NAME_FIELDS],
+    ])
+
+    if rebuild and _table_exists(db, TABLE):
+        db.drop_table(TABLE)
+    if _table_exists(db, TABLE):
+        table = db.open_table(TABLE)
+        if "mtime" not in table.schema.names:
+            ctx.log("Migrerar tabell: lägger till mtime-kolumn (default 0.0).")
+            table.add_columns({"mtime": "cast(0.0 as double)"})
+    else:
+        table = db.create_table(TABLE, schema=schema)
+
+    state_conn = state_db.connect()
+    state_db.init_schema(state_conn)
+    already: dict[str, float] = {
+        row["pdf_stem"] + ".txt": row["text_mtime"]
+        for row in state_conn.execute("SELECT pdf_stem, text_mtime FROM ingest")
+    }
+    table_sources = get_table_sources(table)
+
+    unusable_mtimes_file = Path(unusable_list).with_name("unusable_mtimes.json")
+    unusable_sources: set[str] = set()
+    if unusable_mtimes_file.exists():
+        try:
+            for fname, mtime in json.loads(
+                unusable_mtimes_file.read_text(encoding="utf-8")
+            ).items():
+                m = float(mtime)
+                unusable_sources.add(fname)
+                if fname not in already or m > already[fname]:
+                    already[fname] = m
+        except Exception:
+            pass
+
+    ctx.log(f"Laddar embedding-modell {model_name} (första gången tar några minuter)…")
+    model = SentenceTransformer(model_name)
+
+    files = sorted(text_dir.glob("*.txt"))
+
+    if not limit and (already or table_sources):
+        disk_names = {f.name for f in files}
+        orphans = find_orphans(set(already) | table_sources, disk_names)
+        if orphans:
+            ctx.log(f"Rensar {len(orphans)} föräldralösa poster (text/-fil borta):")
+            for s in orphans:
+                table.delete(_source_predicate(s))
+                already.pop(s, None)
+                table_sources.discard(s)
+                stem = s[:-4] if s.endswith(".txt") else s
+                state_conn.execute("DELETE FROM ingest WHERE pdf_stem=?", (stem,))
+                ctx.log(f"  - {s}")
+            state_conn.commit()
+
+    if limit:
+        files = files[: limit]
+
+    # Klassificera varje fil: ny, re-indexera, eller skip.
+    todo: list[tuple[Path, float, bool]] = []  # (path, disk_mtime, is_reingest)
+    skipped = 0
+    for f in files:
+        disk_mtime = f.stat().st_mtime
+        action = classify_index_action(
+            filename=f.name,
+            disk_mtime=disk_mtime,
+            already=already,
+            table_sources=table_sources,
+            reindex_since=reindex_since,
+            unusable_sources=unusable_sources,
+        )
+        if action == "new":
+            todo.append((f, disk_mtime, False))
+        elif action == "reingest":
+            todo.append((f, disk_mtime, True))
+        else:
+            skipped += 1
+
+    new_count = sum(1 for _, _, r in todo if not r)
+    reindex_count = sum(1 for _, _, r in todo if r)
+    ctx.log(
+        f"Indexerar {len(todo)} av {len(files)} filer "
+        f"(nya: {new_count}, re-index: {reindex_count}, skippar: {skipped})."
+    )
+
+    t0 = time.monotonic()
+    total_chunks = 0
+    unusable: list[str] = []
+    unusable_mtimes: dict[str, float] = {}
+
+    for i, (f, disk_mtime, is_reingest) in enumerate(todo, 1):
+        ctx.check_cancelled()
+        ctx.progress(i, len(todo), f.name)
+        meta = parse_filename(f.stem)
+        try:
+            raw = f.read_text(encoding="utf-8", errors="replace")
+        except OSError as e:
+            ctx.log(f"  [{i}/{len(todo)}] SKIP {f.name}: {e}", level="error")
+            continue
+
+        rows = []
+        chunk_idx = 0
+        for page_idx, page in enumerate(split_pages(raw), start=1):
+            for _, _, chunk in chunk_text(page, chunk_chars, chunk_overlap):
+                if not is_useful(chunk):
+                    continue
+                rows.append({
+                    "text": chunk,
+                    "source": f.name,
+                    "page": page_idx,
+                    "chunk_idx": chunk_idx,
+                    "mtime": disk_mtime,
+                    **meta,
+                })
+                chunk_idx += 1
+
+        if not rows:
+            ctx.log(
+                f"  [{i}/{len(todo)}] {f.name}: inga användbara chunks",
+                level="warning",
+            )
+            delete_source_for_reingest(table, f.name, is_reingest=is_reingest)
+            state_db.record_ingest(
+                state_conn, pdf_stem=f.stem,
+                text_mtime=disk_mtime, chunks=0,
+            )
+            unusable.append(f.name)
+            unusable_mtimes[f.name] = disk_mtime
+            continue
+
+        # e5 vill ha "passage: " på dokument
+        try:
+            embeddings = model.encode(
+                [f"passage: {r['text']}" for r in rows],
+                batch_size=32,
+                show_progress_bar=False,
+                convert_to_numpy=True,
+                normalize_embeddings=True,
+            )
+            for idx, v in enumerate(embeddings):
+                if not all(math.isfinite(x) for x in v):
+                    raise ValueError(f"chunk {idx}: embedding innehåller NaN/Inf")
+                if not any(v):
+                    raise ValueError(f"chunk {idx}: embedding är all-nollor")
+        except Exception as e:  # noqa: BLE001
+            ctx.log(
+                f"  [{i}/{len(todo)}] SKIP {f.name}: embedding-fel — {e}",
+                level="error",
+            )
+            log_error("ingest.embed", f.name, str(e))
+            continue
+
+        for r, v in zip(rows, embeddings, strict=False):
+            r["vector"] = v.tolist()
+
+        delete_source_for_reingest(table, f.name, is_reingest=is_reingest)
+        table.add(rows)
+        total_chunks += len(rows)
+
+        # Spegla i state.db för delta-frågor.
+        try:
+            state_db.record_ingest(
+                state_conn, pdf_stem=f.stem,
+                text_mtime=disk_mtime, chunks=len(rows),
+            )
+        except Exception as e:  # noqa: BLE001
+            ctx.log(
+                f"  [{i}/{len(todo)}] varning: state_db.record_ingest failed: {e}",
+                level="warning",
+            )
+
+        elapsed = time.monotonic() - t0
+        rate = i / elapsed if elapsed else 0
+        eta = (len(todo) - i) / rate if rate else 0
+        tag = "↻" if is_reingest else "+"
+        ctx.log(
+            f"  [{i:>4}/{len(todo)}] {tag} {f.name[:58]:58s} "
+            f"+{len(rows):>3} chunks (totalt {total_chunks}, eta {int(eta // 60)}m{int(eta % 60):02d}s)"
+        )
+
+    # Bygg/uppdatera FTS-index (BM25). Kräver lancedb med tantivy/native FTS.
+    try:
+        table.create_fts_index("text", replace=True)
+        ctx.log("✓ FTS-index uppdaterat (BM25 på 'text') — hybridsök tillgängligt.")
+    except Exception as e:  # noqa: BLE001
+        ctx.log(
+            f"⚠ FTS-index kunde inte skapas ({e}).\n"
+            f"  Hybridsök (--hybrid) fungerar inte förrän det fixas.\n"
+            f"  Prova: pip install --upgrade lancedb",
+            level="error",
+        )
+
+    ctx.log(f"\nKlart. Tabell '{TABLE}' har {table.count_rows()} chunks.")
+
+    if unusable:
+        unusable_path = Path(unusable_list)
+        unusable_path.write_text("\n".join(unusable) + "\n", encoding="utf-8")
+        # Spara mtime per oanvändbar fil så nästa körning kan hoppa över dem.
+        existing_um: dict[str, float] = {}
+        if unusable_mtimes_file.exists():
+            with contextlib.suppress(Exception):
+                existing_um = {
+                    k: float(v)
+                    for k, v in json.loads(
+                        unusable_mtimes_file.read_text(encoding="utf-8")
+                    ).items()
+                }
+        existing_um.update(unusable_mtimes)
+        unusable_mtimes_file.write_text(
+            json.dumps(existing_um, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        ctx.log(
+            f"\n{len(unusable)} filer producerade noll användbara chunks — "
+            f"skrivna till {unusable_path}.\n"
+            f"Kör om OCR med:  .venv/bin/python scripts/ocr.py --redo --mode files "
+            f"--from-list {unusable_path}",
+            level="warning",
+        )
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -258,9 +521,7 @@ def main() -> int:
                          "till denna fil (default: generated/unusable.txt)")
     ap.add_argument("--reindex-since",
                     help="tvinga re-index av filer modifierade efter denna tid "
-                         "(ISO 8601 t.ex. '2026-05-01' eller unix-sekunder). "
-                         "Påverkar bara legacy-rader utan känd mtime — tracked "
-                         "filer detekteras alltid automatiskt via mtime.")
+                         "(ISO 8601 t.ex. '2026-05-01' eller unix-sekunder).")
     args = ap.parse_args()
 
     reindex_since: float | None = None
@@ -271,248 +532,17 @@ def main() -> int:
             print(f"Ogiltigt --reindex-since: {e}", file=sys.stderr)
             return 2
 
-    text_dir = Path(args.text_dir)
-    db_dir = Path(args.db_dir)
-    if not text_dir.exists():
-        print(f"Saknar {text_dir}/ — kör ocr.sh först.", file=sys.stderr)
-        return 1
-
-    db_dir.mkdir(exist_ok=True)
-    db = lancedb.connect(str(db_dir))
-
-    schema = pa.schema([
-        pa.field("vector", pa.list_(pa.float32(), EMBED_DIM)),
-        pa.field("text", pa.string()),
-        pa.field("source", pa.string()),
-        pa.field("page", pa.int32()),
-        pa.field("chunk_idx", pa.int32()),
-        pa.field("mtime", pa.float64()),
-        *[pa.field(f, pa.string()) for f in NAME_FIELDS],
-    ])
-
-    if args.rebuild and _table_exists(db, TABLE):
-        db.drop_table(TABLE)
-    if _table_exists(db, TABLE):
-        table = db.open_table(TABLE)
-        # Migration: lägg till mtime-kolumn om den saknas (legacy-tabell).
-        # mtime-kolumnen behålls för bakåtkompat men läses inte längre — källa
-        # till sanning för delta-frågor är numera state.db `ingest`-tabellen.
-        if "mtime" not in table.schema.names:
-            print("Migrerar tabell: lägger till mtime-kolumn (default 0.0).")
-            table.add_columns({"mtime": "cast(0.0 as double)"})
-    else:
-        table = db.create_table(TABLE, schema=schema)
-
-    state_conn = state_db.connect()
-    state_db.init_schema(state_conn)
-    # Källa till sanning för "vad har indexerats sedan när": ingest-tabellen.
-    # LanceDB-mtime behålls för bakåtkompat men läses inte längre.
-    # `already` byggs från `ingest`-tabellen. Om någon raderar state.db medan
-    # LanceDB-tabellen finns kvar re-indexeras tabellen helt vid nästa körning
-    # (säkert, men slösigt).
-    already: dict[str, float] = {
-        row["pdf_stem"] + ".txt": row["text_mtime"]
-        for row in state_conn.execute(
-            "SELECT pdf_stem, text_mtime FROM ingest"
-        )
-    }
-    table_sources = get_table_sources(table)
-
-    # Läs in oanvändbara filers mtime så de hoppas över tills de ändras på disk.
-    unusable_mtimes_file = Path(args.unusable_list).with_name("unusable_mtimes.json")
-    unusable_sources: set[str] = set()
-    if unusable_mtimes_file.exists():
-        try:
-            for fname, mtime in json.loads(
-                unusable_mtimes_file.read_text(encoding="utf-8")
-            ).items():
-                m = float(mtime)
-                unusable_sources.add(fname)
-                if fname not in already or m > already[fname]:
-                    already[fname] = m
-        except Exception:
-            pass
-
-    print(f"Laddar embedding-modell {args.model} (första gången tar några minuter)…")
-    model = SentenceTransformer(args.model)
-
-    files = sorted(text_dir.glob("*.txt"))
-
-    # Rensa orphan-poster: source-filer som finns i tabellen men inte längre i
-    # text/. Hoppas över med --limit eftersom vi då bara ser en delmängd.
-    if not args.limit and (already or table_sources):
-        disk_names = {f.name for f in files}
-        orphans = find_orphans(set(already) | table_sources, disk_names)
-        if orphans:
-            print(f"Rensar {len(orphans)} föräldralösa poster (text/-fil borta):")
-            for s in orphans:
-                table.delete(_source_predicate(s))
-                already.pop(s, None)
-                table_sources.discard(s)
-                # rensa även från state.db.ingest
-                stem = s[:-4] if s.endswith(".txt") else s
-                state_conn.execute(
-                    "DELETE FROM ingest WHERE pdf_stem=?", (stem,)
-                )
-                print(f"  - {s}")
-            state_conn.commit()
-
-    if args.limit:
-        files = files[: args.limit]
-
-    # Klassificera varje fil: ny, re-indexera, eller skip.
-    todo: list[tuple[Path, float, bool]] = []  # (path, disk_mtime, is_reingest)
-    skipped = 0
-    for f in files:
-        disk_mtime = f.stat().st_mtime
-        action = classify_index_action(
-            filename=f.name,
-            disk_mtime=disk_mtime,
-            already=already,
-            table_sources=table_sources,
-            reindex_since=reindex_since,
-            unusable_sources=unusable_sources,
-        )
-        if action == "new":
-            todo.append((f, disk_mtime, False))
-        elif action == "reingest":
-            todo.append((f, disk_mtime, True))
-        else:
-            skipped += 1
-
-    new_count = sum(1 for _, _, r in todo if not r)
-    reindex_count = sum(1 for _, _, r in todo if r)
-    print(
-        f"Indexerar {len(todo)} av {len(files)} filer "
-        f"(nya: {new_count}, re-index: {reindex_count}, skippar: {skipped})."
+    return run_ingest(
+        rebuild=args.rebuild,
+        limit=args.limit,
+        text_dir=Path(args.text_dir),
+        db_dir=Path(args.db_dir),
+        chunk_chars=args.chunk_chars,
+        chunk_overlap=args.chunk_overlap,
+        model_name=args.model,
+        unusable_list=Path(args.unusable_list),
+        reindex_since=reindex_since,
     )
-
-    t0 = time.monotonic()
-    total_chunks = 0
-    unusable: list[str] = []
-    unusable_mtimes: dict[str, float] = {}
-
-    for i, (f, disk_mtime, is_reingest) in enumerate(todo, 1):
-        meta = parse_filename(f.stem)
-        try:
-            raw = f.read_text(encoding="utf-8", errors="replace")
-        except OSError as e:
-            print(f"  [{i}/{len(todo)}] SKIP {f.name}: {e}")
-            continue
-
-        rows = []
-        chunk_idx = 0
-        for page_idx, page in enumerate(split_pages(raw), start=1):
-            for _, _, chunk in chunk_text(page, args.chunk_chars, args.chunk_overlap):
-                if not is_useful(chunk):
-                    continue
-                rows.append({
-                    "text": chunk,
-                    "source": f.name,
-                    "page": page_idx,
-                    "chunk_idx": chunk_idx,
-                    "mtime": disk_mtime,
-                    **meta,
-                })
-                chunk_idx += 1
-
-        if not rows:
-            print(f"  [{i}/{len(todo)}] {f.name}: inga användbara chunks")
-            delete_source_for_reingest(table, f.name, is_reingest=is_reingest)
-            state_db.record_ingest(
-                state_conn, pdf_stem=f.stem,
-                text_mtime=disk_mtime, chunks=0,
-            )
-            unusable.append(f.name)
-            unusable_mtimes[f.name] = disk_mtime
-            continue
-
-        # e5 vill ha "passage: " på dokument
-        try:
-            embeddings = model.encode(
-                [f"passage: {r['text']}" for r in rows],
-                batch_size=32,
-                show_progress_bar=False,
-                convert_to_numpy=True,
-                normalize_embeddings=True,
-            )
-            for idx, v in enumerate(embeddings):
-                if not all(math.isfinite(x) for x in v):
-                    raise ValueError(f"chunk {idx}: embedding innehåller NaN/Inf")
-                if not any(v):
-                    raise ValueError(f"chunk {idx}: embedding är all-nollor")
-        except Exception as e:  # noqa: BLE001
-            print(f"  [{i}/{len(todo)}] SKIP {f.name}: embedding-fel — {e}", file=sys.stderr)
-            log_error("ingest.embed", f.name, str(e))
-            continue
-
-        for r, v in zip(rows, embeddings):
-            r["vector"] = v.tolist()
-
-        delete_source_for_reingest(table, f.name, is_reingest=is_reingest)
-        table.add(rows)
-        total_chunks += len(rows)
-
-        # Spegla i state.db för delta-frågor.
-        try:
-            state_db.record_ingest(
-                state_conn, pdf_stem=f.stem,
-                text_mtime=disk_mtime, chunks=len(rows),
-            )
-        except Exception as e:  # noqa: BLE001
-            print(f"  [{i}/{len(todo)}] varning: state_db.record_ingest failed: {e}",
-                  file=sys.stderr)
-
-        elapsed = time.monotonic() - t0
-        rate = i / elapsed if elapsed else 0
-        eta = (len(todo) - i) / rate if rate else 0
-        tag = "↻" if is_reingest else "+"
-        print(
-            f"  [{i:>4}/{len(todo)}] {tag} {f.name[:58]:58s} "
-            f"+{len(rows):>3} chunks (totalt {total_chunks}, eta {int(eta // 60)}m{int(eta % 60):02d}s)"
-        )
-
-    # Bygg/uppdatera FTS-index (BM25). Kräver lancedb med tantivy/native FTS.
-    try:
-        table.create_fts_index("text", replace=True)
-        print("✓ FTS-index uppdaterat (BM25 på 'text') — hybridsök tillgängligt.")
-    except Exception as e:  # noqa: BLE001
-        print(
-            f"⚠ FTS-index kunde inte skapas ({e}).\n"
-            f"  Hybridsök (--hybrid) fungerar inte förrän det fixas.\n"
-            f"  Prova: pip install --upgrade lancedb",
-            file=sys.stderr,
-        )
-
-    print(f"\nKlart. Tabell '{TABLE}' har {table.count_rows()} chunks.")
-
-    if unusable:
-        unusable_path = Path(args.unusable_list)
-        unusable_path.write_text("\n".join(unusable) + "\n", encoding="utf-8")
-        # Spara mtime per oanvändbar fil så nästa körning kan hoppa över dem.
-        existing_um: dict[str, float] = {}
-        if unusable_mtimes_file.exists():
-            try:
-                existing_um = {
-                    k: float(v)
-                    for k, v in json.loads(
-                        unusable_mtimes_file.read_text(encoding="utf-8")
-                    ).items()
-                }
-            except Exception:
-                pass
-        existing_um.update(unusable_mtimes)
-        unusable_mtimes_file.write_text(
-            json.dumps(existing_um, indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
-        print(
-            f"\n{len(unusable)} filer producerade noll användbara chunks — "
-            f"skrivna till {unusable_path}.\n"
-            f"Kör om OCR med:  ./ocr.sh --redo --mode files "
-            f"--from-list {unusable_path}"
-        )
-    return 0
 
 
 if __name__ == "__main__":

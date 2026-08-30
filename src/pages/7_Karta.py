@@ -42,16 +42,18 @@ def _load_seed_file(name: str) -> list[dict]:
 
 
 def _seed_if_needed(conn) -> int:
-    return _state_db.seed_map_data_if_empty(
+    count: int = _state_db.seed_map_data_if_empty(
         conn,
         _load_seed_file("platser.json"),
         _load_seed_file("rorelser.json"),
     )
+    return count
 
 
 @st.cache_resource(show_spinner=False)
 def _nr_to_pdf_mapping(root: str) -> dict[str, Path]:
-    return _citations.build_nr_to_pdf(Path(root))
+    mapping: dict[str, Path] = _citations.build_nr_to_pdf(Path(root))
+    return mapping
 
 
 @st.cache_data(show_spinner=False)
@@ -71,7 +73,8 @@ def _sources_for_observation(obs: dict) -> list[dict]:
         return []
     mapping = _nr_to_pdf_mapping(str(ROOT))
     stems = [pdf.stem for pdf in _citations.resolve_nr_all(nr, mapping)]
-    return _karta.observation_source_payloads(obs, source_stems=stems)
+    payloads: list[dict] = _karta.observation_source_payloads(obs, source_stems=stems)
+    return payloads
 
 
 def _sources_for_candidate(candidate: dict) -> list[dict]:

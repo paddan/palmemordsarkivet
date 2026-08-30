@@ -34,7 +34,7 @@ dev = [
     "ruff",
 ]
 web = [
-    "streamlit",
+    "streamlit>=1.57,<2",
     "openai",
     "folium",
     "streamlit-folium",
@@ -88,4 +88,4 @@ py-modules = [
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["rag*", "graph*"]
+include = ["rag*", "graph*", "operations*"]

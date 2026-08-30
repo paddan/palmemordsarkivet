@@ -9,7 +9,6 @@ import pytest
 
 from normalize_text import normalize, process_file
 
-
 # ---------------------------------------------------------------------------
 # normalize() — textomvandlingar
 # ---------------------------------------------------------------------------
@@ -68,7 +67,9 @@ def test_process_file_dry_run_does_not_write(tmp_path):
 
 def _run_main(args: list[str], txt_dir: Path, db_path: Path) -> str:
     """Kör normalize_text.main() via subprocess med given state.db."""
-    import subprocess, sys, os
+    import os
+    import subprocess
+    import sys
     env = os.environ.copy()
     env["STATE_DB"] = str(db_path)
     result = subprocess.run(

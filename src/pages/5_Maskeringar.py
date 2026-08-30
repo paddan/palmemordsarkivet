@@ -28,7 +28,8 @@ conn = _casebook_ui.state_conn()
 @st.cache_data(ttl=300, show_spinner="Letar maskeringar…")
 def _documents() -> list[dict]:
     # Cachas på innehåll via en enkel signatur; ttl räcker för en arbetssession.
-    return _redactions.documents_by_redaction(conn)
+    rows: list[dict] = _redactions.documents_by_redaction(conn)
+    return rows
 
 
 docs = _documents()

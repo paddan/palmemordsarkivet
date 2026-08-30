@@ -8,12 +8,74 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-import config
-import llm_config_cli
+import config  # noqa: E402
+import llm_config_cli  # noqa: E402
+
+
+def test_resolve_runtime_profile_uses_selected_model_and_secret_env() -> None:
+    profile = {
+        "backend_name": "OpenAI-kompatibel",
+        "provider": "openai",
+        "model": "privat-modell",
+        "base_url": "https://llm.example/v1",
+        "api_key_env": "PRIVATE_LLM_TOKEN",
+    }
+    catalog = {
+        "OpenAI-kompatibel": {
+            "kind": "openai",
+            "model": "fallback",
+            "base_url": "http://localhost:11434/v1",
+            "env": None,
+        }
+    }
+
+    runtime = config.resolve_runtime_profile(
+        profile, catalog, environ={"PRIVATE_LLM_TOKEN": "hemlig"}
+    )
+
+    assert runtime["model"] == "privat-modell"
+    assert runtime["api_key"] == "hemlig"
+    assert runtime["api_key_env"] == "PRIVATE_LLM_TOKEN"
+
+
+def test_resolve_runtime_profile_keeps_known_backend_env_compatible() -> None:
+    profile = {
+        "backend_name": "OpenAI",
+        "provider": "openai",
+        "model": "gpt-test",
+        "base_url": "",
+    }
+    catalog = {
+        "OpenAI": {
+            "kind": "openai",
+            "model": "gpt-default",
+            "base_url": "https://api.openai.com/v1",
+            "env": "OPENAI_API_KEY",
+        }
+    }
+
+    runtime = config.resolve_runtime_profile(
+        profile, catalog, environ={"OPENAI_API_KEY": "bakåtkompatibel"}
+    )
+
+    assert runtime["api_key"] == "bakåtkompatibel"
+    assert runtime["api_key_env"] == "OPENAI_API_KEY"
+
+
+def test_profile_cache_key_changes_with_selected_profile() -> None:
+    profile_a = {"backend_name": "Claude", "model": "claude-a", "base_url": ""}
+    profile_b = {"backend_name": "Claude", "model": "claude-b", "base_url": ""}
+
+    assert config.profile_cache_key("A", profile_a) != config.profile_cache_key("B", profile_b)
 
 
 def _patch_cfg(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "CONFIG_FILE", tmp_path / "llm_config.json")
+
+
+def _stored_profile(tmp_path) -> dict:
+    stored = json.loads((tmp_path / "llm_config.json").read_text(encoding="utf-8"))
+    return stored["profiles"][stored["default"]]
 
 
 def test_show_without_file_uses_defaults(tmp_path, monkeypatch, capsys) -> None:
@@ -27,7 +89,7 @@ def test_show_without_file_uses_defaults(tmp_path, monkeypatch, capsys) -> None:
 def test_set_model_persists(tmp_path, monkeypatch, capsys) -> None:
     _patch_cfg(tmp_path, monkeypatch)
     assert llm_config_cli.main(["--model", "claude-haiku-4-5-20251001"]) == 0
-    stored = json.loads((tmp_path / "llm_config.json").read_text(encoding="utf-8"))
+    stored = _stored_profile(tmp_path)
     assert stored["model"] == "claude-haiku-4-5-20251001"
     assert stored["provider"] == "claude"
 
@@ -36,7 +98,7 @@ def test_provider_switch_resets_model_to_default(tmp_path, monkeypatch, capsys) 
     _patch_cfg(tmp_path, monkeypatch)
     llm_config_cli.main(["--model", "claude-opus-4-8"])
     assert llm_config_cli.main(["--provider", "openai"]) == 0
-    stored = json.loads((tmp_path / "llm_config.json").read_text(encoding="utf-8"))
+    stored = _stored_profile(tmp_path)
     assert stored["provider"] == "openai"
     assert stored["model"] == "gpt-4o-mini"
     assert stored["backend_name"] == "OpenAI"
@@ -46,7 +108,7 @@ def test_provider_switch_with_model_keeps_it(tmp_path, monkeypatch) -> None:
     _patch_cfg(tmp_path, monkeypatch)
     llm_config_cli.main(["--provider", "openai", "--model", "deepseek-chat",
                          "--base-url", "https://api.deepseek.com/v1"])
-    stored = json.loads((tmp_path / "llm_config.json").read_text(encoding="utf-8"))
+    stored = _stored_profile(tmp_path)
     assert stored["model"] == "deepseek-chat"
     assert stored["base_url"] == "https://api.deepseek.com/v1"
 
@@ -88,7 +150,7 @@ def test_menu_selects_backend_and_model(tmp_path, monkeypatch) -> None:
     # Backend = DeepSeek, modell = nr 2 (deepseek-reasoner ur statisk fallback).
     read = _reader([str(deepseek_idx), "2"])
     assert llm_config_cli.run_menu(read=read, out=lambda *_: None) == 0
-    stored = json.loads((tmp_path / "llm_config.json").read_text(encoding="utf-8"))
+    stored = _stored_profile(tmp_path)
     assert stored["backend_name"] == "DeepSeek"
     assert stored["provider"] == "openai"
     assert stored["model"] == "deepseek-reasoner"
@@ -104,7 +166,7 @@ def test_menu_custom_model_name(tmp_path, monkeypatch) -> None:
     # Claude, sedan "skriv eget namn"-alternativet (sista numret), sedan namnet.
     read = _reader([str(claude_idx), str(n_models + 1), "claude-future-9"])
     assert llm_config_cli.run_menu(read=read, out=lambda *_: None) == 0
-    stored = json.loads((tmp_path / "llm_config.json").read_text(encoding="utf-8"))
+    stored = _stored_profile(tmp_path)
     assert stored["backend_name"] == "Claude"
     assert stored["provider"] == "claude"
     assert stored["model"] == "claude-future-9"
@@ -118,7 +180,7 @@ def test_menu_default_backend_on_empty_input(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(backends, "fetch_models", lambda base_url, api_key: [])
     read = _reader(["", ""])
     assert llm_config_cli.run_menu(read=read, out=lambda *_: None) == 0
-    stored = json.loads((tmp_path / "llm_config.json").read_text(encoding="utf-8"))
+    stored = _stored_profile(tmp_path)
     assert stored["backend_name"] == "OpenAI"
     assert stored["model"] == "gpt-4o-mini"
 
@@ -138,3 +200,21 @@ def test_menu_handles_eof_gracefully(tmp_path, monkeypatch) -> None:
         raise EOFError
 
     assert llm_config_cli.run_menu(read=read, out=lambda *_: None) == 1
+
+
+def test_run_llm_config_logs_through_context(tmp_path, monkeypatch) -> None:
+    # Som admin-jobb ska statusutskrifterna gå via ctx.log (jobbloggen),
+    # inte försvinna i processens stdout.
+    _patch_cfg(tmp_path, monkeypatch)
+    logs: list[str] = []
+
+    class FakeCtx:
+        def log(self, message: str, *, level: str = "info") -> None:
+            logs.append(message)
+
+    assert llm_config_cli.run_llm_config(
+        provider="openai", model=None, base_url=None, reset=False, context=FakeCtx()
+    ) == 0
+    assert any("Provider bytt" in msg for msg in logs)
+    assert any("provider:  openai" in msg for msg in logs)
+    assert any("model:     gpt-4o-mini" in msg for msg in logs)

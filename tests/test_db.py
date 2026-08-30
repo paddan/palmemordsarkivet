@@ -210,7 +210,7 @@ def test_init_schema_migrates_legacy_v4_fixture(tmp_path):
                 "SELECT version FROM schema_version ORDER BY version"
             )
         ]
-        assert versions == [4, SCHEMA_VERSION]
+        assert versions == [4, 6, SCHEMA_VERSION]
     finally:
         conn.close()
 
@@ -1166,3 +1166,67 @@ def test_record_doc_entities_is_upsert(tmp_path):
                         payload={"entiteter": [], "relationer": []}, model="b")
     rows = list(iter_doc_entities(conn))
     assert len(rows) == 1
+
+
+def test_list_pending_redaction_stems_and_reset(tmp_path):
+    from db import list_pending_redaction_stems, reset_redaction_state
+    conn = _fresh(tmp_path)
+    upsert_pdf_file(conn, pdf_stem="a", source="files", pdf_path="downloaded/files/a.pdf")
+    upsert_pdf_file(conn, pdf_stem="b", source="files", pdf_path="downloaded/files/b.pdf")
+    mark_redaction_checked(conn, "a", has_redactions=True)
+
+    assert list_pending_redaction_stems(conn) == ["b"]
+    assert list_pending_redaction_stems(conn, files_from={"b"}) == ["b"]
+    assert list_pending_redaction_stems(conn, files_from={"x"}) == []
+
+    assert reset_redaction_state(conn) == 2
+    assert set(list_pending_redaction_stems(conn)) == {"a", "b"}
+
+
+def test_reset_pipeline_state_for_stem(tmp_path):
+    from db import get_pages_for_stem, record_page, reset_pipeline_state_for_stem
+    conn = _fresh(tmp_path)
+    upsert_pdf_file(conn, pdf_stem="doc", source="files", pdf_path="downloaded/files/doc.pdf")
+    record_page(conn, pdf_stem="doc", page_num=1, engine="surya", text="hej", score=90.0)
+    mark_tesseract_done(conn, "doc", pdf_path="downloaded/files/doc.pdf", source="files")
+
+    reset_pipeline_state_for_stem(conn, "doc")
+
+    assert get_pages_for_stem(conn, "doc") == []
+    row = get_pdf_file(conn, "doc")
+    assert row["tesseract_done_at"] is None
+    assert row["tesseract_failed"] == 0
+
+
+def test_create_admin_job_duplicate_id_is_not_active_job_error(tmp_path):
+    """PK-kollision på dubblett-jobb-id får inte tolkas som att ett jobb körs.
+
+    Regression: tidigare omvandlades varje IntegrityError till
+    ActiveAdminJobError ("jobb körs redan") — även när inget jobb var aktivt
+    och kollisionen bara var ett återanvänt jobb-id.
+    """
+    from db import (
+        ActiveAdminJobError,
+        DuplicateAdminJobError,
+        claim_admin_job,
+        create_admin_job,
+        finish_admin_job,
+    )
+
+    conn = _fresh(tmp_path)
+    create_admin_job(conn, job_id="job-1", operation="ingest",
+                     params_json="{}", log_path="job-1.log")
+    claim_admin_job(conn, "job-1", pid=123)
+    finish_admin_job(conn, "job-1", status="succeeded", exit_code=0)
+
+    # Inget jobb är aktivt — dubblett-id:et får ett tydligt fel om just det.
+    with pytest.raises(DuplicateAdminJobError, match="job-1"):
+        create_admin_job(conn, job_id="job-1", operation="ingest",
+                         params_json="{}", log_path="job-1.log")
+
+    # Ett verkligt aktivt jobb ska fortfarande ge ActiveAdminJobError.
+    create_admin_job(conn, job_id="job-2", operation="ingest",
+                     params_json="{}", log_path="job-2.log")
+    with pytest.raises(ActiveAdminJobError, match="job-2"):
+        create_admin_job(conn, job_id="job-3", operation="ingest",
+                         params_json="{}", log_path="job-3.log")

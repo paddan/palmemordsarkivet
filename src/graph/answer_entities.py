@@ -91,7 +91,7 @@ def resolve_entity_cfg(saved: dict) -> dict | None:
     """
     if saved.get("provider") == "openai":
         base_url = saved.get("base_url", "")
-        api_key = _api_key_for_openai_base_url(base_url)
+        api_key = saved.get("api_key", "") or _api_key_for_openai_base_url(base_url)
         if base_url and _required_env_for_openai_base_url(base_url) and not api_key:
             return None
         if base_url or api_key:

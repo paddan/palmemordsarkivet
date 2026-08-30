@@ -33,7 +33,7 @@ NODE_ICONS = {
 
 def resolve_password() -> str | None:
     """Neo4j-lösenord: NEO4J_PASSWORD i miljön, annars neo4j/.password
-    (skapad av neo4j.sh). None om inget hittas."""
+    (skapad av ``scripts/neo4j.py``). None om inget hittas."""
     pw = os.environ.get("NEO4J_PASSWORD")
     if pw:
         return pw

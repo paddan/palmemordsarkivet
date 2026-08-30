@@ -15,14 +15,14 @@ detaljer om varje steg, se [Teknisk referens](teknisk-referens.md).
 ## 1. Installera
 
 ```bash
-./install.sh           # installera pipeline/webgränssnitt (brew, Python-paket, tessdata)
-./install.sh --no-surya  # snabbare install utan Surya-OCR
-./install.sh --dev     # valfritt: installera pytest/ruff/mypy för utveckling
+.venv/bin/python scripts/install.py           # installera pipeline/webgränssnitt (brew, Python-paket, tessdata)
+.venv/bin/python scripts/install.py --no-surya  # snabbare install utan Surya-OCR
+.venv/bin/python scripts/install.py --dev     # valfritt: installera pytest/ruff/mypy för utveckling
 ```
 
-`install.sh` sköter pipeline- och webgränssnittsberoendena via Homebrew och pip — se
-[Vad install.sh gör](teknisk-referens.md#vad-installsh-gör) för detaljer.
-Kör `./test.sh` för pytest; lägg till `--static` när du vill köra ruff och mypy.
+`scripts/install.py` sköter pipeline- och webgränssnittsberoendena via Homebrew och pip — se
+[Vad install.py gör](teknisk-referens.md#vad-installpy-gör) för detaljer.
+Kör `.venv/bin/python scripts/test.py` för pytest; lägg till `--static` när du vill köra ruff och mypy.
 
 ## 2. Sätt en API-nyckel
 
@@ -51,28 +51,28 @@ sparar valt backend i `generated/llm_config.json` mellan sessioner — se
 Allt i ett kommando:
 
 ```bash
-./run_pipeline.sh      # kör alla steg i ett (download → OCR → ingest)
-./web.sh               # Starta webgränssnittet och ställ frågor
+.venv/bin/python scripts/run_pipeline.py      # kör alla steg i ett (download → OCR → ingest)
+.venv/bin/python scripts/web.py               # Starta webgränssnittet och ställ frågor
 ```
 
 Eller steg för steg:
 
 ```bash
-./download.sh          # 1. Ladda ner alla PDF:er (3 762 st, tar några timmar)
-./download_wpu.sh      # 1b. (valfritt) Ladda ner WPU PDF:er (7 155 st)
-./ocr.sh               # 2. OCR → text (Tesseract + Surya-fallback/svåra sidor, tar flera timmar)
-./ingest.sh            # 3. Bygg vektorindex i LanceDB (kan ta flera timmar)
-./web.sh               # 4. Starta webgränssnittet och ställ frågor
+.venv/bin/python scripts/download.py          # 1. Ladda ner alla PDF:er (3 762 st, tar några timmar)
+.venv/bin/python scripts/download_wpu.py      # 1b. (valfritt) Ladda ner WPU PDF:er (7 155 st)
+.venv/bin/python scripts/ocr.py               # 2. OCR → text (Tesseract + Surya-fallback/svåra sidor, tar flera timmar)
+.venv/bin/python scripts/ingest.py            # 3. Bygg vektorindex i LanceDB (kan ta flera timmar)
+.venv/bin/python scripts/web.py               # 4. Starta webgränssnittet och ställ frågor
 ```
 
 Varje steg är idempotent — avbryt och fortsätt när som helst.
-`run_pipeline.sh` kör därför OCR och ingest även när nedladdningssteget inte
+`scripts/run_pipeline.py` kör därför OCR och ingest även när nedladdningssteget inte
 hittar nya filer, så väntande arbete från en tidigare avbruten körning slutförs.
 
 ## 4. Ställ frågor
 
 ```bash
-./web.sh   # Starta Streamlit-webgränssnittet
+.venv/bin/python scripts/web.py   # Starta Streamlit-webgränssnittet
 ```
 
 Fliken **Utredning** har två lägen: **RAG** (snabbt, deterministiskt — bra för
@@ -121,8 +121,8 @@ börjar tom tills verifierade observationer läggs till.
 För att leta fram kandidater ur OCR-texten utan att publicera dem direkt:
 
 ```bash
-./extract_map_observations.sh --dry-run --limit 20
-./extract_map_observations.sh --limit 20
+.venv/bin/python scripts/extract_map_observations.py --dry-run --limit 20
+.venv/bin/python scripts/extract_map_observations.py --limit 20
 ```
 
 Öppna sedan Karta-fliken och granska förslagen under **Granska extraherade
@@ -147,26 +147,28 @@ podman machine init --memory 4096
 
 ### 2. Välj LLM för extraktionen
 
-`extract_entities.sh` skickar OCR-texten sida för sida till en LLM för att hitta
+`scripts/extract_entities.py` skickar OCR-texten sida för sida till en LLM för att hitta
 personer, platser, organisationer och relationer. Det kan därför ta tid och
-kosta API-tokens. Skriptet använder normalt samma sparade LLM-val som
-webgränssnittet och `llm_correct.sh`.
+kosta API-tokens. Skriptet använder normalt samma standardprofil som
+webgränssnittet och `scripts/llm_correct.py`. Namngivna profiler hanteras i
+**Admin → Inställningar → LLM-inställningar**; där sparas endast namnet på
+eventuell API-nyckelvariabel, aldrig själva nyckeln.
 
-Kör `./llm_config.sh` utan argument i terminalen för en **interaktiv meny** där
-du väljer backend och modell ur samma lista som webgränssnittet (Claude / OpenAI /
+Kör `.venv/bin/python scripts/llm_config.py` utan argument i terminalen för en **interaktiv meny** där
+du väljer backend och modell ur samma lista som Admin (Claude / OpenAI /
 DeepSeek / Ollama / OpenAI-kompatibel). Vill du hellre sätta värdena direkt går
 det med flaggor:
 
 ```bash
-./llm_config.sh                                  # interaktiv meny: välj backend + modell
+.venv/bin/python scripts/llm_config.py                                  # interaktiv meny: välj backend + modell
 
 # Eller sätt direkt (sparas och används av framtida körningar och webgränssnittet)
 export CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...  # eller ANTHROPIC_API_KEY
-./llm_config.sh --provider claude --model claude-haiku-4-5-20251001
+.venv/bin/python scripts/llm_config.py --provider claude --model claude-haiku-4-5-20251001
 
 # Alternativt OpenAI
 export OPENAI_API_KEY=sk-...
-./llm_config.sh --provider openai --model gpt-4o-mini
+.venv/bin/python scripts/llm_config.py --provider openai --model gpt-4o-mini
 ```
 
 En dyr modell som Opus kan bli kostsam för hela arkivet. Välj därför gärna en
@@ -175,7 +177,7 @@ billigare modell uttryckligen innan extraktionen.
 Du kan också skriva över det sparade valet för bara en körning:
 
 ```bash
-./extract_entities.sh --limit 20 \
+.venv/bin/python scripts/extract_entities.py --limit 20 \
   --provider claude --model claude-haiku-4-5-20251001
 ```
 
@@ -185,21 +187,21 @@ Extraktionen skriver resultatet till `generated/db/state.db` och kräver inte at
 Neo4j är igång. Börja med en kostnadsfri dry-run och en begränsad provkörning:
 
 ```bash
-./extract_entities.sh --dry-run    # visa hur många sidor som återstår, utan LLM-anrop
-./extract_entities.sh --limit 20   # provkör på 20 dokument
-./extract_entities.sh              # extrahera resten av arkivet
+.venv/bin/python scripts/extract_entities.py --dry-run    # visa hur många sidor som återstår, utan LLM-anrop
+.venv/bin/python scripts/extract_entities.py --limit 20   # provkör på 20 dokument
+.venv/bin/python scripts/extract_entities.py              # extrahera resten av arkivet
 ```
 
 ### 4. Starta, använd och stoppa Neo4j
 
 ```bash
-./neo4j.sh          # starta Neo4j; skapar container och lösenord första gången
-./neo4j.sh status   # kontrollera om Neo4j kör
-./load_graph.sh     # ladda extraherade entiteter/relationer från state.db
-./web.sh            # öppna "Graf"-sidan i sidofältet
+.venv/bin/python scripts/neo4j.py          # starta Neo4j; skapar container och lösenord första gången
+.venv/bin/python scripts/neo4j.py status   # kontrollera om Neo4j kör
+.venv/bin/python scripts/load_graph.py     # ladda extraherade entiteter/relationer från state.db
+.venv/bin/python scripts/web.py            # öppna "Graf"-sidan i sidofältet
 
-./neo4j.sh stop     # stoppa Neo4j
-./neo4j.sh          # starta samma container igen senare
+.venv/bin/python scripts/neo4j.py stop     # stoppa Neo4j
+.venv/bin/python scripts/neo4j.py          # starta samma container igen senare
 ```
 
 Full beskrivning (schema, kostnad, namnnormalisering) finns under

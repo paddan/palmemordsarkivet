@@ -15,12 +15,13 @@ kunskapsgraf och utforskas visuellt.
 
 ## Web-gränssnitt
 
-Efter nedladdning och OCR-scanning finns ett webgränssnitt (`./web.sh`) med
+Efter nedladdning och OCR-scanning finns ett webgränssnitt (`.venv/bin/python scripts/web.py`) med
 flikar: **Utredning** för frågor (med facett- och OCR-tolerant fuzzy-filter),
 **Utredningspärm** för sparade spår, bokmärken och anteckningar, **Graf** för
 relationer, **Maskeringar** för att utforska svärtad text och **Jämförelse**
-för att ställa källor mot varandra, samt **Karta** för källhänvisade
-observationer på mordkvällen.
+för att ställa källor mot varandra, **Karta** för källhänvisade
+observationer på mordkvällen, samt **Admin** för att starta/övervaka/avbryta
+produktionsflöden och bakgrundsjobb.
 
 ### Utredning
 
@@ -45,6 +46,10 @@ på komplexa flerstegs-frågor, men långsammare (~1–3 min).
 När utredningsläget är aktivt döljs RAG-specifika sidofältsval som reranker,
 top-K/top-N, facetter och fuzzy-sökning; kvar finns MCP-relevanta val som ny
 konversation och kunskapsgraf.
+
+LLM-profiler skapas i **Admin → Inställningar → LLM-inställningar** och väljs i
+Utredningssidans sidofält. Profiler sparar modell, endpoint och namnet på en
+miljövariabel för API-nyckeln — aldrig själva hemligheten.
 
 ![Web-gränssnitt — MCP-läge](utredningsläge.png)
 
@@ -81,7 +86,7 @@ webbläsarens PDF-visare kan hoppa till rätt sida.
 mordkvällen. Platskatalogen seedas och används för snabbval i formuläret, medan
 observationerna kan redigeras i appen; rörelser visas bara när de har tid,
 koordinater och källa. Kartförslag kan dessutom extraheras som en separat
-granskningskö med `./extract_map_observations.sh` och godkänns manuellt innan
+granskningskö med `.venv/bin/python scripts/extract_map_observations.py` och godkänns manuellt innan
 de syns på kartan.
 
 ### Graf

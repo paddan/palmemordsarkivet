@@ -35,8 +35,9 @@ st.caption("Sök en person, plats eller organisation och utforska dess nätverk 
 password = viz.resolve_password()
 if not password:
     st.warning(
-        "Neo4j-lösenord saknas. Starta grafen med `./neo4j.sh` "
-        "(skapar `neo4j/.password`) och ladda den med `./load_graph.sh`."
+        "Neo4j-lösenord saknas. Starta grafen med "
+        "`.venv/bin/python scripts/neo4j.py` (skapar `neo4j/.password`) och "
+        "ladda den med `.venv/bin/python scripts/load_graph.py`."
     )
     st.stop()
 
@@ -52,7 +53,7 @@ try:
 except Exception as exc:  # noqa: BLE001
     st.error(
         f"Kan inte nå Neo4j på `bolt://localhost:7687`. Starta den med "
-        f"`./neo4j.sh`.\n\n```\n{exc}\n```"
+        f"`.venv/bin/python scripts/neo4j.py`.\n\n```\n{exc}\n```"
     )
     st.stop()
 
@@ -60,7 +61,8 @@ except Exception as exc:  # noqa: BLE001
 @st.cache_data(ttl=30, show_spinner=False)
 def _search(q: str) -> list[dict]:
     with driver.session() as s:
-        return viz.search_entities(s, q, limit=25)
+        rows: list[dict] = viz.search_entities(s, q, limit=25)
+        return rows
 
 
 def _find_pdf(stem: str) -> Path | None:

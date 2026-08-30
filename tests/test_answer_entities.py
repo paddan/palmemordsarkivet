@@ -127,6 +127,25 @@ def test_resolve_entity_cfg_uses_deepseek_key(monkeypatch) -> None:
                    "api_key": "ds-x"}
 
 
+def test_resolve_entity_cfg_uses_runtime_key_for_custom_endpoint(monkeypatch) -> None:
+    from graph.answer_entities import resolve_entity_cfg
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    cfg = resolve_entity_cfg({
+        "provider": "openai",
+        "model": "privat-modell",
+        "base_url": "https://llm.example/v1",
+        "api_key": "profilens-runtime-nyckel",
+    })
+
+    assert cfg == {
+        "provider": "openai",
+        "model": "privat-modell",
+        "base_url": "https://llm.example/v1",
+        "api_key": "profilens-runtime-nyckel",
+    }
+
+
 def test_resolve_entity_cfg_skips_deepseek_without_key(monkeypatch) -> None:
     from graph.answer_entities import resolve_entity_cfg
     monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)

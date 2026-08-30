@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import pytest
-
-import db as state_db
 from ingest import (
     _source_predicate,
     _table_exists,
@@ -16,6 +14,7 @@ from ingest import (
     should_reingest,
 )
 
+import db as state_db
 
 # ---------------------------------------------------------------------------
 # Minimala mock-objekt för att testa _table_exists utan att starta LanceDB.
@@ -298,3 +297,68 @@ def test_orphan_cleanup_deletes_from_ingest(tmp_path, monkeypatch) -> None:
 
     assert state_db.get_ingested_mtime(conn, "orphan") is None
     assert state_db.get_ingested_mtime(conn, "alive") == 100.0
+
+
+# ---------------------------------------------------------------------------
+# run_ingest — fallback till MODEL_NAME när modellnamnet är tomt
+# (registry-default och pipeline skickar ""; utan fallback byggs ett tomt index).
+# ---------------------------------------------------------------------------
+
+class _RecordingSentenceTransformer:
+    """Fångar vilket modellnamn run_ingest instansierar med."""
+
+    def __init__(self, model_name: str) -> None:
+        self.model_name = model_name
+
+    def encode(self, *args, **kwargs):
+        # Anropas aldrig när text_dir saknar .txt-filer.
+        raise AssertionError("encode ska inte anropas i dessa tester")
+
+
+def _run_ingest_with_stubbed_model(tmp_path, monkeypatch, model_name: str):
+    import ingest as ingest_module
+
+    seen: dict[str, str] = {}
+
+    class _Stub:
+        def __init__(self, name: str) -> None:
+            seen["model"] = name
+
+        def encode(self, *args, **kwargs):
+            return None
+
+    monkeypatch.setattr(ingest_module, "SentenceTransformer", _Stub)
+    monkeypatch.setenv("STATE_DB", str(tmp_path / "state.db"))
+
+    text_dir = tmp_path / "text"
+    text_dir.mkdir()
+    rc = ingest_module.run_ingest(
+        rebuild=False,
+        limit=None,
+        text_dir=text_dir,
+        db_dir=tmp_path / "lancedb",
+        chunk_chars=800,
+        chunk_overlap=150,
+        model_name=model_name,
+        unusable_list=tmp_path / "unusable.txt",
+        reindex_since=None,
+    )
+    return rc, seen
+
+
+def test_run_ingest_falls_back_to_default_model_when_name_empty(tmp_path, monkeypatch) -> None:
+    import ingest as ingest_module
+
+    rc, seen = _run_ingest_with_stubbed_model(tmp_path, monkeypatch, model_name="")
+
+    assert rc == 0
+    assert seen["model"] == ingest_module.MODEL_NAME
+
+
+def test_run_ingest_keeps_explicit_model_name(tmp_path, monkeypatch) -> None:
+    rc, seen = _run_ingest_with_stubbed_model(
+        tmp_path, monkeypatch, model_name="custom/embedding-modell"
+    )
+
+    assert rc == 0
+    assert seen["model"] == "custom/embedding-modell"

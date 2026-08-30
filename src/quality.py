@@ -36,7 +36,7 @@ import db as state_db
 ROOT = Path(os.environ.get("ROOT") or Path(__file__).resolve().parents[1])
 TEXT_DIR = Path(os.environ.get("TEXT_DIR") or (ROOT / "generated" / "text"))
 FILES_DIR = Path(os.environ.get("FILES_DIR") or (ROOT / "downloaded" / "files"))
-MIN_TEXT_CHARS = int(os.environ.get("MIN_TEXT_CHARS", "200"))  # samma tröskel som ocr.sh
+MIN_TEXT_CHARS = int(os.environ.get("MIN_TEXT_CHARS", "200"))  # samma tröskel som scripts/ocr.py
 MIN_PAGE_ALNUM = 30  # sidor med färre alfanumeriska tecken = bildsida, hoppa re-OCR
 
 VOWELS = set("aeiouyåäöAEIOUYÅÄÖ")
@@ -140,15 +140,24 @@ def score_text(text: str, use_hunspell: bool) -> dict:
     real_words = [w for w in words if len(w) > 2]
     avg_len = sum(len(w) for w in real_words) / len(real_words) if real_words else 0.0
 
+    # Nyckeltalen räknas ut i egna variabler så att typen blir float både i
+    # resultatdicten och i den sammanvägda poängen nedan.
+    junk_ratio = round(junk / chars, 3)
+    short_word_ratio = round(short / max(len(words), 1), 3)
+    long_word_ratio = round(long_ / max(len(words), 1), 3)
+    digit_in_word_ratio = round(digit_mixed / max(len(tokens), 1), 3)
+    avg_word_len = round(avg_len, 2)
+    vowel_ratio = round(vowel_ratio, 3)
+
     out = {
         "chars": chars,
         "tokens": len(tokens),
-        "junk_ratio": round(junk / chars, 3),
-        "short_word_ratio": round(short / max(len(words), 1), 3),
-        "long_word_ratio": round(long_ / max(len(words), 1), 3),
-        "digit_in_word_ratio": round(digit_mixed / max(len(tokens), 1), 3),
-        "avg_word_len": round(avg_len, 2),
-        "vowel_ratio": round(vowel_ratio, 3),
+        "junk_ratio": junk_ratio,
+        "short_word_ratio": short_word_ratio,
+        "long_word_ratio": long_word_ratio,
+        "digit_in_word_ratio": digit_in_word_ratio,
+        "avg_word_len": avg_word_len,
+        "vowel_ratio": vowel_ratio,
         "pct_swe": None,
     }
 
@@ -158,15 +167,194 @@ def score_text(text: str, use_hunspell: bool) -> dict:
 
     # Sammanvägd 0–100 (högre = bättre). Vikter definierade som konstanter ovan.
     score = 100.0
-    score -= out["junk_ratio"] * WEIGHT_JUNK
-    score -= out["short_word_ratio"] * WEIGHT_SHORT_WORD
-    score -= out["long_word_ratio"] * WEIGHT_LONG_WORD
-    score -= out["digit_in_word_ratio"] * WEIGHT_DIGIT_MIXED
-    score -= abs(out["vowel_ratio"] - VOWEL_TARGET) * WEIGHT_VOWEL
+    score -= junk_ratio * WEIGHT_JUNK
+    score -= short_word_ratio * WEIGHT_SHORT_WORD
+    score -= long_word_ratio * WEIGHT_LONG_WORD
+    score -= digit_in_word_ratio * WEIGHT_DIGIT_MIXED
+    score -= abs(vowel_ratio - VOWEL_TARGET) * WEIGHT_VOWEL
     if out["pct_swe"] is not None:
         score -= (1 - out["pct_swe"]) * WEIGHT_HUNSPELL
     out["score"] = round(max(0.0, min(100.0, score)), 1)
     return out
+
+
+def _ctx(context):
+    """Returnera ``context`` eller en terminal-context för förgrundskörning."""
+    if context is not None:
+        return context
+    from operations.context import ensure_terminal_context
+
+    return ensure_terminal_context(None)
+
+
+def run_quality(
+    *,
+    top: int | None,
+    limit: int | None,
+    per_page: bool,
+    text_dir: Path,
+    files_dir: Path,
+    rebuild: bool,
+    files_from: Path | None,
+    context=None,
+) -> int:
+    """Bedöm OCR-kvalitet och skriv till quality-/quality_pages-tabellerna."""
+    ctx = _ctx(context)
+
+    if not text_dir.exists():
+        ctx.log(f"Saknar {text_dir}/", level="error")
+        return 1
+
+    use_hunspell = has_hunspell_swe()
+    if not use_hunspell:
+        ctx.log(
+            "hunspell + sv_SE-ordlista saknas — hoppar över ordbokskontroll. "
+            "Installera: brew install hunspell, lägg sedan sv_SE.{aff,dic} i ~/Library/Spelling/",
+            level="error",
+        )
+
+    files_all = sorted(text_dir.glob("*.txt"))
+    if not files_all:
+        ctx.log(f"Inga .txt-filer i {text_dir}/", level="error")
+        return 1
+    if limit:
+        files_all = files_all[: limit]
+
+    conn = state_db.connect()
+    state_db.init_schema(conn)
+
+    # Filurval: --rebuild = alla; --files-from = listan; annars db-delta.
+    if rebuild:
+        files_to_score = files_all
+    elif files_from is not None:
+        listed_names: set[str] = set()
+        for line in Path(files_from).read_text(encoding="utf-8").splitlines():
+            name = line.strip()
+            if name:
+                listed_names.add(name if name.endswith(".txt") else name + ".txt")
+        files_to_score = [f for f in files_all if f.name in listed_names]
+    else:
+        needing = set(state_db.files_needing_quality(conn))
+        files_to_score = []
+        for f in files_all:
+            row = state_db.get_pdf_file(conn, f.stem)
+            if row is None or row["text_mtime"] is None or f.stem in needing:
+                files_to_score.append(f)
+
+    if not files_to_score:
+        ctx.log(
+            f"Alla {len(files_all)} filer aktuella i quality-tabellen — inget att göra.",
+            level="error",
+        )
+        return 0
+
+    prefix = f"Bedömer {len(files_to_score)} filer"
+    if len(files_to_score) < len(files_all):
+        prefix += f" ({len(files_all) - len(files_to_score)} oförändrade hoppas över)"
+    prefix += "…"
+    ctx.log(prefix)
+
+    t0 = time.monotonic()
+    new_rows: list[dict] = []  # för terminal-stats nedan
+
+    for i, f in enumerate(files_to_score, 1):
+        ctx.check_cancelled()
+        ctx.progress(i, len(files_to_score), f.name)
+        if i % 10 == 0 or i == len(files_to_score):
+            elapsed = time.monotonic() - t0
+            rate = i / elapsed if elapsed else 0
+            eta = int((len(files_to_score) - i) / rate) if rate else 0
+            eta_s = f"{eta // 60}m{eta % 60:02d}s"
+            ctx.log(f"{prefix} {i}/{len(files_to_score)} eta {eta_s}")
+        try:
+            text = f.read_text(encoding="utf-8", errors="replace")
+        except OSError as e:
+            ctx.log(f"  SKIP {f.name}: {e}", level="error")
+            log_error("quality", f.name, str(e))
+            continue
+        scored = score_text(text, use_hunspell)
+        source_type = "text-layer" if original_had_text(f.stem, files_dir) else "ocr"
+        text_mtime = f.stat().st_mtime
+
+        row = state_db.get_pdf_file(conn, f.stem)
+        if row is None:
+            source = state_db.source_for_path(f, root=ROOT)
+            state_db.upsert_pdf_file(
+                conn, pdf_stem=f.stem, source=source, pdf_path=str(f),
+            )
+            state_db.mark_merged(conn, f.stem, text_mtime=f.stat().st_mtime)
+        elif row["text_mtime"] is None:
+            state_db.touch_text_mtime(conn, f.stem, text_mtime=text_mtime)
+
+        extras = {k: scored.get(k) for k in (
+            "pct_swe", "junk_ratio", "short_word_ratio", "long_word_ratio",
+            "digit_in_word_ratio", "avg_word_len", "vowel_ratio",
+        )}
+        extras["source_type"] = source_type
+
+        try:
+            state_db.record_quality(
+                conn, pdf_stem=f.stem,
+                score=scored["score"], chars=scored["chars"],
+                text_mtime=text_mtime, extras=extras,
+            )
+        except Exception as e:  # noqa: BLE001
+            ctx.log(f"  SKIP {f.name}: db: {e}", level="error")
+            log_error("quality", f.name, f"db: {e}")
+            continue
+
+        if per_page:
+            pages = text.split("\f") if "\f" in text else [text]
+            for p_idx, page_text in enumerate(pages, start=1):
+                p_scored = score_text(page_text, use_hunspell=False)
+                alnum = sum(1 for c in page_text if c.isalnum())
+                image_page = alnum < MIN_PAGE_ALNUM
+                state_db.record_quality_page(
+                    conn, pdf_stem=f.stem, page_num=p_idx,
+                    score=(100.0 if image_page else p_scored["score"]),
+                    chars=p_scored.get("chars"),
+                    image_page=image_page,
+                    payload=p_scored,
+                )
+
+        scored["file"] = f.name
+        scored["source"] = source_type
+        new_rows.append(scored)
+
+    ctx.log(f"\nSkrev {len(new_rows)} rader till quality-tabellen.")
+
+    ocr = [r for r in new_rows if r.get("source") == "ocr"]
+    txt = [r for r in new_rows if r.get("source") == "text-layer"]
+    ctx.log("\nNya/uppdaterade filer:")
+    ctx.log(f"  text-layer (original hade text):  {len(txt)}")
+    ctx.log(f"  ocr (Tesseract):                  {len(ocr)}")
+    if ocr:
+        s = sorted(float(r["score"]) for r in ocr)
+        ctx.log(f"  OCR median-score: {s[len(s) // 2]}")
+        ctx.log(f"  OCR sidor med score < 50: {sum(1 for x in s if x < 50)}")
+        ctx.log(f"  OCR sidor med score < 30: {sum(1 for x in s if x < 30)}")
+
+    if top:
+        if new_rows:
+            rows_to_display = sorted(new_rows, key=lambda r: float(r.get("score") or 0))
+            ctx.log(f"\nVärsta {top} (av nya/uppdaterade):")
+            for r in rows_to_display[: top]:
+                pct = r.get("pct_swe")
+                swe = f"swe={float(pct):.0%}" if pct not in (None, "") else "swe=?"
+                ctx.log(f"  {float(r['score']):5.1f}  [{r.get('source', '?'):10}] {swe:10}  {r['file'][:90]}")
+        else:
+            ctx.log(f"\nVärsta {top} (från quality-tabellen):")
+            for r in conn.execute(
+                "SELECT pdf_stem, source_type, score, pct_swe FROM quality "
+                "ORDER BY score ASC LIMIT ?",
+                (top,),
+            ):
+                pct = r["pct_swe"]
+                swe = f"swe={float(pct):.0%}" if pct is not None else "swe=?"
+                src = r["source_type"] or "?"
+                ctx.log(f"  {float(r['score']):5.1f}  [{src:10}] {swe:10}  {r['pdf_stem']}.txt"[:120])
+
+    return 0
 
 
 def main() -> int:
@@ -186,176 +374,15 @@ def main() -> int:
                     help="bedöm bara filer listade i FILE (ett filnamn per rad)")
     args = ap.parse_args()
 
-    text_dir = Path(args.text_dir)
-    files_dir = Path(args.files_dir)
-
-    if not text_dir.exists():
-        print(f"Saknar {text_dir}/", file=sys.stderr)
-        return 1
-
-    use_hunspell = has_hunspell_swe()
-    if not use_hunspell:
-        print(
-            "hunspell + sv_SE-ordlista saknas — hoppar över ordbokskontroll. "
-            "Installera: brew install hunspell, lägg sedan sv_SE.{aff,dic} i ~/Library/Spelling/",
-            file=sys.stderr,
-        )
-
-    files_all = sorted(text_dir.glob("*.txt"))
-    if not files_all:
-        print(f"Inga .txt-filer i {text_dir}/", file=sys.stderr)
-        return 1
-    if args.limit:
-        files_all = files_all[: args.limit]
-
-    conn = state_db.connect()
-    state_db.init_schema(conn)
-
-    # Filurval: --rebuild = alla; --files-from = listan; annars db-delta.
-    if args.rebuild:
-        files_to_score = files_all
-    elif args.files_from:
-        listed_names: set[str] = set()
-        for line in Path(args.files_from).read_text(encoding="utf-8").splitlines():
-            name = line.strip()
-            if name:
-                listed_names.add(name if name.endswith(".txt") else name + ".txt")
-        files_to_score = [f for f in files_all if f.name in listed_names]
-    else:
-        needing = set(state_db.files_needing_quality(conn))
-        # Fallback: filer utan pdf_files-rad behöver också bedömas (legacy/tidigare körningar
-        # innan db-state existerade — eller filer som inte gått via mark_merged ännu).
-        files_to_score = []
-        for f in files_all:
-            row = state_db.get_pdf_file(conn, f.stem)
-            # text_mtime NULL = rad skapad av mark_tesseract_done utan stämpel —
-            # delta-frågan (kräver text_mtime IS NOT NULL) missar annars filen.
-            if row is None or row["text_mtime"] is None or f.stem in needing:
-                files_to_score.append(f)
-
-    if not files_to_score:
-        print(
-            f"Alla {len(files_all)} filer aktuella i quality-tabellen — inget att göra.",
-            file=sys.stderr,
-        )
-        return 0
-
-    prefix = f"Bedömer {len(files_to_score)} filer"
-    if len(files_to_score) < len(files_all):
-        prefix += f" ({len(files_all) - len(files_to_score)} oförändrade hoppas över)"
-    prefix += "…"
-    print(prefix, end=" ", file=sys.stderr, flush=True)
-
-    t0 = time.monotonic()
-    new_rows: list[dict] = []  # för terminal-stats nedan
-
-    for i, f in enumerate(files_to_score, 1):
-        if i % 10 == 0 or i == len(files_to_score):
-            elapsed = time.monotonic() - t0
-            rate = i / elapsed if elapsed else 0
-            eta = int((len(files_to_score) - i) / rate) if rate else 0
-            eta_s = f"{eta // 60}m{eta % 60:02d}s"
-            print(f"\r{prefix} {i}/{len(files_to_score)} eta {eta_s}", end="",
-                  file=sys.stderr, flush=True)
-            if i == len(files_to_score):
-                print(file=sys.stderr)
-        try:
-            text = f.read_text(encoding="utf-8", errors="replace")
-        except OSError as e:
-            print(f"  SKIP {f.name}: {e}", file=sys.stderr)
-            log_error("quality", f.name, str(e))
-            continue
-        scored = score_text(text, use_hunspell)
-        source_type = "text-layer" if original_had_text(f.stem, files_dir) else "ocr"
-        text_mtime = f.stat().st_mtime
-
-        # Defensiv: om pdf_files saknar raden (legacy) — skapa den så att
-        # foreign-relationen håller och files_needing_* fungerar framöver.
-        row = state_db.get_pdf_file(conn, f.stem)
-        if row is None:
-            source = state_db.source_for_path(f, root=ROOT)
-            state_db.upsert_pdf_file(
-                conn, pdf_stem=f.stem, source=source, pdf_path=str(f),
-            )
-            # Stämpla text_mtime så normalize/merge inte ser filen som "obesvarad".
-            state_db.mark_merged(conn, f.stem, text_mtime=f.stat().st_mtime)
-        elif row["text_mtime"] is None:
-            # Rad utan stämpel (mark_tesseract_done) — stämpla så filen inte
-            # om-bedöms varje körning och delta-frågorna fungerar framöver.
-            state_db.touch_text_mtime(conn, f.stem, text_mtime=text_mtime)
-
-        extras = {k: scored.get(k) for k in (
-            "pct_swe", "junk_ratio", "short_word_ratio", "long_word_ratio",
-            "digit_in_word_ratio", "avg_word_len", "vowel_ratio",
-        )}
-        extras["source_type"] = source_type
-
-        try:
-            state_db.record_quality(
-                conn, pdf_stem=f.stem,
-                score=scored["score"], chars=scored["chars"],
-                text_mtime=text_mtime, extras=extras,
-            )
-        except Exception as e:  # noqa: BLE001
-            print(f"  SKIP {f.name}: db: {e}", file=sys.stderr)
-            log_error("quality", f.name, f"db: {e}")
-            continue
-
-        if args.per_page:
-            pages = text.split("\f") if "\f" in text else [text]
-            for p_idx, page_text in enumerate(pages, start=1):
-                p_scored = score_text(page_text, use_hunspell=False)
-                alnum = sum(1 for c in page_text if c.isalnum())
-                image_page = alnum < MIN_PAGE_ALNUM
-                state_db.record_quality_page(
-                    conn, pdf_stem=f.stem, page_num=p_idx,
-                    score=(100.0 if image_page else p_scored["score"]),
-                    chars=p_scored.get("chars"),
-                    image_page=image_page,
-                    payload=p_scored,
-                )
-
-        # Behåll för terminal-stats nedan.
-        scored["file"] = f.name
-        scored["source"] = source_type
-        new_rows.append(scored)
-
-    print(f"\nSkrev {len(new_rows)} rader till quality-tabellen.")
-
-    # Stats för de bedömda filerna.
-    ocr = [r for r in new_rows if r.get("source") == "ocr"]
-    txt = [r for r in new_rows if r.get("source") == "text-layer"]
-    print("\nNya/uppdaterade filer:")
-    print(f"  text-layer (original hade text):  {len(txt)}")
-    print(f"  ocr (Tesseract):                  {len(ocr)}")
-    if ocr:
-        s = sorted(float(r["score"]) for r in ocr)
-        print(f"  OCR median-score: {s[len(s) // 2]}")
-        print(f"  OCR sidor med score < 50: {sum(1 for x in s if x < 50)}")
-        print(f"  OCR sidor med score < 30: {sum(1 for x in s if x < 30)}")
-
-    if args.top:
-        # Visa värsta N — om vi har nya rader, ranka dem; annars kör fallback mot db.
-        if new_rows:
-            rows_to_display = sorted(new_rows, key=lambda r: float(r.get("score") or 0))
-            print(f"\nVärsta {args.top} (av nya/uppdaterade):")
-            for r in rows_to_display[: args.top]:
-                pct = r.get("pct_swe")
-                swe = f"swe={float(pct):.0%}" if pct not in (None, "") else "swe=?"
-                print(f"  {float(r['score']):5.1f}  [{r.get('source', '?'):10}] {swe:10}  {r['file'][:90]}")
-        else:
-            print(f"\nVärsta {args.top} (från quality-tabellen):")
-            for r in conn.execute(
-                "SELECT pdf_stem, source_type, score, pct_swe FROM quality "
-                "ORDER BY score ASC LIMIT ?",
-                (args.top,),
-            ):
-                pct = r["pct_swe"]
-                swe = f"swe={float(pct):.0%}" if pct is not None else "swe=?"
-                src = r["source_type"] or "?"
-                print(f"  {float(r['score']):5.1f}  [{src:10}] {swe:10}  {r['pdf_stem']}.txt"[:120])
-
-    return 0
+    return run_quality(
+        top=args.top,
+        limit=args.limit,
+        per_page=args.per_page,
+        text_dir=Path(args.text_dir),
+        files_dir=Path(args.files_dir),
+        rebuild=args.rebuild,
+        files_from=Path(args.files_from) if args.files_from else None,
+    )
 
 
 if __name__ == "__main__":

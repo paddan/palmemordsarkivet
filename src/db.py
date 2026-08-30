@@ -16,13 +16,13 @@ import sqlite3
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 ROOT = Path(__file__).resolve().parents[1]
 
 DEFAULT_DB: Path = Path(os.environ.get("STATE_DB", str(ROOT / "generated" / "db" / "state.db")))
 
-SCHEMA_VERSION: int = 6
+SCHEMA_VERSION: int = 7
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -253,6 +253,39 @@ CREATE TABLE IF NOT EXISTS map_observation_extractions (
 );
 CREATE INDEX IF NOT EXISTS idx_map_observation_extractions_extracted
     ON map_observation_extractions(extracted_at DESC);
+
+CREATE TABLE IF NOT EXISTS admin_jobs (
+    id                  TEXT PRIMARY KEY,
+    operation           TEXT NOT NULL,
+    params_json         TEXT NOT NULL,
+    status              TEXT NOT NULL,
+    active_slot         INTEGER,
+    pid                 INTEGER,
+    created_at          TEXT NOT NULL,
+    started_at          TEXT,
+    heartbeat_at        TEXT,
+    finished_at         TEXT,
+    current_step        TEXT,
+    completed_units     INTEGER NOT NULL DEFAULT 0,
+    total_units         INTEGER,
+    message             TEXT,
+    log_path            TEXT NOT NULL,
+    exit_code           INTEGER,
+    error               TEXT,
+    cancel_requested_at TEXT,
+    CHECK (active_slot IS NULL OR active_slot = 1),
+    CHECK (status IN (
+        'queued', 'running', 'cancel_requested',
+        'succeeded', 'failed', 'cancelled', 'interrupted'
+    ))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS admin_jobs_one_active
+    ON admin_jobs(active_slot)
+    WHERE active_slot = 1;
+
+CREATE INDEX IF NOT EXISTS idx_admin_jobs_created
+    ON admin_jobs(created_at DESC, id DESC);
 """
 
 
@@ -265,6 +298,26 @@ class _Migration(NamedTuple):
     version: int
     name: str
     apply: Callable[[sqlite3.Connection], None]
+
+
+class ActiveAdminJobError(RuntimeError):
+    """Kastas när ett nytt jobb försöker starta medan ett annat är aktivt."""
+
+    def __init__(self, active_job_id: str) -> None:
+        super().__init__(f"Ett jobb körs redan: {active_job_id}")
+        self.active_job_id = active_job_id
+
+
+class DuplicateAdminJobError(RuntimeError):
+    """Kastas när ett jobb-id redan finns i admin_jobs (PK-kollision)."""
+
+    def __init__(self, job_id: str) -> None:
+        super().__init__(f"Ett jobb med id {job_id} finns redan")
+        self.job_id = job_id
+
+
+class InvalidAdminJobTransition(RuntimeError):
+    """Kastas när en jobbstatusövergång inte är tillåten."""
 
 
 def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
@@ -337,8 +390,55 @@ def _migration_006_pdf_file_ocr_status(conn: sqlite3.Connection) -> None:
         _add_column_if_missing(conn, "pdf_files", col, typedef)
 
 
+def _migration_007_admin_jobs(conn: sqlite3.Connection) -> None:
+    """Skapa jobbtabellen för bakgrundsjobb (idempotent)."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS admin_jobs (
+            id                  TEXT PRIMARY KEY,
+            operation           TEXT NOT NULL,
+            params_json         TEXT NOT NULL,
+            status              TEXT NOT NULL,
+            active_slot         INTEGER,
+            pid                 INTEGER,
+            created_at          TEXT NOT NULL,
+            started_at          TEXT,
+            heartbeat_at        TEXT,
+            finished_at         TEXT,
+            current_step        TEXT,
+            completed_units     INTEGER NOT NULL DEFAULT 0,
+            total_units         INTEGER,
+            message             TEXT,
+            log_path            TEXT NOT NULL,
+            exit_code           INTEGER,
+            error               TEXT,
+            cancel_requested_at TEXT,
+            CHECK (active_slot IS NULL OR active_slot = 1),
+            CHECK (status IN (
+                'queued', 'running', 'cancel_requested',
+                'succeeded', 'failed', 'cancelled', 'interrupted'
+            ))
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS admin_jobs_one_active
+            ON admin_jobs(active_slot)
+            WHERE active_slot = 1
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_admin_jobs_created
+            ON admin_jobs(created_at DESC, id DESC)
+        """
+    )
+
+
 MIGRATIONS: tuple[_Migration, ...] = (
     _Migration(6, "pdf_files OCR-felstatus", _migration_006_pdf_file_ocr_status),
+    _Migration(7, "admin_jobs jobbmodell", _migration_007_admin_jobs),
 )
 
 
@@ -476,9 +576,10 @@ def find_download_by_sha1(
     conn: sqlite3.Connection, sha1: str
 ) -> sqlite3.Row | None:
     """Slå upp första download-raden med matchande sha1, eller None."""
-    return conn.execute(
+    row: sqlite3.Row | None = conn.execute(
         "SELECT * FROM downloads WHERE sha1=? LIMIT 1", (sha1,)
     ).fetchone()
+    return row
 
 
 # --- pdf_files --------------------------------------------------------
@@ -508,9 +609,10 @@ def get_pdf_file(
     conn: sqlite3.Connection, pdf_stem: str
 ) -> sqlite3.Row | None:
     """Hämta pdf_files-raden för pdf_stem, eller None om den saknas."""
-    return conn.execute(
+    row: sqlite3.Row | None = conn.execute(
         "SELECT * FROM pdf_files WHERE pdf_stem=?", (pdf_stem,)
     ).fetchone()
+    return row
 
 
 def mark_redaction_checked(
@@ -666,6 +768,30 @@ def clear_ocr_failures(conn: sqlite3.Connection, pdf_stem: str) -> bool:
     return cur.rowcount > 0
 
 
+def list_tesseract_skip_stems(conn: sqlite3.Connection) -> set[str]:
+    """Stems som Tesseract redan lyckats med, misslyckats med eller blacklistat."""
+    return {
+        row["pdf_stem"]
+        for row in conn.execute(
+            "SELECT pdf_stem FROM pdf_files "
+            "WHERE tesseract_done_at IS NOT NULL "
+            "OR tesseract_failed=1 OR tesseract_blacklisted_at IS NOT NULL"
+        )
+    }
+
+
+def list_surya_fallback_candidates(conn: sqlite3.Connection) -> list[str]:
+    """Stems där Tesseract misslyckats men Surya-fallback ännu inte provats."""
+    return [
+        row["pdf_stem"]
+        for row in conn.execute(
+            """SELECT pdf_stem FROM pdf_files
+               WHERE (tesseract_failed=1 OR tesseract_blacklisted_at IS NOT NULL)
+                 AND surya_failed_at IS NULL ORDER BY pdf_stem"""
+        )
+    ]
+
+
 
 def mark_merged(
     conn: sqlite3.Connection, pdf_stem: str, *, text_mtime: float
@@ -684,7 +810,8 @@ def touch_text_mtime(
     conn: sqlite3.Connection, pdf_stem: str, *, text_mtime: float
 ) -> None:
     """Uppdatera enbart text_mtime — för text skriven utanför merge_pages-spåret
-    (t.ex. pdftotext i ocr_tesseract.sh / ocr.sh --redo --mode files), så att
+    (t.ex. pdftotext i ``scripts/ocr_tesseract.py`` eller
+    ``scripts/ocr.py --redo --mode files``), så att
     delta-frågorna ser filen. Kastar KeyError om pdf_stem saknas."""
     cur = conn.execute(
         "UPDATE pdf_files SET text_mtime=? WHERE pdf_stem=?",
@@ -828,6 +955,38 @@ def get_bad_pages(
            ORDER BY score ASC""",
         (threshold,),
     ))
+
+
+def list_redo_pages(
+    conn: sqlite3.Connection, *, threshold: float
+) -> list[sqlite3.Row]:
+    """Kandidatsidor för Surya-redo: score under tröskeln, inte bildsidor."""
+    return list(conn.execute(
+        """SELECT pdf_stem, page_num FROM quality_pages
+           WHERE score < ? AND COALESCE(image_page, 0) = 0
+           ORDER BY pdf_stem, page_num""",
+        (threshold,),
+    ))
+
+
+def list_low_quality_stems(
+    conn: sqlite3.Connection,
+    *,
+    threshold: float,
+    source_type: str | None = None,
+) -> list[str]:
+    """Helfils-redo-kandidater från quality, eventuellt filtrerat på källtyp."""
+    if source_type is None:
+        rows = conn.execute(
+            "SELECT pdf_stem FROM quality WHERE score < ? ORDER BY score",
+            (threshold,),
+        )
+    else:
+        rows = conn.execute(
+            "SELECT pdf_stem FROM quality WHERE score < ? AND source_type = ? ORDER BY score",
+            (threshold, source_type),
+        )
+    return [row["pdf_stem"] for row in rows]
 
 
 # --- ingest -----------------------------------------------------------
@@ -1000,7 +1159,9 @@ def record_casebook_entry(
         ),
     )
     conn.commit()
-    return int(cur.lastrowid)
+    row_id = cur.lastrowid
+    assert row_id is not None  # INSERT med autoincrement ger alltid ett rad-id
+    return row_id
 
 
 def list_casebook_entries(
@@ -1166,7 +1327,9 @@ def record_source_annotation(
         ),
     )
     conn.commit()
-    return int(cur.lastrowid)
+    row_id = cur.lastrowid
+    assert row_id is not None  # INSERT med autoincrement ger alltid ett rad-id
+    return row_id
 
 
 def update_source_annotation(
@@ -1238,8 +1401,12 @@ def _row_dict(row: sqlite3.Row) -> dict:
     return dict(row)
 
 
-def _validate_lat_lon(lat: float, lon: float) -> tuple[float, float]:
-    """Validera och normalisera koordinater till float."""
+def _validate_lat_lon(lat: Any, lon: Any) -> tuple[float, float]:
+    """Validera och normalisera koordinater till float.
+
+    Parametrarna är Any eftersom seed-data och JSON-inmatning kan innehålla
+    strängar — float()-anropet nedan är den faktiska normaliseringen.
+    """
     try:
         lat_f = float(lat)
         lon_f = float(lon)
@@ -1275,7 +1442,9 @@ def record_map_place(conn: sqlite3.Connection, *, name: str, lat: float, lon: fl
         (clean_name, lat_f, lon_f, now()),
     )
     conn.commit()
-    return int(cur.lastrowid)
+    row_id = cur.lastrowid
+    assert row_id is not None  # INSERT med autoincrement ger alltid ett rad-id
+    return row_id
 
 
 def list_map_places(conn: sqlite3.Connection) -> list[dict]:
@@ -1360,7 +1529,9 @@ def _insert_map_observation(
             stamp,
         ),
     )
-    return int(cur.lastrowid)
+    row_id = cur.lastrowid
+    assert row_id is not None  # INSERT med autoincrement ger alltid ett rad-id
+    return row_id
 
 
 def record_map_observation(
@@ -1667,7 +1838,9 @@ def record_map_observation_candidate(
         ),
     )
     conn.commit()
-    return int(cur.lastrowid)
+    row_id = cur.lastrowid
+    assert row_id is not None  # INSERT med autoincrement ger alltid ett rad-id
+    return row_id
 
 
 def map_observation_candidate_exists(
@@ -1900,3 +2073,236 @@ def files_needing_ingest(conn: sqlite3.Connection) -> list[str]:
              AND (i.pdf_stem IS NULL OR pf.text_mtime > i.text_mtime)"""
     )
     return [r["pdf_stem"] for r in rows]
+
+
+def list_pending_redaction_stems(
+    conn: sqlite3.Connection, *, files_from: set[str] | None = None
+) -> list[str]:
+    """pdf_stems som ännu inte redaktionskontrollerats, valfritt filtrerat mot ``files_from``."""
+    rows = conn.execute(
+        "SELECT pdf_stem FROM pdf_files WHERE redaction_checked_at IS NULL"
+    )
+    if files_from is None:
+        return [r["pdf_stem"] for r in rows]
+    return [r["pdf_stem"] for r in rows if r["pdf_stem"] in files_from]
+
+
+def reset_redaction_state(conn: sqlite3.Connection) -> int:
+    """Nollställ redaction-flaggor för alla filer. Returnerar antal påverkade rader."""
+    cur = conn.execute(
+        "UPDATE pdf_files SET redaction_checked_at=NULL, has_redactions=NULL"
+    )
+    conn.commit()
+    return cur.rowcount
+
+
+def reset_pipeline_state_for_stem(conn: sqlite3.Connection, pdf_stem: str) -> None:
+    """Nollställ per-sida- och Tesseract-state för en fil så kedjan körs om."""
+    conn.execute("DELETE FROM pdf_pages WHERE pdf_stem=?", (pdf_stem,))
+    conn.execute(
+        """UPDATE pdf_files
+           SET tesseract_done_at=NULL, tesseract_failed=0,
+               tesseract_blacklisted_at=NULL, surya_failed_at=NULL
+           WHERE pdf_stem=?""",
+        (pdf_stem,),
+    )
+    conn.commit()
+
+
+# --- admin_jobs ---------------------------------------------------------
+
+_ACTIVE_ADMIN_JOB_STATUSES = ("queued", "running", "cancel_requested")
+_TERMINAL_ADMIN_JOB_STATUSES = ("succeeded", "failed", "cancelled", "interrupted")
+
+
+def _admin_job_active_slot_value(status: str) -> int | None:
+    """Returnera active_slot-värdet (1 aktivt, None terminalt) för en status."""
+    return 1 if status in _ACTIVE_ADMIN_JOB_STATUSES else None
+
+
+def create_admin_job(
+    conn: sqlite3.Connection,
+    *,
+    job_id: str,
+    operation: str,
+    params_json: str,
+    log_path: str,
+) -> sqlite3.Row:
+    """Skapa en köad jobbrad med active_slot=1.
+
+    Kastar ``ActiveAdminJobError`` om ett annat jobb redan äger den aktiva
+    platsen — den partiella unika indexeringen gör regeln atomisk.
+    """
+    try:
+        conn.execute(
+            """
+            INSERT INTO admin_jobs(
+                id, operation, params_json, status, active_slot,
+                created_at, completed_units, log_path
+            )
+            VALUES (?, ?, ?, 'queued', 1, ?, 0, ?)
+            """,
+            (job_id, operation, params_json, now(), log_path),
+        )
+        conn.commit()
+    except sqlite3.IntegrityError as exc:
+        # Särskilj PK-kollision (dubblett-jobb-id) från kollision på den
+        # partiella unika indexeringen av active_slot — bara det senare
+        # betyder att ett annat jobb är aktivt.
+        if get_admin_job(conn, job_id) is not None:
+            raise DuplicateAdminJobError(job_id) from exc
+        active = get_active_admin_job(conn)
+        if active is not None:
+            raise ActiveAdminJobError(active["id"]) from exc
+        raise
+    return get_admin_job(conn, job_id)  # type: ignore[return-value]
+
+
+def claim_admin_job(conn: sqlite3.Connection, job_id: str, *, pid: int) -> bool:
+    """Övergå queued → running och spara PID. Returnerar False vid misslyckad claim."""
+    cur = conn.execute(
+        """
+        UPDATE admin_jobs
+           SET status='running', pid=?, started_at=?, heartbeat_at=?
+         WHERE id=? AND status='queued'
+        """,
+        (pid, now(), now(), job_id),
+    )
+    conn.commit()
+    return cur.rowcount == 1
+
+
+def get_admin_job(conn: sqlite3.Connection, job_id: str) -> sqlite3.Row | None:
+    """Hämta jobbraden för job_id, eller None om den saknas."""
+    row: sqlite3.Row | None = conn.execute(
+        "SELECT * FROM admin_jobs WHERE id=?", (job_id,)
+    ).fetchone()
+    return row
+
+
+def get_active_admin_job(conn: sqlite3.Connection) -> sqlite3.Row | None:
+    """Returnera det aktiva jobbet (active_slot=1), eller None."""
+    row: sqlite3.Row | None = conn.execute(
+        "SELECT * FROM admin_jobs WHERE active_slot=1"
+    ).fetchone()
+    return row
+
+
+def list_admin_jobs(
+    conn: sqlite3.Connection, *, limit: int | None = None
+) -> list[sqlite3.Row]:
+    """Returnera jobb nyast först, eventuellt begränsat till ``limit``."""
+    query = "SELECT * FROM admin_jobs ORDER BY created_at DESC, id DESC"
+    if limit is not None:
+        query += f" LIMIT {int(limit)}"
+    return list(conn.execute(query))
+
+
+def update_admin_job_progress(
+    conn: sqlite3.Connection,
+    job_id: str,
+    *,
+    step: str | None,
+    completed: int | None = None,
+    total: int | None = None,
+    message: str | None = None,
+) -> None:
+    """Uppdatera steg, enheter och senaste meddelande för ett jobb."""
+    cur = conn.execute(
+        """
+        UPDATE admin_jobs
+           SET current_step=COALESCE(?, current_step),
+               completed_units=COALESCE(?, completed_units),
+               total_units=COALESCE(?, total_units),
+               message=COALESCE(?, message)
+         WHERE id=?
+        """,
+        (step, completed, total, message, job_id),
+    )
+    if cur.rowcount == 0:
+        raise KeyError(f"okänt jobb-id: {job_id}")
+    conn.commit()
+
+
+def heartbeat_admin_job(conn: sqlite3.Connection, job_id: str) -> None:
+    """Uppdatera jobbets heartbeat-tidpunkt."""
+    cur = conn.execute(
+        "UPDATE admin_jobs SET heartbeat_at=? WHERE id=?", (now(), job_id)
+    )
+    if cur.rowcount == 0:
+        raise KeyError(f"okänt jobb-id: {job_id}")
+    conn.commit()
+
+
+def request_admin_job_cancel(conn: sqlite3.Connection, job_id: str) -> bool:
+    """Begär kontrollerad avbrytning av ett aktivt jobb.
+
+    Övergår queued/running → cancel_requested. Returnerar True om jobbet nu är
+    i cancel_requested, False om jobbet saknas eller redan är terminalt.
+    """
+    conn.execute(
+        """
+        UPDATE admin_jobs
+           SET status='cancel_requested', cancel_requested_at=?
+         WHERE id=? AND status IN ('queued', 'running')
+        """,
+        (now(), job_id),
+    )
+    conn.commit()
+    row = get_admin_job(conn, job_id)
+    return bool(row and row["status"] == "cancel_requested")
+
+
+def _finish_admin_job_status_where(status: str) -> str:
+    """Returnera villkoret för de nuvarande statusar som får övergå till ``status``."""
+    if status == "succeeded":
+        return "status='running'"
+    if status == "failed":
+        return "status IN ('queued', 'running')"
+    if status in ("cancelled", "interrupted"):
+        return "status IN ('queued', 'running', 'cancel_requested')"
+    raise ValueError(f"Okänd terminal jobbstatus: {status!r}")
+
+
+def finish_admin_job(
+    conn: sqlite3.Connection,
+    job_id: str,
+    *,
+    status: str,
+    exit_code: int | None,
+    error: str | None = None,
+) -> None:
+    """Övergå ett jobb till terminal status och frigör active_slot atomiskt."""
+    if status not in _TERMINAL_ADMIN_JOB_STATUSES:
+        raise ValueError(f"Inte en terminal jobbstatus: {status!r}")
+
+    cur = conn.execute(
+        f"""
+        UPDATE admin_jobs
+           SET status=?, active_slot=NULL, finished_at=?, exit_code=?, error=?
+         WHERE id=? AND {_finish_admin_job_status_where(status)}
+        """,
+        (status, now(), exit_code, error, job_id),
+    )
+    if cur.rowcount == 0:
+        raise InvalidAdminJobTransition(
+            f"Jobbet {job_id} kan inte övergå till {status!r} från sitt nuvarande tillstånd"
+        )
+    conn.commit()
+
+
+def mark_admin_job_interrupted(conn: sqlite3.Connection, job_id: str) -> None:
+    """Markera ett aktivt jobb som avbrutet av en omstart/krasch."""
+    finish_admin_job(conn, job_id, status="interrupted", exit_code=None)
+
+
+def delete_admin_job(conn: sqlite3.Connection, job_id: str) -> bool:
+    """Ta bort ett terminalt jobb ur historiken. Returnerar True vid borttagning.
+
+    Aktiva jobb (active_slot=1) skyddas från borttagning.
+    """
+    cur = conn.execute(
+        "DELETE FROM admin_jobs WHERE id=? AND active_slot IS NULL", (job_id,)
+    )
+    conn.commit()
+    return cur.rowcount == 1

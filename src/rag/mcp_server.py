@@ -13,13 +13,14 @@ from __future__ import annotations
 
 import os
 import sys
+from contextlib import suppress
 from pathlib import Path
 from typing import Annotated
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import FastMCP  # noqa: E402 — kräver src på sys.path ovan
 
 mcp = FastMCP(
     "palmemordsarkivet",
@@ -112,7 +113,8 @@ def search_archive(
         hits = hits[:top_n]
 
     header = f"Sökning: {query!r} → {len(hits)} träffar\n\n"
-    return header + format_context(hits)
+    context: str = format_context(hits)
+    return header + context
 
 
 @mcp.tool()
@@ -150,8 +152,6 @@ def get_page(
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    try:
+    # Stdio-server: avsluta tyst när föräldraprocessen stänger ned.
+    with suppress(KeyboardInterrupt):
         mcp.run()
-    except KeyboardInterrupt:
-        # Stdio-server: avsluta tyst när föräldraprocessen stänger ned.
-        pass

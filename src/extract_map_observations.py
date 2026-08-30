@@ -18,23 +18,26 @@ import asyncio
 import json
 import os
 import sys
-import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+from claude_agent_sdk import (  # noqa: E402
+    AssistantMessage,
+    ClaudeAgentOptions,
+    TextBlock,
+    query,
+)
+
 import config as _llm_config  # noqa: E402
 import db as state_db  # noqa: E402
+from llm_correct import _resolve_api_key  # noqa: E402
 from map_extract import (  # noqa: E402
     build_place_index,
     candidate_payload,
     parse_map_observation_extraction,
 )
-from claude_agent_sdk import (  # noqa: E402
-    AssistantMessage, ClaudeAgentOptions, TextBlock, query,
-)
-from llm_correct import _resolve_api_key  # noqa: E402
 
 try:
     from openai import AsyncOpenAI
@@ -227,7 +230,95 @@ async def extract_doc(conn, txt_path: Path, *, cfg: dict, dry_run: bool,
 def _load_place_index() -> list[dict]:
     places_path = ROOT / "data" / "karta" / "platser.json"
     places = json.loads(places_path.read_text(encoding="utf-8")) if places_path.exists() else []
-    return build_place_index(places)
+    index: list[dict] = build_place_index(places)
+    return index
+
+
+def _ctx(context):
+    """Returnera ``context`` eller en terminal-context för förgrundskörning."""
+    if context is not None:
+        return context
+    from operations.context import ensure_terminal_context
+
+    return ensure_terminal_context(None)
+
+
+def run_extract_map_observations(
+    *,
+    text_dir: Path,
+    limit: int | None,
+    provider: str,
+    model: str,
+    base_url: str,
+    api_key: str,
+    dry_run: bool,
+    jobs: int,
+    timeout: float,
+    profile: str = "",
+    context=None,
+) -> int:
+    """Extrahera kartobservationskandidater. Returnerar exitkod."""
+    ctx = _ctx(context)
+    base_cfg = _llm_config.load_profile(profile) if profile else _llm_config.load()
+    cfg = resolve_provider_cfg(
+        base_cfg,
+        provider=provider, model=model, base_url=base_url,
+    )
+    if dry_run:
+        cfg["api_key"] = ""
+    else:
+        profile_env = str(base_cfg.get("api_key_env") or "").strip()
+        cfg["api_key"] = _resolve_api_key(
+            cfg["provider"], cfg["base_url"], api_key, profile_env=profile_env
+        )
+
+    files = sorted(text_dir.glob("*.txt"))
+    if limit:
+        files = files[: limit]
+    if not files:
+        ctx.log(f"Inga .txt-filer i {text_dir}/", level="error")
+        return 1
+
+    conn = state_db.connect()
+    state_db.init_schema(conn)
+    place_index = _load_place_index()
+
+    work: list[tuple[Path, int]] = []
+    total_pages = 0
+    for f in files:
+        pages = f.read_text(encoding="utf-8", errors="replace").split("\f")
+        n = len(select_candidate_pages(conn, f.stem, pages))
+        if n:
+            work.append((f, n))
+            total_pages += n
+    skipped_docs = len(files) - len(work)
+    ctx.log(f"Hittade {total_pages} sidor att granska i {len(work)} dokument "
+            f"({skipped_docs} dokument redan klara/utan sidor).")
+
+    if dry_run:
+        ctx.log(f"[dry-run] Klart: {total_pages} sidor i {len(work)} dokument.")
+        return 0
+
+    ctx.log(f"Extraherar med {cfg['provider']}/{cfg['model']} "
+            f"({jobs} parallella sidor).")
+
+    done = 0
+    attempted_pages = 0
+    for f, _n in work:
+        ctx.check_cancelled()
+
+        def on_page(page_num: int, stem: str = f.stem) -> None:
+            nonlocal done
+            done += 1
+            ctx.progress(done, total_pages, f"{stem} sida {page_num}")
+
+        attempted_pages += asyncio.run(
+            extract_doc(conn, f, cfg=cfg, dry_run=False, place_index=place_index,
+                        timeout=timeout, jobs=jobs, on_page=on_page)
+        )
+
+    ctx.log(f"Klart: {attempted_pages} sidor i {len(work)} dokument.")
+    return 0
 
 
 def main() -> int:
@@ -252,70 +343,17 @@ def main() -> int:
                     help="max väntetid i sekunder per LLM-anrop (default: 120)")
     args = ap.parse_args()
 
-    cfg = resolve_provider_cfg(
-        _llm_config.load(),
-        provider=args.provider, model=args.model, base_url=args.base_url,
+    return run_extract_map_observations(
+        text_dir=Path(args.text_dir),
+        limit=args.limit,
+        provider=args.provider,
+        model=args.model,
+        base_url=args.base_url,
+        api_key=args.api_key,
+        dry_run=args.dry_run,
+        jobs=args.jobs,
+        timeout=args.timeout,
     )
-    if args.dry_run:
-        cfg["api_key"] = ""
-    else:
-        cfg["api_key"] = _resolve_api_key(cfg["provider"], cfg["base_url"], args.api_key)
-
-    text_dir = Path(args.text_dir)
-    files = sorted(text_dir.glob("*.txt"))
-    if args.limit:
-        files = files[: args.limit]
-    if not files:
-        print(f"Inga .txt-filer i {text_dir}/", file=sys.stderr)
-        return 1
-
-    conn = state_db.connect()
-    state_db.init_schema(conn)
-    place_index = _load_place_index()
-
-    # Förpass: räkna sidor som faktiskt ska bearbetas (används även för dry-run).
-    work: list[tuple[Path, int]] = []
-    total_pages = 0
-    for f in files:
-        pages = f.read_text(encoding="utf-8", errors="replace").split("\f")
-        n = len(select_candidate_pages(conn, f.stem, pages))
-        if n:
-            work.append((f, n))
-            total_pages += n
-    skipped_docs = len(files) - len(work)
-    print(f"Hittade {total_pages} sidor att granska i {len(work)} dokument "
-          f"({skipped_docs} dokument redan klara/utan sidor).")
-
-    if args.dry_run:
-        print(f"[dry-run] Klart: {total_pages} sidor i {len(work)} dokument.")
-        return 0
-
-    print(f"Extraherar med {cfg['provider']}/{cfg['model']} "
-          f"({args.jobs} parallella sidor).")
-
-    t0 = time.monotonic()
-    done = 0
-    attempted_pages = 0
-    for f, _n in work:
-        def on_page(page_num: int) -> None:
-            nonlocal done
-            done += 1
-            elapsed = time.monotonic() - t0
-            if elapsed:
-                eta = (total_pages - done) / (done / elapsed)
-                print(f"  [{done}/{total_pages}] {f.stem[:60]} sida {page_num}"
-                      f"  eta {fmt_eta(eta)}", flush=True)
-            else:
-                print(f"  [{done}/{total_pages}] {f.stem[:60]} sida {page_num}",
-                      flush=True)
-
-        attempted_pages += asyncio.run(
-            extract_doc(conn, f, cfg=cfg, dry_run=False, place_index=place_index,
-                        timeout=args.timeout, jobs=args.jobs, on_page=on_page)
-        )
-
-    print(f"Klart: {attempted_pages} sidor i {len(work)} dokument.")
-    return 0
 
 
 if __name__ == "__main__":

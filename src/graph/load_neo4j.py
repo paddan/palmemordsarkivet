@@ -181,6 +181,69 @@ def write_relations(session, relations: list[dict]) -> None:
         session.run(_RELATION_CYPHER.format(fl=fl, tl=tl), rows=rows)
 
 
+def _ctx(context):
+    """Returnera ``context`` eller en terminal-context för förgrundskörning."""
+    if context is not None:
+        return context
+    from operations.context import ensure_terminal_context
+
+    return ensure_terminal_context(None)
+
+
+def run_load_graph(*, uri: str, user: str, batch: int, context=None) -> int:
+    """Ladda doc_entities till Neo4j. Returnerar exitkod."""
+    ctx = _ctx(context)
+    password = os.environ.get("NEO4J_PASSWORD")
+    if not password:
+        # Samma katalog som operations/neo4j.py (NEO4J_DIR): <root>/neo4j/.
+        # Lösenordet används bara lokalt i denna funktion — env lämnas orörd.
+        password_file = ROOT / "neo4j" / ".password"
+        if password_file.exists():
+            password = password_file.read_text(encoding="utf-8").strip()
+            ctx.log(f"Läste Neo4j-lösenord från {password_file}")
+    if not password:
+        ctx.log("Sätt NEO4J_PASSWORD.", level="error")
+        return 1
+
+    from neo4j import GraphDatabase  # noqa: PLC0415 — kräver extras [graph]
+
+    conn = state_db.connect()
+    state_db.init_schema(conn)
+
+    entries = state_db.iter_doc_entities(conn)
+    surname_map = build_surname_map(entries)
+
+    n_pages = n_mentions = n_relations = 0
+    with GraphDatabase.driver(uri, auth=(user, password)) as driver, \
+            driver.session() as session:
+        for stmt in CONSTRAINTS:
+            session.run(stmt)
+        batch_m: list[dict] = []
+        batch_r: list[dict] = []
+        for row in entries:
+            ctx.check_cancelled()
+            mentions, relations = build_rows(
+                row["pdf_stem"], row["page_num"], row["payload"],
+                surname_map.get(row["pdf_stem"], {}))
+            batch_m.extend(mentions)
+            batch_r.extend(relations)
+            n_pages += 1
+            if n_pages % batch == 0:
+                write_mentions(session, batch_m)
+                write_relations(session, batch_r)
+                n_mentions += len(batch_m)
+                n_relations += len(batch_r)
+                batch_m, batch_r = [], []
+                ctx.log(f"  {n_pages} sidor laddade…")
+        write_mentions(session, batch_m)
+        write_relations(session, batch_r)
+        n_mentions += len(batch_m)
+        n_relations += len(batch_r)
+    ctx.log(f"Klart: {n_pages} sidor → {n_mentions} omnämnanden, "
+            f"{n_relations} relationer.")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -190,47 +253,7 @@ def main() -> int:
                     help="antal sidor per transaktion (default: 1000)")
     args = ap.parse_args()
 
-    password = os.environ.get("NEO4J_PASSWORD")
-    if not password:
-        print("Sätt NEO4J_PASSWORD.", file=sys.stderr)
-        return 1
-
-    from neo4j import GraphDatabase  # noqa: PLC0415 — kräver extras [graph]
-
-    conn = state_db.connect()
-    state_db.init_schema(conn)
-
-    # Materialisera en gång och bygg dokument-scopat efternamnsuppslag innan
-    # laddningen — kräver hela dokumentets fullnamn för att avgöra entydighet.
-    entries = state_db.iter_doc_entities(conn)
-    surname_map = build_surname_map(entries)
-
-    n_pages = n_mentions = n_relations = 0
-    with GraphDatabase.driver(args.uri, auth=(args.user, password)) as driver:
-        with driver.session() as session:
-            for stmt in CONSTRAINTS:
-                session.run(stmt)
-            batch_m: list[dict] = []
-            batch_r: list[dict] = []
-            for row in entries:
-                mentions, relations = build_rows(
-                    row["pdf_stem"], row["page_num"], row["payload"],
-                    surname_map.get(row["pdf_stem"], {}))
-                batch_m.extend(mentions)
-                batch_r.extend(relations)
-                n_pages += 1
-                if n_pages % args.batch == 0:
-                    write_mentions(session, batch_m)
-                    write_relations(session, batch_r)
-                    n_mentions += len(batch_m); n_relations += len(batch_r)
-                    batch_m, batch_r = [], []
-                    print(f"  {n_pages} sidor laddade…", flush=True)
-            write_mentions(session, batch_m)
-            write_relations(session, batch_r)
-            n_mentions += len(batch_m); n_relations += len(batch_r)
-    print(f"Klart: {n_pages} sidor → {n_mentions} omnämnanden, "
-          f"{n_relations} relationer.")
-    return 0
+    return run_load_graph(uri=args.uri, user=args.user, batch=args.batch)
 
 
 if __name__ == "__main__":

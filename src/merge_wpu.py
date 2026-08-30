@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Jämför wpu-text mot palme-text och behåll bästa versionen.
 
-Båda sidor måste ha gått genom ``ocr_tesseract.sh`` så att ``text/<stem>.txt``
+Båda sidor måste ha gått genom ``scripts/ocr_tesseract.py`` så att ``text/<stem>.txt``
 och ``ocr/<stem>.pdf`` finns för varje PDF i ``downloaded/files/`` respektive
 ``downloaded/wpu_files/``. Den här modulen jämför poäng för matchande
 dokument-ID och raderar förlorarens text/+ocr/-filer.
@@ -100,7 +100,7 @@ def _delete_pair(text_path: Path, ocr_dir: Path, dry_run: bool) -> None:
     text_path.unlink(missing_ok=True)
     (ocr_dir / f"{text_path.stem}.pdf").unlink(missing_ok=True)
     # Ingen markörfil behövs: filen har redan tesseract_done_at i state.db, så
-    # ocr_tesseract.sh hoppar över den även när text/+ocr/ raderats här.
+    # scripts/ocr_tesseract.py hoppar över den även när text/+ocr/ raderats här.
 
 
 def _process_one(
@@ -138,7 +138,8 @@ def _process_one(
             # Markera INTE som decided — OCR hann inte bli klar. Nästa körning
             # försöker igen när text/<stem>.txt finns.
             result["lines"].append(
-                f"[saknar text] {stem[:70]} — kör ocr_tesseract.sh på downloaded/wpu_files först"
+                f"[saknar text] {stem[:70]} — kör scripts/ocr_tesseract.py på "
+                "downloaded/wpu_files först"
             )
             result["category"] = "skip"
             return result
@@ -203,6 +204,105 @@ def _process_one(
         conn.close()
 
 
+def _ctx(context):
+    """Returnera ``context`` eller en terminal-context för förgrundskörning."""
+    if context is not None:
+        return context
+    from operations.context import ensure_terminal_context
+
+    return ensure_terminal_context(None)
+
+
+def run_merge_wpu(
+    *,
+    dry_run: bool,
+    rebuild: bool,
+    margin: float,
+    wpu_dir: Path,
+    text_dir: Path,
+    ocr_dir: Path,
+    jobs: int,
+    context=None,
+) -> int:
+    """Jämför wpu mot palme och raderar förloraren. Returnerar exitkod."""
+    ctx = _ctx(context)
+
+    if not wpu_dir.is_dir():
+        ctx.log(f"Saknar {wpu_dir}/", level="error")
+        return 1
+    if not text_dir.is_dir():
+        ctx.log(f"Saknar {text_dir}/ — kör ocr_tesseract först.", level="error")
+        return 1
+
+    init_conn = state_db.connect()
+    state_db.init_schema(init_conn)
+    if rebuild and not dry_run:
+        init_conn.execute("DELETE FROM wpu_decisions")
+        init_conn.commit()
+    elif not dry_run:
+        removed = cleanup_phantom_decisions(init_conn, text_dir)
+        if removed:
+            ctx.log(f"Rensade {removed} fantom-rader ur wpu_decisions (text saknas på disk).")
+    init_conn.close()
+
+    use_hunspell = has_hunspell_swe()
+    if not use_hunspell:
+        ctx.log("hunspell saknas — hoppar över ordbokskontroll", level="error")
+
+    ctx.log("Bygger palme-ID-karta…")
+    palme_map = build_palme_key_map(text_dir)
+    ctx.log(f"  {len(palme_map)} ID-nycklar i {text_dir.name}/")
+
+    wpu_pdfs = sorted(wpu_dir.glob("*.pdf"))
+    ctx.log(f"  {len(wpu_pdfs)} PDF-filer i {wpu_dir.name}/")
+    ctx.log(f"  parallellt: {jobs} processer\n")
+
+    counts = {"better": 0, "kept": 0, "lost": 0, "new": 0, "skip": 0}
+
+    with ProcessPoolExecutor(
+        max_workers=jobs,
+        initializer=_init_worker,
+        initargs=(palme_map, use_hunspell),
+    ) as pool:
+        futures = {
+            pool.submit(
+                _process_one,
+                str(pdf),
+                str(text_dir),
+                str(ocr_dir),
+                dry_run,
+                rebuild,
+                margin,
+            ): pdf
+            for pdf in wpu_pdfs
+        }
+
+        for fut in as_completed(futures):
+            ctx.check_cancelled()
+            pdf = futures[fut]
+            try:
+                res = fut.result()
+            except Exception as exc:
+                ctx.log(f"  [fel] {pdf.name}: {exc}", level="error")
+                continue
+            for line in res["lines"]:
+                ctx.log(line)
+            for err in res["errors"]:
+                ctx.log(err, level="error")
+            cat = res["category"]
+            if cat in counts:
+                counts[cat] += 1
+
+    ctx.log(
+        f"\nKlart: {counts['better']} wpu vann (palme raderad), "
+        f"{counts['lost']} wpu förlorade (wpu raderad), "
+        f"{counts['kept']} oavgjorda (båda kvar), "
+        f"{counts['new']} ensamma wpu, "
+        f"{counts['skip']} hoppade."
+    )
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -223,86 +323,15 @@ def main() -> int:
                     help="antal parallella processer (default: cpu_count)")
     args = ap.parse_args()
 
-    wpu_dir = Path(args.wpu_dir)
-    text_dir = Path(args.text_dir)
-    ocr_dir = Path(args.ocr_dir)
-
-    if not wpu_dir.is_dir():
-        print(f"Saknar {wpu_dir}/", file=sys.stderr)
-        return 1
-    if not text_dir.is_dir():
-        print(f"Saknar {text_dir}/ — kör ocr_tesseract.sh först.", file=sys.stderr)
-        return 1
-
-    # Säkerställ att schemat finns innan workerprocesser försöker skriva.
-    init_conn = state_db.connect()
-    state_db.init_schema(init_conn)
-    if args.rebuild and not args.dry_run:
-        init_conn.execute("DELETE FROM wpu_decisions")
-        init_conn.commit()
-    elif not args.dry_run:
-        # Självläka fantom-beslut: rader skrivna när text saknades. Kan annars
-        # hindra merge_wpu från att fatta riktigt beslut när OCR producerat texten.
-        removed = cleanup_phantom_decisions(init_conn, text_dir)
-        if removed:
-            print(f"Rensade {removed} fantom-rader ur wpu_decisions (text saknas på disk).")
-    init_conn.close()
-
-    use_hunspell = has_hunspell_swe()
-    if not use_hunspell:
-        print("hunspell saknas — hoppar över ordbokskontroll", file=sys.stderr)
-
-    print("Bygger palme-ID-karta…")
-    palme_map = build_palme_key_map(text_dir)
-    print(f"  {len(palme_map)} ID-nycklar i {text_dir.name}/")
-
-    wpu_pdfs = sorted(wpu_dir.glob("*.pdf"))
-    print(f"  {len(wpu_pdfs)} PDF-filer i {wpu_dir.name}/")
-    print(f"  parallellt: {args.jobs} processer\n")
-
-    counts = {"better": 0, "kept": 0, "lost": 0, "new": 0, "skip": 0}
-
-    with ProcessPoolExecutor(
-        max_workers=args.jobs,
-        initializer=_init_worker,
-        initargs=(palme_map, use_hunspell),
-    ) as pool:
-        futures = {
-            pool.submit(
-                _process_one,
-                str(pdf),
-                str(text_dir),
-                str(ocr_dir),
-                args.dry_run,
-                args.rebuild,
-                args.margin,
-            ): pdf
-            for pdf in wpu_pdfs
-        }
-
-        for fut in as_completed(futures):
-            pdf = futures[fut]
-            try:
-                res = fut.result()
-            except Exception as exc:
-                print(f"  [fel] {pdf.name}: {exc}", file=sys.stderr)
-                continue
-            for line in res["lines"]:
-                print(line)
-            for err in res["errors"]:
-                print(err, file=sys.stderr)
-            cat = res["category"]
-            if cat in counts:
-                counts[cat] += 1
-
-    print(
-        f"\nKlart: {counts['better']} wpu vann (palme raderad), "
-        f"{counts['lost']} wpu förlorade (wpu raderad), "
-        f"{counts['kept']} oavgjorda (båda kvar), "
-        f"{counts['new']} ensamma wpu, "
-        f"{counts['skip']} hoppade."
+    return run_merge_wpu(
+        dry_run=args.dry_run,
+        rebuild=args.rebuild,
+        margin=args.margin,
+        wpu_dir=Path(args.wpu_dir),
+        text_dir=Path(args.text_dir),
+        ocr_dir=Path(args.ocr_dir),
+        jobs=args.jobs,
     )
-    return 0
 
 
 if __name__ == "__main__":

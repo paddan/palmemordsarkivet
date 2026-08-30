@@ -39,10 +39,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-import db as state_db
+import db as state_db  # noqa: E402 — kräver ROOT på sys.path ovan
 
 try:
-    from quality import score_text  # type: ignore
+    from quality import score_text
 except Exception:  # pragma: no cover
     def score_text(text: str, use_hunspell: bool = False) -> dict:
         return {"chars": len(text), "score": 0.0}
@@ -409,6 +409,166 @@ def detect_redactions_file(
     return n_blocks
 
 
+def _ctx(context):
+    """Returnera ``context`` eller en terminal-context för förgrundskörning."""
+    if context is not None:
+        return context
+    from operations.context import ensure_terminal_context
+
+    return ensure_terminal_context(None)
+
+
+def run_ocr_pages(
+    *,
+    inp: Path,
+    out_dir: str | None,
+    engine: str,
+    langs: str,
+    dpi: int,
+    pages: str | None,
+    ocr_dir: str | None,
+    no_update_pdf: bool,
+    no_detect_redactions: bool,
+    txt_dir: str | None,
+    context=None,
+) -> int:
+    """OCR:a en PDF per sida. Returnerar exitkod."""
+    ctx = _ctx(context)
+    pdf = Path(inp)
+    if not pdf.exists():
+        ctx.log(f"Saknar {pdf}", level="error")
+        return 1
+
+    if engine == "detect-only":
+        tdir = Path(txt_dir) if txt_dir else ROOT / "generated" / "text"
+        txt_file = tdir / f"{pdf.stem}.txt"
+        marker = tdir / f"{pdf.stem}.redact"
+        ocr_pdf = Path(ocr_dir) / f"{pdf.stem}.pdf" if ocr_dir else None
+        n = detect_redactions_file(pdf, txt_file, marker, dpi, ocr_pdf=ocr_pdf)
+        ctx.log("inga" if n == 0 else f"{n} block")
+        return 0
+
+    if not out_dir:
+        ctx.log("--out-dir krävs för alla motorer utom detect-only", level="error")
+        return 1
+
+    out_path = Path(out_dir)
+    stem_dir = out_path / pdf.stem
+    stem_dir.mkdir(parents=True, exist_ok=True)
+
+    only_pages: set[int] | None = None
+    if pages:
+        try:
+            only_pages = {int(x) for x in pages.split(",") if x.strip()}
+        except ValueError:
+            ctx.log("--pages ska vara kommaseparerade heltal", level="error")
+            return 1
+
+    page_lines: dict[int, list[dict]] = {}
+    want_pdf_patch = engine == "surya" and bool(ocr_dir) and not no_update_pdf
+    n_total = 0
+    n_skipped = 0
+    n_done = 0
+    conn = state_db.connect()
+    state_db.init_schema(conn)
+    source = state_db.source_for_path(pdf)
+    state_db.upsert_pdf_file(
+        conn, pdf_stem=pdf.stem, source=source, pdf_path=str(pdf),
+    )
+    for page_num, image in render_pages(pdf, dpi):
+        ctx.check_cancelled()
+        n_total += 1
+        if only_pages is not None and page_num not in only_pages:
+            continue
+
+        png_path = stem_dir / f"page-{page_num:03d}.png"
+
+        if state_db.page_exists(conn, pdf.stem, page_num):
+            n_skipped += 1
+            continue
+
+        redaction_blocks: list[tuple[int, int]] = []
+        if not no_detect_redactions:
+            redaction_blocks = detect_redactions_image(image)
+
+        try:
+            if engine == "surya":
+                if want_pdf_patch:
+                    text, lines = ocr_surya_lines(image)
+                    page_lines[page_num] = lines
+                    if redaction_blocks:
+                        text = _merge_redaction_markers(
+                            text, redaction_blocks, image.height, line_bboxes=lines
+                        )
+                else:
+                    text = ocr_surya(image)
+                    if redaction_blocks:
+                        text = _merge_redaction_markers(
+                            text, redaction_blocks, image.height
+                        )
+            else:
+                if not png_path.exists():
+                    image.save(str(png_path))
+                if engine == "vision":
+                    text = ocr_vision(png_path)
+                else:
+                    text = ocr_tesseract(png_path, langs)
+                if redaction_blocks:
+                    text = _merge_redaction_markers(
+                        text, redaction_blocks, image.height
+                    )
+        except Exception as e:  # noqa: BLE001
+            ctx.log(f"  [{pdf.stem} p{page_num}] FEL: {e}", level="error")
+            log_error("ocr_pages", f"{pdf.name}#p{page_num}", str(e))
+            continue
+
+        try:
+            scored = score_text(text, use_hunspell=False)
+        except Exception:
+            scored = {"chars": len(text), "score": 0.0}
+
+        redact_suffix = f" [{len(redaction_blocks)} mask]" if redaction_blocks else ""
+        state_db.record_page(
+            conn, pdf_stem=pdf.stem, page_num=page_num,
+            engine=engine, text=text, score=scored.get("score"),
+        )
+        n_done += 1
+        ctx.log(f"  [{pdf.stem} p{page_num:03d}] {len(text):5d} tecken "
+                f"score={scored.get('score', 0)}{redact_suffix}")
+
+    ctx.log(f"Klart {pdf.stem}: {n_done} OCR:ade, {n_skipped} hoppade, "
+            f"{n_total} sidor totalt.")
+
+    if only_pages and n_done == 0 and n_skipped == 0:
+        missing = only_pages - set(range(1, n_total + 1))
+        for p in missing:
+            if not state_db.page_exists(conn, pdf.stem, p):
+                state_db.record_page(
+                    conn, pdf_stem=pdf.stem, page_num=p,
+                    engine=engine, text="", score=0.0,
+                )
+        if missing:
+            ctx.log(f"  [varning] {len(missing)} begärda sidor saknas i PDF:en "
+                    f"({min(missing)}–{max(missing)}), markerade som försökta.")
+
+    if want_pdf_patch and page_lines:
+        # want_pdf_patch kräver en icke-tom OCR-katalog enligt definitionen ovan.
+        assert ocr_dir is not None
+        ocr_pdf = Path(ocr_dir) / f"{pdf.stem}.pdf"
+        if not ocr_pdf.exists():
+            ocr_pdf.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(pdf, ocr_pdf)
+            ctx.log(f"  [pdf-patch] kopierade {pdf.name} → {ocr_pdf.parent.name}/")
+        if ocr_pdf.exists():
+            try:
+                n = update_pdf_text_layer(ocr_pdf, ocr_pdf, page_lines, dpi)
+                ctx.log(f"  [pdf-patch] {ocr_pdf.name}: patchade {n} sidor")
+            except Exception as e:  # noqa: BLE001
+                ctx.log(f"  [pdf-patch] FEL: {e}", level="error")
+                log_error("ocr_pages.pdf_patch", pdf.name, str(e))
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -434,9 +594,7 @@ def main() -> int:
                     help="kommaseparerade sidnummer (1-baserade); default alla")
     ap.add_argument("--ocr-dir",
                     default=os.environ.get("OCR_DIR"),
-                    help="katalog med OCR-ade PDF:er (generated/ocr). "
-                         "detect-only: används för exakt radpositionering via PyMuPDF. "
-                         "surya: patchar textlagret i <ocr-dir>/<stem>.pdf (default: av)")
+                    help="katalog med OCR-ade PDF:er (generated/ocr)")
     ap.add_argument("--no-update-pdf", action="store_true",
                     help="stäng av PDF-textlager-patchen även om --ocr-dir är satt")
     ap.add_argument("--no-detect-redactions", action="store_true",
@@ -446,155 +604,18 @@ def main() -> int:
                     help="text-katalog för detect-only (default: <root>/generated/text)")
     args = ap.parse_args()
 
-    pdf = Path(args.inp)
-    if not pdf.exists():
-        print(f"Saknar {pdf}", file=sys.stderr)
-        return 1
-
-    if args.engine == "detect-only":
-        txt_dir = Path(args.txt_dir) if args.txt_dir else ROOT / "generated" / "text"
-        txt_file = txt_dir / f"{pdf.stem}.txt"
-        marker = txt_dir / f"{pdf.stem}.redact"
-        ocr_pdf = Path(args.ocr_dir) / f"{pdf.stem}.pdf" if args.ocr_dir else None
-        n = detect_redactions_file(pdf, txt_file, marker, args.dpi, ocr_pdf=ocr_pdf)
-        print(f"inga" if n == 0 else f"{n} block")
-        return 0
-
-    if not args.out_dir:
-        print("--out-dir krävs för alla motorer utom detect-only", file=sys.stderr)
-        return 1
-
-    out_dir = Path(args.out_dir)
-    stem_dir = out_dir / pdf.stem
-    stem_dir.mkdir(parents=True, exist_ok=True)
-
-    only_pages: set[int] | None = None
-    if args.pages:
-        try:
-            only_pages = {int(x) for x in args.pages.split(",") if x.strip()}
-        except ValueError:
-            print("--pages ska vara kommaseparerade heltal", file=sys.stderr)
-            return 1
-
-    page_lines: dict[int, list[dict]] = {}
-    want_pdf_patch = (
-        args.engine == "surya"
-        and args.ocr_dir
-        and not args.no_update_pdf
+    return run_ocr_pages(
+        inp=Path(args.inp),
+        out_dir=args.out_dir,
+        engine=args.engine,
+        langs=args.langs,
+        dpi=args.dpi,
+        pages=args.pages,
+        ocr_dir=args.ocr_dir,
+        no_update_pdf=args.no_update_pdf,
+        no_detect_redactions=args.no_detect_redactions,
+        txt_dir=args.txt_dir,
     )
-    n_total = 0
-    n_skipped = 0
-    n_done = 0
-    conn = state_db.connect()
-    state_db.init_schema(conn)
-    source = state_db.source_for_path(pdf)
-    state_db.upsert_pdf_file(
-        conn, pdf_stem=pdf.stem, source=source, pdf_path=str(pdf),
-    )
-    for page_num, image in render_pages(pdf, args.dpi):
-        n_total += 1
-        if only_pages is not None and page_num not in only_pages:
-            continue
-
-        png_path = stem_dir / f"page-{page_num:03d}.png"
-
-        # Idempotens-markör: db.pdf_pages-raden. Skapas alltid sist efter
-        # lyckad OCR (rad nedan), så om raden finns vet vi att sidan redan körts.
-        # Per-sida-text lagras i pdf_pages-tabellen och mergas in i
-        # text/<stem>.txt av merge_pages — vi skriver inte page-NNN.txt längre.
-        if state_db.page_exists(conn, pdf.stem, page_num):
-            n_skipped += 1
-            continue
-
-        redaction_blocks: list[tuple[int, int]] = []
-        if not args.no_detect_redactions:
-            redaction_blocks = detect_redactions_image(image)
-
-        try:
-            if args.engine == "surya":
-                if want_pdf_patch:
-                    text, lines = ocr_surya_lines(image)
-                    page_lines[page_num] = lines
-                    if redaction_blocks:
-                        text = _merge_redaction_markers(
-                            text, redaction_blocks, image.height, line_bboxes=lines
-                        )
-                else:
-                    text = ocr_surya(image)
-                    if redaction_blocks:
-                        text = _merge_redaction_markers(
-                            text, redaction_blocks, image.height
-                        )
-            else:
-                # spara PNG (idempotent)
-                if not png_path.exists():
-                    image.save(str(png_path))
-                if args.engine == "vision":
-                    text = ocr_vision(png_path)
-                else:
-                    text = ocr_tesseract(png_path, args.langs)
-                if redaction_blocks:
-                    text = _merge_redaction_markers(
-                        text, redaction_blocks, image.height
-                    )
-        except Exception as e:  # noqa: BLE001
-            print(f"  [{pdf.stem} p{page_num}] FEL: {e}", file=sys.stderr)
-            log_error("ocr_pages", f"{pdf.name}#p{page_num}", str(e))
-            continue
-
-        try:
-            scored = score_text(text, use_hunspell=False)
-        except Exception:
-            scored = {"chars": len(text), "score": 0.0}
-
-        redact_suffix = f" [{len(redaction_blocks)} mask]" if redaction_blocks else ""
-        state_db.record_page(
-            conn, pdf_stem=pdf.stem, page_num=page_num,
-            engine=args.engine, text=text, score=scored.get("score"),
-        )
-        n_done += 1
-        print(f"  [{pdf.stem} p{page_num:03d}] {len(text):5d} tecken "
-              f"score={scored.get('score', 0)}{redact_suffix}", flush=True)
-
-    # Slutsamla — combined-fil i text_pages/ skapas inte längre. Per-sida-text
-    # mergas direkt in i text/<stem>.txt av merge_pages (anropas från ocr.sh).
-    print(f"Klart {pdf.stem}: {n_done} OCR:ade, {n_skipped} hoppade, "
-          f"{n_total} sidor totalt.")
-
-    # Om specifika sidor begärdes men ingen matchade (sidan finns inte i PDF:en)
-    # skapar vi tomma pdf_pages-poster så att de inte hämtas igen nästa körning.
-    if only_pages and n_done == 0 and n_skipped == 0:
-        missing = only_pages - set(range(1, n_total + 1))
-        for p in missing:
-            if not state_db.page_exists(conn, pdf.stem, p):
-                state_db.record_page(
-                    conn, pdf_stem=pdf.stem, page_num=p,
-                    engine=args.engine, text="", score=0.0,
-                )
-        if missing:
-            print(f"  [varning] {len(missing)} begärda sidor saknas i PDF:en "
-                  f"({min(missing)}–{max(missing)}), markerade som försökta.")
-
-    if want_pdf_patch and page_lines:
-        ocr_pdf = Path(args.ocr_dir) / f"{pdf.stem}.pdf"
-        if not ocr_pdf.exists():
-            # Wpu-PDF:er (och andra som inte gått genom ocrmypdf) saknar
-            # motsvarande fil i ocr/. Kopiera källan dit som utgångspunkt så
-            # patchen får något att skriva till — wpu-PDF:er har redan ett
-            # textlager från wpu.nu, vi skriver bara över de patchade sidorna.
-            ocr_pdf.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(pdf, ocr_pdf)
-            print(f"  [pdf-patch] kopierade {pdf.name} → {ocr_pdf.parent.name}/")
-        if ocr_pdf.exists():
-            try:
-                n = update_pdf_text_layer(
-                    ocr_pdf, ocr_pdf, page_lines, args.dpi
-                )
-                print(f"  [pdf-patch] {ocr_pdf.name}: patchade {n} sidor")
-            except Exception as e:  # noqa: BLE001
-                print(f"  [pdf-patch] FEL: {e}", file=sys.stderr)
-                log_error("ocr_pages.pdf_patch", pdf.name, str(e))
-    return 0
 
 
 if __name__ == "__main__":

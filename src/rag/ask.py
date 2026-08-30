@@ -21,14 +21,13 @@ import sys
 from pathlib import Path
 
 import lancedb
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 try:
-    from errors_log import log_error  # type: ignore  # noqa: E402
+    from errors_log import log_error  # noqa: E402
 except ImportError:  # pragma: no cover
     def log_error(component: str, item: str, message: str) -> None:
         pass
-
-from ingest import _table_exists  # type: ignore  # noqa: E402
 
 from claude_agent_sdk import (  # noqa: E402
     AssistantMessage,
@@ -38,6 +37,7 @@ from claude_agent_sdk import (  # noqa: E402
     ThinkingConfigAdaptive,
     query,
 )
+from ingest import _table_exists  # noqa: E402
 from sentence_transformers import SentenceTransformer
 
 MCP_SERVER = Path(__file__).resolve().parent / "mcp_server.py"
@@ -83,7 +83,8 @@ def search(table, model, q: str, top_k: int, where: str | None = None) -> list[d
         # prefilter=True begränsar INNAN topp-K väljs, så facett-filtrerade
         # dokument kan ytas även om de ligger utanför ofiltrerade topp-K.
         qb = qb.where(where, prefilter=True)
-    return qb.to_list()
+    rows: list[dict] = qb.to_list()
+    return rows
 
 
 def _hit_key(h: dict) -> tuple:
@@ -139,7 +140,7 @@ def rerank(q: str, hits: list[dict], top_n: int) -> list[dict]:
     ce = _get_cross_encoder()
     pairs = [(q, h["text"]) for h in hits]
     scores = ce.predict(pairs, show_progress_bar=False)
-    ranked = sorted(zip(scores, hits), key=lambda x: -float(x[0]))
+    ranked = sorted(zip(scores, hits, strict=False), key=lambda x: -float(x[0]))
     return [h for _, h in ranked[:top_n]]
 
 

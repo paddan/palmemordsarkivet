@@ -16,7 +16,6 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
-import time
 from collections import defaultdict
 from pathlib import Path
 
@@ -29,31 +28,44 @@ except ImportError:
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from normalize_text import normalize  # noqa: E402
 import config as _llm_config  # noqa: E402
 import db as state_db  # noqa: E402
+from normalize_text import normalize  # noqa: E402
+from operations.exceptions import OperationFailed  # noqa: E402
 
 HAIKU_MODEL = "claude-haiku-4-5-20251001"
 
 OPENAI_DEFAULT_MODEL = "gpt-4o-mini"
 
 
-def _resolve_api_key(provider: str, base_url: str, explicit_key: str) -> str:
+def _resolve_api_key(
+    provider: str, base_url: str, explicit_key: str, *, profile_env: str = ""
+) -> str:
+    """Lös API-nyckeln: explicit värde, profilens ``api_key_env`` eller klassiska env.
+
+    Kastar ``OperationFailed`` med vägledning när en förväntad nyckel saknas —
+    undantaget hamnar i jobbstatus/loggen i stället för en tyst ``SystemExit``.
+    """
     if explicit_key:
         return explicit_key
+    if profile_env:
+        key = os.environ.get(profile_env, "")
+        if not key:
+            raise OperationFailed(f"Sätt miljövariabeln {profile_env}.")
+        return key
     if provider == "claude":
         key = (os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") or
                os.environ.get("ANTHROPIC_API_KEY") or "")
         if not key:
-            print("Sätt CLAUDE_CODE_OAUTH_TOKEN eller ANTHROPIC_API_KEY.", file=sys.stderr)
-            sys.exit(1)
+            raise OperationFailed(
+                "Sätt CLAUDE_CODE_OAUTH_TOKEN eller ANTHROPIC_API_KEY."
+            )
         return key
     # openai
     if not base_url:
         key = os.environ.get("OPENAI_API_KEY") or ""
         if not key:
-            print("Sätt OPENAI_API_KEY.", file=sys.stderr)
-            sys.exit(1)
+            raise OperationFailed("Sätt OPENAI_API_KEY.")
         return key
     # Custom base_url: lokala servrar (Ollama/LM Studio) körs utan nyckel, men
     # kända fjärr-providers kräver sin egen env-nyckel. Matcha på host.
@@ -63,8 +75,7 @@ def _resolve_api_key(provider: str, base_url: str, explicit_key: str) -> str:
         if needle in host:
             key = os.environ.get(env, "")
             if not key:
-                print(f"Sätt {env}.", file=sys.stderr)
-                sys.exit(1)
+                raise OperationFailed(f"Sätt {env}.")
             return key
     return ""  # lokal/okänd server → ingen validering
 
@@ -124,29 +135,32 @@ async def _correct_text(text: str, provider_cfg: dict) -> str:
     )
 
 
-async def _test_mode(txt_path: Path, provider_cfg: dict, threshold: float) -> None:
+async def _test_mode(txt_path: Path, provider_cfg: dict, threshold: float,
+                     ctx=None) -> None:
     """Test-läge: rätta en textfil och jämför quality-poäng sida för sida."""
     from quality import has_hunspell_swe, score_text  # noqa: PLC0415
 
+    ctx = _ctx(ctx)
     raw = txt_path.read_text(encoding='utf-8', errors='replace')
     pages = raw.split('\f')
     use_hunspell = has_hunspell_swe()
 
-    print(f'Test: {txt_path} ({len(pages)} sida{"r" if len(pages) != 1 else ""})'
-          f' — {provider_cfg["provider"]}/{provider_cfg["model"]}'
-          + (' + hunspell' if use_hunspell else ''))
-    print(f'Tröskel: {threshold:.0f}\n')
+    ctx.log(f'Test: {txt_path} ({len(pages)} sida{"r" if len(pages) != 1 else ""})'
+            f' — {provider_cfg["provider"]}/{provider_cfg["model"]}'
+            + (' + hunspell' if use_hunspell else ''))
+    ctx.log(f'Tröskel: {threshold:.0f}')
 
     before: list[float] = []
     corrected_pages: list[str] = []
     for i, page in enumerate(pages, 1):
+        ctx.check_cancelled()
         norm = normalize(page)
         s = score_text(norm, use_hunspell).get('score', 0.0)
         before.append(s)
         if not norm.strip() or s >= threshold:
             corrected_pages.append(norm)
             continue
-        print(f'  Sida {i}: score {s:.0f} → rättar…')
+        ctx.log(f'  Sida {i}: score {s:.0f} → rättar…')
         corrected_pages.append(normalize(await _correct_text(norm, provider_cfg)))
 
     after = [score_text(p, use_hunspell).get('score', 0.0) for p in corrected_pages]
@@ -156,18 +170,18 @@ async def _test_mode(txt_path: Path, provider_cfg: dict, threshold: float) -> No
     tmp = tmp_dir / f'llm_test_{txt_path.stem}.txt'
     tmp.write_text('\f'.join(corrected_pages), encoding='utf-8')
 
-    print(f'\n{"Sida":>5}  {"Före":>6}  {"Efter":>6}  {"Δ":>6}')
-    print('─' * 30)
-    for i, (b, a) in enumerate(zip(before, after), 1):
+    ctx.log(f'\n{"Sida":>5}  {"Före":>6}  {"Efter":>6}  {"Δ":>6}')
+    ctx.log('─' * 30)
+    for i, (b, a) in enumerate(zip(before, after, strict=False), 1):
         delta = a - b
         marker = ' ↑' if delta > 1 else (' ↓' if delta < -1 else '')
-        print(f'{i:>5}  {b:>6.1f}  {a:>6.1f}  {delta:>+6.1f}{marker}')
+        ctx.log(f'{i:>5}  {b:>6.1f}  {a:>6.1f}  {delta:>+6.1f}{marker}')
     if len(before) > 1:
         avg_b = sum(before) / len(before)
         avg_a = sum(after) / len(after)
-        print('─' * 30)
-        print(f'{"Snitt":>5}  {avg_b:>6.1f}  {avg_a:>6.1f}  {avg_a - avg_b:>+6.1f}')
-    print(f'\nSparat: {tmp}')
+        ctx.log('─' * 30)
+        ctx.log(f'{"Snitt":>5}  {avg_b:>6.1f}  {avg_a:>6.1f}  {avg_a - avg_b:>+6.1f}')
+    ctx.log(f'\nSparat: {tmp}')
 
 
 async def _correct_all(
@@ -176,6 +190,7 @@ async def _correct_all(
     provider_cfg: dict,
     dry_run: bool,
     jobs: int = 1,
+    ctx=None,
 ) -> None:
     """Rätta alla dåliga sidor. ``jobs`` styr hur många LLM-anrop som körs
     samtidigt via en delad semafor; sidorna är oberoende av varandra och
@@ -183,9 +198,10 @@ async def _correct_all(
     är säker. ``merge_one`` körs per fil efter att filens sidor är klara."""
     from merge_pages import merge_one  # noqa: PLC0415
 
+    ctx = _ctx(ctx)
+    ctx.step("LLM-korrigering")
     total = sum(len(v) for v in bad.values())
     done = 0
-    t0 = time.monotonic()
 
     conn = state_db.connect()
     state_db.init_schema(conn)
@@ -195,17 +211,16 @@ async def _correct_all(
     def progress(stem: str, p: int, suffix: str) -> None:
         nonlocal done
         done += 1
-        elapsed = time.monotonic() - t0
-        rate = done / elapsed if elapsed else 0
-        eta = int((total - done) / rate) if rate else 0
-        eta_s = f'{eta // 60}m{eta % 60:02d}s'
-        print(f'  [{done}/{total}] {stem} sida {p}{suffix}  eta {eta_s}', flush=True)
+        # Strukturerad progress till SQLite/jobblogg i stället för print —
+        # worker-stdout är DEVNULL och försvinner annars.
+        ctx.progress(done, total, f'{stem} sida {p}{suffix}')
 
     async def handle_file(txt_name: str, pages: list[int]) -> None:
+        ctx.check_cancelled()
         stem = txt_name[:-4] if txt_name.endswith('.txt') else txt_name
         txt_path = txt_dir / f'{stem}.txt'
         if not txt_path.exists():
-            print(f'  SAKNAS: {txt_path}', file=sys.stderr)
+            ctx.log(f'  SAKNAS: {txt_path}', level='error')
             return
 
         full_text = txt_path.read_text(encoding='utf-8', errors='replace')
@@ -214,10 +229,11 @@ async def _correct_all(
 
         async def handle_page(p: int) -> None:
             nonlocal file_changed
+            ctx.check_cancelled()
             idx = p - 1
             if idx < 0 or idx >= len(page_texts):
-                print(f'  [skip] {stem} sida {p}: utanför range '
-                      f'(dokumentet har {len(page_texts)} sidor)')
+                ctx.log(f'  [skip] {stem} sida {p}: utanför range '
+                        f'(dokumentet har {len(page_texts)} sidor)')
                 return
 
             page_text = normalize(page_texts[idx])
@@ -235,7 +251,7 @@ async def _correct_all(
                 try:
                     corrected = normalize(await _correct_text(page_text, provider_cfg))
                 except Exception as e:  # noqa: BLE001
-                    print(f'  [fel] {stem} sida {p}: {e}', file=sys.stderr)
+                    ctx.log(f'  [fel] {stem} sida {p}: {e}', level='error')
                     return
             state_db.record_page(
                 conn,
@@ -255,14 +271,112 @@ async def _correct_all(
             try:
                 merge_one(stem, txt_dir)
             except Exception as e:  # noqa: BLE001
-                print(f'  [merge-fel] {stem}: {e}', file=sys.stderr)
+                ctx.log(f'  [merge-fel] {stem}: {e}', level='error')
 
     await asyncio.gather(
         *(handle_file(name, pages) for name, pages in bad.items())
     )
 
 
-def main() -> None:
+def _ctx(context):
+    """Returnera ``context`` eller en terminal-context för förgrundskörning."""
+    if context is not None:
+        return context
+    from operations.context import ensure_terminal_context
+
+    return ensure_terminal_context(None)
+
+
+def run_llm_correct(
+    *,
+    threshold: float,
+    provider: str,
+    model: str,
+    base_url: str,
+    api_key: str,
+    txt: Path,
+    root: Path,
+    jobs: int,
+    dry_run: bool,
+    test: str | None,
+    profile: str = "",
+    context=None,
+) -> int:
+    """LLM-korrigera dåliga OCR-sidor. Returnerar exitkod."""
+    ctx = _ctx(context)
+    txt_dir = txt
+
+    saved_cfg = _llm_config.load_profile(profile) if profile else _llm_config.load()
+    # Ett explicit provider-byte ogiltigförklarar sparad modell (annars kan t.ex.
+    # --provider openai ärva en claude-modell) — samma semantik som syskonen
+    # extract_entities/extract_map_observations.
+    saved_model = saved_cfg.get("model", "") if not provider else ""
+    provider = provider or saved_cfg.get("provider", "claude")
+    if provider not in ("claude", "openai"):
+        provider = "claude"
+    base_url = base_url or saved_cfg.get("base_url", "")
+    default_model = HAIKU_MODEL if provider == 'claude' else OPENAI_DEFAULT_MODEL
+    model = model or saved_model or default_model
+    # Profilen kan peka ut en egen miljövariabel (api_key_env) för nyckeln —
+    # den måste respekteras även i jobb/CLI, inte bara i Utredning.
+    profile_env = str(saved_cfg.get("api_key_env") or "").strip()
+    api_key = _resolve_api_key(provider, base_url, api_key, profile_env=profile_env)
+
+    provider_cfg = {
+        "provider": provider,
+        "model": model,
+        "base_url": base_url,
+        "api_key": api_key,
+    }
+
+    if test:
+        txt_path = Path(test)
+        if not txt_path.is_file():
+            ctx.log(f'Filen finns inte: {txt_path}', level="error")
+            return 1
+        asyncio.run(_test_mode(txt_path, provider_cfg, threshold, ctx=ctx))
+        return 0
+
+    conn = state_db.connect()
+    state_db.init_schema(conn)
+
+    raw: dict[str, list[int]] = defaultdict(list)
+    for row in state_db.get_bad_pages(conn, threshold=threshold):
+        raw[row["pdf_stem"] + ".txt"].append(row["page_num"])
+    if not raw:
+        ctx.log(f'Inga sidor under threshold {threshold} i quality_pages '
+                '— kör quality --per-page först.')
+        return 0
+
+    bad: dict[str, list[int]] = defaultdict(list)
+    skipped = 0
+    for txt_name, pages in raw.items():
+        stem = txt_name[:-4] if txt_name.endswith('.txt') else txt_name
+        for p in pages:
+            if state_db.llm_corrected(conn, stem, p):
+                skipped += 1
+            else:
+                bad[txt_name].append(p)
+
+    total = sum(len(v) for v in bad.values())
+    if not bad:
+        ctx.log(f'Inga nya sidor att rätta ({skipped} redan rättade).')
+        return 0
+
+    ctx.log(f'Rättar {total} sidor i {len(bad)} filer'
+            + (f' ({skipped} redan rättade hoppas över)' if skipped else '')
+            + f' med {provider}/{model} ({max(1, jobs)} parallella).')
+    if dry_run:
+        ctx.log('[dry-run — inga filer skrivs]')
+
+    asyncio.run(_correct_all(bad, txt_dir, provider_cfg, dry_run, jobs=jobs, ctx=ctx))
+
+    if not dry_run:
+        ctx.log('\nKlart. Kör quality --per-page för att se förbättringen.')
+    return 0
+
+
+def main() -> int:
     import argparse
     ap = argparse.ArgumentParser(
         description='LLM-korrektion av dåliga OCR-sidor.'
@@ -290,75 +404,23 @@ def main() -> None:
 
     root = Path(args.root) if args.root else ROOT
     txt_dir = Path(args.txt) if args.txt else root / 'generated' / 'text'
-
-    saved_cfg = _llm_config.load()
-    provider = args.provider or saved_cfg.get("provider", "claude")
-    if provider not in ("claude", "openai"):
-        provider = "claude"
-    base_url = args.base_url or saved_cfg.get("base_url", "")
-    saved_model = saved_cfg.get("model", "") if not args.provider else ""
-    default_model = HAIKU_MODEL if provider == 'claude' else OPENAI_DEFAULT_MODEL
-    model = args.model or saved_model or default_model
-    api_key = _resolve_api_key(provider, base_url, args.api_key)
-
-    provider_cfg = {
-        "provider": provider,
-        "model": model,
-        "base_url": base_url,
-        "api_key": api_key,
-    }
-
-    if args.test:
-        txt_path = Path(args.test)
-        if not txt_path.is_file():
-            print(f'Filen finns inte: {txt_path}', file=sys.stderr)
-            sys.exit(1)
-        asyncio.run(_test_mode(txt_path, provider_cfg, args.threshold))
-        return
-
-    conn = state_db.connect()
-    state_db.init_schema(conn)
-
-    raw: dict[str, list[int]] = defaultdict(list)
-    for row in state_db.get_bad_pages(conn, threshold=args.threshold):
-        raw[row["pdf_stem"] + ".txt"].append(row["page_num"])
-    if not raw:
-        print(f'Inga sidor under threshold {args.threshold} i quality_pages '
-              '— kör ./quality.sh --per-page först.')
-        return
-
-    # Filtrera bort sidor som redan är rättade (llm_corrections-tabellen)
-    bad: dict[str, list[int]] = defaultdict(list)
-    skipped = 0
-    for txt_name, pages in raw.items():
-        stem = txt_name[:-4] if txt_name.endswith('.txt') else txt_name
-        for p in pages:
-            if state_db.llm_corrected(conn, stem, p):
-                skipped += 1
-            else:
-                bad[txt_name].append(p)
-
-    total = sum(len(v) for v in bad.values())
-    if not bad:
-        print(f'Inga nya sidor att rätta ({skipped} redan rättade).')
-        return
-
-    print(f'Rättar {total} sidor i {len(bad)} filer'
-          + (f' ({skipped} redan rättade hoppas över)' if skipped else '')
-          + f' med {provider}/{model} ({max(1, args.jobs)} parallella).')
-    if args.dry_run:
-        print('[dry-run — inga filer skrivs]')
-
-    asyncio.run(_correct_all(bad, txt_dir, provider_cfg, args.dry_run, jobs=args.jobs))
-
-    if not args.dry_run:
-        print('\nKlart. Kör ./quality.sh --per-page för att se förbättringen.')
-        print('Kör ./ingest.sh för att re-indexera ändrade filer.')
+    return run_llm_correct(
+        threshold=args.threshold,
+        provider=args.provider,
+        model=args.model,
+        base_url=args.base_url,
+        api_key=args.api_key,
+        txt=txt_dir,
+        root=root,
+        jobs=args.jobs,
+        dry_run=args.dry_run,
+        test=args.test,
+    )
 
 
 if __name__ == '__main__':
     try:
-        main()
+        sys.exit(main())
     except KeyboardInterrupt:
         # Idempotent: korrigerade sidor skrivs löpande, så ett avbrott är säkert
         # och behöver inget felspår.

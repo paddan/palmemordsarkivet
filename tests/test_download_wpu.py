@@ -8,8 +8,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-import db as state_db
-import download_wpu
+import db as state_db  # noqa: E402 — kräver src på sys.path ovan
+import download_wpu  # noqa: E402 — kräver src på sys.path ovan
 
 
 def test_display_out_dir_allows_absolute_outside_root() -> None:

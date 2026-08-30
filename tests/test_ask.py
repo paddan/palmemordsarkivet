@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import numpy as np
-
 from ask import _hit_key, format_context, search_hybrid
 
 
@@ -12,11 +11,11 @@ class _FakeQuery:
         self._rows = rows
         self.selected: list[str] | None = None
 
-    def limit(self, n: int) -> "_FakeQuery":
+    def limit(self, n: int) -> _FakeQuery:
         self._rows = self._rows[:n]
         return self
 
-    def select(self, cols) -> "_FakeQuery":
+    def select(self, cols) -> _FakeQuery:
         self.selected = list(cols)
         return self
 

@@ -119,8 +119,9 @@ def test_pdf_patch_preserves_original_when_text_line_cannot_be_inserted(tiny_pdf
     original = tiny_pdf.read_bytes()
     lines = {1: [{"text": "kan inte infogas", "bbox": [10, 10, 11, 11]}]}
 
-    with patch.object(pymupdf.Page, "insert_textbox", return_value=-1):
-        with pytest.raises(RuntimeError, match="kunde inte infoga"):
-            update_pdf_text_layer(tiny_pdf, tiny_pdf, lines, dpi=72)
+    with patch.object(pymupdf.Page, "insert_textbox", return_value=-1), pytest.raises(
+        RuntimeError, match="kunde inte infoga"
+    ):
+        update_pdf_text_layer(tiny_pdf, tiny_pdf, lines, dpi=72)
 
     assert tiny_pdf.read_bytes() == original

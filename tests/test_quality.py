@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from quality import score_text
 
-
 GOOD_TEXT = (
     "Detta är en helt vanlig svensk text som ska få en hög poäng. "
     "Den innehåller meningar med rimliga ord, kommatecken och punkter. "

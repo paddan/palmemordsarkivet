@@ -2,12 +2,16 @@
 from __future__ import annotations
 
 import sys
-from pathlib import Path
+from unittest.mock import MagicMock, patch
 
-ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT / "src"))
-
-from graph.load_neo4j import build_rows, normalize_name
+from graph import load_neo4j
+from graph.load_neo4j import (
+    build_rows,
+    build_surname_map,
+    display_name,
+    normalize_name,
+    write_mentions,
+)
 
 
 def test_normalize_name_collapses_case_and_whitespace() -> None:
@@ -40,9 +44,6 @@ def test_build_rows_mentions_and_relations() -> None:
 
 
 def test_write_batches_groups_by_label() -> None:
-    from unittest.mock import MagicMock
-    from graph.load_neo4j import write_mentions
-
     session = MagicMock()
     mentions = [
         {"stem": "a", "nr": "1", "titel": "t", "sida": 1,
@@ -66,35 +67,29 @@ def test_write_batches_groups_by_label() -> None:
 # --- namnkanonisering (entity resolution light) ----------------------------
 
 def test_normalize_name_inverts_surname_first() -> None:
-    from graph.load_neo4j import normalize_name
     assert normalize_name("Andersson, Jan") == "jan andersson"
     assert normalize_name("Nieminen, Yvonne Anita") == "yvonne anita nieminen"
 
 
 def test_normalize_name_keeps_address_with_digits() -> None:
-    from graph.load_neo4j import normalize_name
     # Siffror → trolig adress, invertera inte
     assert normalize_name("Sveavägen 44, Stockholm") == "sveavägen 44, stockholm"
 
 
 def test_normalize_name_keeps_multi_comma() -> None:
-    from graph.load_neo4j import normalize_name
     assert normalize_name("a, b, c") == "a, b, c"
 
 
 def test_normalize_name_plain_unchanged() -> None:
-    from graph.load_neo4j import normalize_name
     assert normalize_name("  Stig   ENGSTRÖM ") == "stig engström"
 
 
 def test_display_name_inverts_but_keeps_case() -> None:
-    from graph.load_neo4j import display_name
     assert display_name("Nieminen, Yvonne Anita") == "Yvonne Anita Nieminen"
     assert display_name("Stig Engström") == "Stig Engström"
 
 
 def test_build_rows_merges_inverted_person_with_relation() -> None:
-    from graph.load_neo4j import build_rows
     payload = {
         "entiteter": [
             {"typ": "person", "namn": "Palme, Olof"},
@@ -118,7 +113,6 @@ def test_build_rows_merges_inverted_person_with_relation() -> None:
 # --- dokument-scopad efternamnsuppslagning ---------------------------------
 
 def test_build_surname_map_unique_only() -> None:
-    from graph.load_neo4j import build_surname_map
     entries = [
         {"pdf_stem": "A", "page_num": 1, "payload": {"entiteter": [
             {"typ": "person", "namn": "Stig Engström"}], "relationer": []}},
@@ -132,7 +126,6 @@ def test_build_surname_map_unique_only() -> None:
 
 
 def test_build_surname_map_scoped_per_document() -> None:
-    from graph.load_neo4j import build_surname_map
     entries = [
         {"pdf_stem": "A", "page_num": 1, "payload": {"entiteter": [
             {"typ": "person", "namn": "Olof Palme"}], "relationer": []}},
@@ -145,7 +138,6 @@ def test_build_surname_map_scoped_per_document() -> None:
 
 
 def test_build_rows_resolves_bare_surname() -> None:
-    from graph.load_neo4j import build_rows, build_surname_map
     entries = [
         {"pdf_stem": "A", "page_num": 1, "payload": {"entiteter": [
             {"typ": "person", "namn": "Stig Engström"}], "relationer": []}},
@@ -164,7 +156,6 @@ def test_build_rows_resolves_bare_surname() -> None:
 
 
 def test_build_rows_keeps_ambiguous_surname_separate() -> None:
-    from graph.load_neo4j import build_rows, build_surname_map
     payload = {"entiteter": [
         {"typ": "person", "namn": "Olof Palme"},
         {"typ": "person", "namn": "Lisbeth Palme"},
@@ -177,7 +168,67 @@ def test_build_rows_keeps_ambiguous_surname_separate() -> None:
 
 
 def test_build_rows_backward_compatible_without_map() -> None:
-    from graph.load_neo4j import build_rows
     payload = {"entiteter": [{"typ": "person", "namn": "Engström"}], "relationer": []}
     mentions, _ = build_rows("A", 1, payload)   # inget surname_map → oförändrat
     assert mentions[0]["norm"] == "engström"
+
+
+def test_run_load_graph_reads_password_file(tmp_path, monkeypatch) -> None:
+    """När NEO4J_PASSWORD saknas i miljön läses lösenordet från neo4j/.password."""
+    monkeypatch.setattr(load_neo4j, "ROOT", tmp_path)
+    (tmp_path / "neo4j").mkdir()
+    (tmp_path / "neo4j" / ".password").write_text("hemligt-lösenord\n", encoding="utf-8")
+    monkeypatch.delenv("NEO4J_PASSWORD", raising=False)
+
+    captured: dict = {}
+
+    class FakeSession:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args) -> bool:
+            return False
+
+        def run(self, *args, **kwargs):
+            return None
+
+    class FakeDriver:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args) -> bool:
+            return False
+
+        def session(self):
+            return FakeSession()
+
+    class FakeGraphDatabase:
+        @staticmethod
+        def driver(uri, auth):
+            captured["uri"] = uri
+            captured["auth"] = auth
+            return FakeDriver()
+
+    class FakeNeo4jModule:
+        GraphDatabase = FakeGraphDatabase
+
+    class FakeCtx:
+        def log(self, *args, **kwargs) -> None:
+            pass
+
+        def check_cancelled(self) -> None:
+            pass
+
+    fake_state_db = MagicMock()
+    fake_state_db.connect.return_value = MagicMock()
+    fake_state_db.iter_doc_entities.return_value = []
+
+    with patch.object(load_neo4j, "state_db", fake_state_db), \
+         patch.object(load_neo4j, "_ctx", return_value=FakeCtx()), \
+         patch.dict(sys.modules, {"neo4j": FakeNeo4jModule}):
+        rc = load_neo4j.run_load_graph(
+            uri="bolt://localhost:7687", user="neo4j", batch=10)
+
+    assert rc == 0
+    assert captured["uri"] == "bolt://localhost:7687"
+    assert captured["auth"] == ("neo4j", "hemligt-lösenord")
