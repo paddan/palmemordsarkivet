@@ -99,11 +99,20 @@ def load() -> dict:
 
 
 def load_profile(name: str | None = None) -> dict:
-    """Returnera en namngiven profil, eller default-profilen om ``name`` är None."""
+    """Returnera namngiven profil eller default-profilen när ``name`` saknas.
+
+    Ett explicit profilnamn måste finnas. Att annars tyst återgå till Claude
+    skulle kunna skicka ett jobb till fel LLM och fel kostnadsmodell.
+    """
     all_cfg = load_all()
     name = name or all_cfg["default"]
-    profile: dict = all_cfg["profiles"].get(name, dict(_DEFAULTS))
-    return profile
+    profiles: dict[str, dict] = all_cfg["profiles"]
+    if name not in profiles:
+        available = ", ".join(repr(profile_name) for profile_name in profiles)
+        raise ValueError(
+            f"Okänd LLM-konfiguration {name!r}. Tillgängliga: {available}."
+        )
+    return profiles[name]
 
 
 def save(cfg: dict) -> None:

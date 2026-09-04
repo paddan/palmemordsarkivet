@@ -306,7 +306,10 @@ def run_llm_correct(
     ctx = _ctx(context)
     txt_dir = txt
 
-    saved_cfg = _llm_config.load_profile(profile) if profile else _llm_config.load()
+    try:
+        saved_cfg = _llm_config.load_profile(profile) if profile else _llm_config.load()
+    except ValueError as exc:
+        raise OperationFailed(str(exc)) from exc
     # Ett explicit provider-byte ogiltigförklarar sparad modell (annars kan t.ex.
     # --provider openai ärva en claude-modell) — samma semantik som syskonen
     # extract_entities/extract_map_observations.

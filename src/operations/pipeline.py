@@ -25,6 +25,7 @@ class PipelineOptions:
     skip_wpu: bool = False
     skip_redo: bool = False
     with_llm: bool = False
+    profile: str = ""
     jobs: int = 4
     test_limit: int = 0
 
@@ -57,6 +58,14 @@ def run_pipeline(
     """Kör hela pipelinen. Returnerar exitkod."""
     ctx = ensure_terminal_context(context)
     deps = deps or PipelineDependencies()
+
+    if options.with_llm and options.profile:
+        import config as llm_config
+
+        try:
+            llm_config.load_profile(options.profile)
+        except ValueError as exc:
+            raise OperationFailed(str(exc)) from exc
 
     import download
     import download_wpu
@@ -101,7 +110,7 @@ def run_pipeline(
         _require("llm-correct", run_llm(
             threshold=50.0, provider="", model="", base_url="", api_key="",
             txt=options.txt, root=options.root, jobs=options.jobs,
-            dry_run=False, test=None, context=ctx,
+            dry_run=False, test=None, profile=options.profile, context=ctx,
         ))
         _require("quality", run_quality(top=None, limit=None, per_page=True, text_dir=options.txt,
                                         files_dir=options.inp, rebuild=False, files_from=None, context=ctx))

@@ -15,7 +15,8 @@ kunskapsgraf och utforskas visuellt.
 
 ## Web-gränssnitt
 
-Efter nedladdning och OCR-scanning finns ett webgränssnitt (`.venv/bin/python scripts/web.py`) med
+Efter nedladdning och OCR-scanning finns ett webgränssnitt (`./web.sh`, en
+genväg till `.venv/bin/python scripts/web.py`) med
 flikar: **Utredning** för frågor (med facett- och OCR-tolerant fuzzy-filter),
 **Utredningspärm** för sparade spår, bokmärken och anteckningar, **Graf** för
 relationer, **Maskeringar** för att utforska svärtad text och **Jämförelse**
@@ -47,9 +48,11 @@ När utredningsläget är aktivt döljs RAG-specifika sidofältsval som reranker
 top-K/top-N, facetter och fuzzy-sökning; kvar finns MCP-relevanta val som ny
 konversation och kunskapsgraf.
 
-LLM-profiler skapas i **Admin → Inställningar → LLM-inställningar** och väljs i
-Utredningssidans sidofält. Profiler sparar modell, endpoint och namnet på en
-miljövariabel för API-nyckeln — aldrig själva hemligheten.
+LLM-profiler skapas och redigeras i ett sammanhållet formulär under **Admin →
+Inställningar → LLM-inställningar** och väljs i Utredningssidans sidofält. I
+samma panel anger du profilnamn, standardstatus, tjänst och modell; endpoint och
+miljövariabel ligger under avancerade inställningar. Själva API-nyckeln sparas
+aldrig.
 
 ![Web-gränssnitt — MCP-läge](utredningsläge.png)
 

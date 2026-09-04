@@ -40,8 +40,8 @@ def test_pyproject_includes_karta_module() -> None:
     assert "karta" in py_modules
 
 
-def test_project_root_has_no_shell_wrappers() -> None:
-    """Python-entrypoints ska vara den enda manuella kommandoytan."""
+def test_project_root_only_has_web_shell_shortcut() -> None:
+    """Produktionsflöden ska sakna shell-wrappers utöver webgenvägen."""
     root = Path(__file__).resolve().parents[1]
 
-    assert list(root.glob("*.sh")) == []
+    assert sorted(path.name for path in root.glob("*.sh")) == ["web.sh"]

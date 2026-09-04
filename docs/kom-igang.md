@@ -42,8 +42,10 @@ export OPENAI_API_KEY=sk-...
 export DEEPSEEK_API_KEY=sk-...
 ```
 
-OAuth-token genereras med `claude setup-token` (engångsåtgärd). Webgränssnittet
-sparar valt backend i `generated/llm_config.json` mellan sessioner — se
+OAuth-token genereras med `claude setup-token` (engångsåtgärd). I **Admin →
+Inställningar → LLM-inställningar** skapar du en sammanhållen konfiguration med
+namn, tjänst och modell och kan markera den som standard. Webgränssnittet sparar
+konfigurationerna i `generated/llm_config.json` mellan sessioner — se
 [LLM-konfiguration](teknisk-referens.md#llm-konfiguration-generatedllm_configjson).
 
 ## 3. Kör pipelinen
@@ -52,8 +54,13 @@ Allt i ett kommando:
 
 ```bash
 .venv/bin/python scripts/run_pipeline.py      # kör alla steg i ett (download → OCR → ingest)
+.venv/bin/python scripts/run_pipeline.py --with-llm --profile "Deepseek v4 flash"  # inkluderar LLM-korrigering med vald profil
 .venv/bin/python scripts/web.py               # Starta webgränssnittet och ställ frågor
 ```
+
+`--profile` måste vara namnet på en sparad LLM-konfiguration. Om namnet inte
+finns avbryts körningen innan LLM-korrigeringen startar, i stället för att byta
+till standardprofilen.
 
 Eller steg för steg:
 
@@ -72,8 +79,11 @@ hittar nya filer, så väntande arbete från en tidigare avbruten körning slutf
 ## 4. Ställ frågor
 
 ```bash
-.venv/bin/python scripts/web.py   # Starta Streamlit-webgränssnittet
+./web.sh                          # Starta Streamlit-webgränssnittet
 ```
+
+`./web.sh` är en tunn genväg till `.venv/bin/python scripts/web.py` och
+vidarebefordrar eventuella Streamlit-flaggor.
 
 Fliken **Utredning** har två lägen: **RAG** (snabbt, deterministiskt — bra för
 faktafrågor) och **MCP/utredningsläge** (autonomt, bättre täckning på komplexa
@@ -150,9 +160,13 @@ podman machine init --memory 4096
 `scripts/extract_entities.py` skickar OCR-texten sida för sida till en LLM för att hitta
 personer, platser, organisationer och relationer. Det kan därför ta tid och
 kosta API-tokens. Skriptet använder normalt samma standardprofil som
-webgränssnittet och `scripts/llm_correct.py`. Namngivna profiler hanteras i
-**Admin → Inställningar → LLM-inställningar**; där sparas endast namnet på
-eventuell API-nyckelvariabel, aldrig själva nyckeln.
+webgränssnittet och `scripts/llm_correct.py`. Namngivna profiler hanteras i ett
+gemensamt formulär under **Admin → Inställningar → LLM-inställningar**. Välj en
+profil eller skapa en ny, redigera namn, standardstatus, tjänst och modell och
+spara allt tillsammans. Endpoint och namnet på eventuell API-nyckelvariabel
+ligger under **Avancerade inställningar**; själva nyckeln sparas aldrig.
+Om en känd molntjänsts miljövariabelfält lämnas tomt används tjänstens
+standardvariabel, till exempel `DEEPSEEK_API_KEY` för DeepSeek.
 
 Kör `.venv/bin/python scripts/llm_config.py` utan argument i terminalen för en **interaktiv meny** där
 du väljer backend och modell ur samma lista som Admin (Claude / OpenAI /

@@ -418,6 +418,32 @@ def _run_llm_correct_capturing_provider_cfg(monkeypatch, tmp_path, saved, **over
     return captured
 
 
+def test_llm_correction_rejects_unknown_profile_before_work_starts(tmp_path, monkeypatch):
+    """Ett felskrivet profilnamn får aldrig tyst bli Claude-default."""
+    config_file = tmp_path / "llm_config.json"
+    config_file.write_text(
+        '{"profiles": {"Standard": {}}, "default": "Standard"}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(llm_correct._llm_config, "CONFIG_FILE", config_file)
+    monkeypatch.setenv("STATE_DB", str(tmp_path / "state.db"))
+
+    with pytest.raises(OperationFailed, match="Okänd LLM-konfiguration 'Saknas'.*"):
+        llm_correct.run_llm_correct(
+            threshold=50.0,
+            provider="",
+            model="",
+            base_url="",
+            api_key="",
+            txt=tmp_path / "text",
+            root=tmp_path,
+            jobs=1,
+            dry_run=True,
+            test=None,
+            profile="Saknas",
+        )
+
+
 def test_provider_override_without_model_resets_to_provider_default(
     tmp_path, monkeypatch
 ):

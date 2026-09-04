@@ -50,6 +50,21 @@ def test_python_replacements_exist() -> None:
         assert path.exists(), f"{py} saknas"
 
 
+def test_web_shell_shortcut_forwards_to_python_entrypoint() -> None:
+    path = PROJECT_ROOT / "web.sh"
+
+    result = subprocess.run(
+        [str(path), "--help"],
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "Användning: scripts/web.py [-- streamlit-flaggor...]\n"
+
+
 def test_representative_entrypoints_answer_help() -> None:
     for name in ("run_pipeline.py", "ocr.py", "ingest.py", "quality.py", "download.py"):
         path = PROJECT_ROOT / "scripts" / name

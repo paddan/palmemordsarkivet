@@ -64,7 +64,14 @@ def resolve_nr_all(nr: str, mapping: dict[str, Path]) -> list[Path]:
     # Dedup på sökväg men behåll stabil ordning för deterministisk rendering.
     seen: dict[str, Path] = {}
     for key, path in mapping.items():
-        if key.startswith(nr) and not key[len(nr):len(nr) + 1].isalnum():
+        # WPU-stammar med ett Pol-dokument-ID kan ha titeln direkt efter ID:t
+        # ("...HRdomenChrister..."), utan avskiljare. För sådana referenser
+        # är ett Pol-prefix med understreck tillräckligt specifikt. Vanliga
+        # nummer behåller spärren mot att "28" felmatchar "281".
+        joined_wpu_title = nr.startswith("Pol-") and "_" in nr
+        if key.startswith(nr) and (
+            joined_wpu_title or not key[len(nr):len(nr) + 1].isalnum()
+        ):
             seen.setdefault(str(path), path)
     return sorted(seen.values(), key=lambda p: p.stem)
 

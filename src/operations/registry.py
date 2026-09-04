@@ -66,6 +66,7 @@ def _register_builtin_operations() -> None:
             _p("skip_wpu", "--skip-wpu", "bool", False, "Hoppa över wpu.nu-nedladdning"),
             _p("skip_redo", "--skip-redo", "bool", False, "Hoppa över Surya-steget"),
             _p("with_llm", "--with-llm", "bool", False, "Kör LLM-korrigering"),
+            _p("profile", "--profile", "str", "", "LLM-konfiguration att använda"),
             _p("jobs", "--jobs", "int", int(os.environ.get("JOBS", "4")), "Parallella processer"),
             _p("test_limit", "--test", "int", 0, "Testläge: N filer"),
         ),

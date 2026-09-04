@@ -13,7 +13,7 @@ import pytest
 
 from operations.cli import parse_operation_args, run_operation_cli
 from operations.models import OperationDefinition, ParameterDefinition
-from operations.registry import OperationRegistry
+from operations.registry import OperationRegistry, get_registry
 
 
 def _definition(*, operation_id: str = "sample", admin_visible: bool = True) -> OperationDefinition:
@@ -48,6 +48,12 @@ def test_same_definition_drives_cli_and_admin_metadata() -> None:
         "mode": "files",
     }
     assert definition.parameters[0].default == 4
+
+
+def test_full_pipeline_declares_optional_llm_profile() -> None:
+    definition = get_registry().get("run-pipeline")
+
+    assert next(parameter for parameter in definition.parameters if parameter.name == "profile").default == ""
 
 
 def test_secret_parameter_is_rejected_for_background_serialization() -> None:

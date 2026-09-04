@@ -5,6 +5,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
@@ -67,6 +69,22 @@ def test_profile_cache_key_changes_with_selected_profile() -> None:
     profile_b = {"backend_name": "Claude", "model": "claude-b", "base_url": ""}
 
     assert config.profile_cache_key("A", profile_a) != config.profile_cache_key("B", profile_b)
+
+
+def test_load_profile_rejects_unknown_explicit_name(tmp_path, monkeypatch) -> None:
+    _patch_cfg(tmp_path, monkeypatch)
+    config.CONFIG_FILE.write_text(
+        json.dumps(
+            {
+                "profiles": {"Standard": {}, "Snabb": {}},
+                "default": "Standard",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Okänd LLM-konfiguration 'Saknas'.*"):
+        config.load_profile("Saknas")
 
 
 def _patch_cfg(tmp_path, monkeypatch):
@@ -147,13 +165,13 @@ def test_menu_selects_backend_and_model(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(backends, "fetch_models", lambda base_url, api_key: [])
     names = list(backends.BACKENDS)
     deepseek_idx = names.index("DeepSeek") + 1
-    # Backend = DeepSeek, modell = nr 2 (deepseek-reasoner ur statisk fallback).
+    # Backend = DeepSeek, modell = nr 2 (deepseek-v4-pro ur statisk fallback).
     read = _reader([str(deepseek_idx), "2"])
     assert llm_config_cli.run_menu(read=read, out=lambda *_: None) == 0
     stored = _stored_profile(tmp_path)
     assert stored["backend_name"] == "DeepSeek"
     assert stored["provider"] == "openai"
-    assert stored["model"] == "deepseek-reasoner"
+    assert stored["model"] == "deepseek-v4-pro"
     assert stored["base_url"] == "https://api.deepseek.com/v1"
 
 

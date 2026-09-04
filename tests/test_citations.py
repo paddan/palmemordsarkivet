@@ -167,6 +167,20 @@ def test_linkify_pol_reference_without_nr_prefix(tmp_path: Path) -> None:
     assert "Pol-1996-12-19, sida 40" in out
 
 
+def test_linkify_wpu_reference_with_joined_title_suffix(tmp_path: Path) -> None:
+    """WPU:s dokument-ID kan följas direkt av titeln utan avskiljare."""
+    mapping = _mapping(tmp_path, [
+        "Pol-YYYY-MM-DD_B1952-89_HRdomenChristerPetterssonPalmemordet",
+    ])
+
+    out = linkify_citations(
+        "Se [Nr Pol-YYYY-MM-DD_B1952-89_HRdomen, sida 28].", mapping
+    )
+
+    assert out.count("<a href=") == 1
+    assert "Pol-YYYY-MM-DD_B1952-89_HRdomen, sida 28" in out
+
+
 def test_linkify_multiple_references_inside_same_brackets(tmp_path: Path) -> None:
     mapping = _mapping(tmp_path, [
         "282.1 — Förhör med advokat Pelle Svensson",

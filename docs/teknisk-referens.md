@@ -232,7 +232,8 @@ Kostnad: Claude Haiku är billig (~$0,25/M tokens). En typisk OCR-sida
 
 Kör sedan `.venv/bin/python scripts/quality.py --per-page` och därefter `.venv/bin/python scripts/ingest.py` för att uppdatera
 per-sida-poängen och re-indexera ändrade filer. `.venv/bin/python scripts/run_pipeline.py --with-llm`
-gör båda stegen automatiskt.
+gör båda stegen automatiskt. Med `--profile NAMN` väljer du vilken namngiven
+LLM-konfiguration korrigeringssteget ska använda; utan flaggan används standardprofilen.
 
 ### 3. Indexera i vektor-DB
 
@@ -336,8 +337,9 @@ profil som ska användas för frågan.
   kräver `CLAUDE_CODE_OAUTH_TOKEN` eller `ANTHROPIC_API_KEY`. Stödjer MCP-läge.
   (andra Claude-modeller kan anges i en profil.)
 - **OpenAI GPT-5 / GPT-4o** — kräver `OPENAI_API_KEY`.
-- **DeepSeek V4 / Reasoner** — kräver `DEEPSEEK_API_KEY`
-  (`deepseek-chat` är V4-routern, `deepseek-reasoner` är thinking-modellen).
+- **DeepSeek V4** — kräver `DEEPSEEK_API_KEY`. Aktuella API-ID:n hämtas
+  från DeepSeeks `/v1/models`; reservlistan innehåller `deepseek-v4-flash`,
+  `deepseek-v4-pro` och `deepseek-v4-flash-vision-exp`.
 - **OpenAI-kompatibel (custom)** — pekar på vilken `/v1`-endpoint som helst
   (Ollama, LM Studio, llama.cpp, vLLM, fjärr-OpenAI-providers...). URL,
   modellnamn och namnet på API-nyckelns miljövariabel konfigureras i Admin.
@@ -631,11 +633,23 @@ regler: töm grafen (`MATCH (n) DETACH DELETE n` i Neo4j Browser) och kör
 
 ## LLM-konfiguration (`generated/llm_config.json`)
 
-Admin sparar namngivna profiler i `generated/llm_config.json`; Utredning väljer
-en profil per session. Filen skapas automatiskt — ta bort den för att återgå
-till standardprofilen (Claude Opus 4.8). API-nycklar läses alltid från
-miljövariabler och lagras aldrig i filen. För en egen OpenAI-kompatibel endpoint
-anger profilen endast miljövariabelns namn i `api_key_env`.
+Admin visar varje namngiven profil som en sammanhållen konfiguration: namn,
+standardstatus, tjänst och modell redigeras i samma panel, medan endpoint och
+miljövariabel ligger under **Avancerade inställningar**. Ny profil skapas först
+när hela formuläret sparas; namnbyte, parameterändringar och standardval skrivs
+tillsammans. Utredning väljer en profil per session.
+
+Ett uttryckligt profilnamn i en operation, exempelvis `--profile NAMN`, måste
+finnas i filen. Ett felstavat namn avbryter operationen före LLM-anropet och
+byter aldrig tyst till standardprofilen. Om `api_key_env` lämnas tomt för en
+känd molnbackend används i stället backendens standardvariabel, som
+`DEEPSEEK_API_KEY` för DeepSeek; lokala backends kan vara nyckelfria.
+
+Profilerna lagras i `generated/llm_config.json`. Filen skapas automatiskt — ta
+bort den för att återgå till standardprofilen (Claude Opus 4.8). API-nycklar
+läses alltid från miljövariabler och lagras aldrig i filen. För en egen
+OpenAI-kompatibel endpoint anger profilen endast miljövariabelns namn i
+`api_key_env`.
 
 ```json
 {
@@ -653,8 +667,8 @@ anger profilen endast miljövariabelns namn i `api_key_env`.
 
 | Fält | Möjliga värden |
 |---|---|
-| `provider` | `claude`, `openai`, `deepseek`, `openai_compatible` |
-| `model` | t.ex. `claude-opus-4-8`, `gpt-4o`, `deepseek-chat`, `deepseek-reasoner` |
+| `provider` | `claude` eller `openai`; DeepSeek, Ollama och egna endpoints använder det OpenAI-kompatibla protokollet |
+| `model` | t.ex. `claude-opus-4-8`, `gpt-4o`, `deepseek-v4-flash`, `deepseek-v4-pro` |
 | `base_url` | Tomt för molntjänster; URL för lokal endpoint (`http://localhost:11434/v1` för Ollama) |
 | `backend_name` | Visningsnamn i gränssnittet (valfritt) |
 | `api_key_env` | Namnet på miljövariabeln som innehåller API-nyckeln; aldrig nyckelvärdet |
@@ -668,8 +682,9 @@ modell väljs ur samma backend-katalog som Admin (Claude / OpenAI / DeepSeek /
 Ollama / OpenAI-kompatibel). För OpenAI-kompatibla providers hämtas modell-listan
 live från `/v1/models` (faller tillbaka på en inbyggd lista om endpoint eller
 nyckel saknas), och konfigurerbara backends frågar efter endpoint-URL och en
-valfri API-nyckel. Körs skriptet utan terminal (pipe/skript) skrivs i stället den
-aktuella konfigurationen ut.
+valfri API-nyckel. Admin använder samma katalog och uppdaterar sin lista högst
+var femte minut, utan att lägga API-nyckelvärdet i cache-nyckeln. Körs skriptet
+utan terminal (pipe/skript) skrivs i stället den aktuella konfigurationen ut.
 
 ```bash
 .venv/bin/python scripts/llm_config.py                                              # interaktiv meny (terminal); annars visa konfig
@@ -763,7 +778,7 @@ per-dokumentresultat behålls; ett avbrutet jobb markeras aldrig `succeeded`.
 |---|---|
 | `scripts/jobs.py` | Starta/övervaka/avbryta bakgrundsjobb (`start`, `status`, `list`, `log`, `log --follow`, `cancel`) — delar registry med adminsidan |
 | `scripts/install.py` | Installera pipeline/webgränssnitt via Homebrew och pip (Python-paket, tessdata, hunspell) |
-| `scripts/run_pipeline.py` | Kör hela pipelinen i ett kommando: download → OCR → ingest (flaggor: `--skip-wpu`, `--skip-redo`, `--with-llm`, `--jobs N`, `--test N`) |
+| `scripts/run_pipeline.py` | Kör hela pipelinen i ett kommando: download → OCR → ingest (flaggor: `--skip-wpu`, `--skip-redo`, `--with-llm`, `--profile NAMN`, `--jobs N`, `--test N`) |
 | `scripts/download.py` → `src/download.py` | Hämta PDF:er från Drive |
 | `scripts/download_wpu.py` → `src/download_wpu.py` | Ladda ner alla PDF:er från wpu.nu → `downloaded/wpu_files/` |
 | `scripts/merge_wpu.py` → `src/merge_wpu.py` | Jämför wpu- och palme-text per fil, behåll bäst kvalitet |
@@ -785,7 +800,7 @@ per-dokumentresultat behålls; ett avbrutet jobb markeras aldrig `succeeded`.
 | `src/config.py` | Läser/skriver `generated/llm_config.json` (delas av Utredning-sidan och llm_correct) |
 | `src/backends.py` | Delad backend-katalog (Claude/OpenAI/DeepSeek/Ollama/custom) + `fetch_models`/`available_models` — delas av Utredning-sidan och `scripts/llm_config.py` |
 | `scripts/llm_config.py` → `src/llm_config_cli.py` | Visa/ändra `generated/llm_config.json` utan webgränssnittet (interaktiv meny i terminal) |
-| `src/citations.py` | Slår upp `[Nr X, sida Y]` och WPU-prefix som `[Pol-..., sida Y]` mot PDF:er och renderar citatlänkar |
+| `src/citations.py` | Slår upp `[Nr X, sida Y]` och WPU-prefix som `[Pol-..., sida Y]` mot PDF:er och renderar citatlänkar; hanterar även WPU-stammar där dokument-ID och titel sitter ihop utan avskiljare |
 | `src/Utredning.py` | Streamlit-flik för frågor (RAG + MCP-toggle), svarsgraf, sparknapp, källbokmärken samt facett-/fuzzy-sökfilter |
 | `src/casebook_ui.py` | Delade Streamlit-komponenter för utredningspärm, källbokmärken och anteckningar |
 | `src/pages/2_Utredningspärm.py` | Streamlit-sida för sparade fråga/svar-spår, bokmärkta källor och anteckningar |
@@ -804,6 +819,7 @@ per-dokumentresultat behålls; ett avbrutet jobb markeras aldrig `succeeded`.
 | `src/pages/3_Graf.py` | Streamlit-grafsida: sök entitet → interaktivt nätverk, fäll ut noder |
 | `neo4j/docker-compose.yml` | Neo4j 5 för kunskapsgrafen med Docker (Browser på :7474) |
 | `scripts/web.py` | Startar Streamlit-servern |
+| `web.sh` | Tunn genväg till `scripts/web.py`; vidarebefordrar alla argument |
 | `src/operations/` | Delat operationslager: modeller, registry, CLI, `job_service`/`worker`, OCR/redactions/pipeline/neo4j-orkestrering |
 | `src/admin_ui.py` + `src/pages/8_Admin.py` | Lokal Streamlit-adminsida: bakgrundsjobb, operationer och LLM-inställningar |
 | `src/db.py` | SQLite-state: versionsstyrt schema + CRUD + delta-queries, inklusive `admin_jobs`, utredningspärm, källbokmärken och anteckningar |

@@ -26,6 +26,16 @@ def test_available_models_falls_back_to_static_when_fetch_empty(monkeypatch) -> 
     assert models == backends.BACKENDS["DeepSeek"]["models"]
 
 
+def test_deepseek_static_fallback_uses_current_provider_model_ids() -> None:
+    """Regression: reservlistan ska inte erbjuda DeepSeeks utfasade alias."""
+    assert backends.BACKENDS["DeepSeek"]["model"] == "deepseek-v4-flash"
+    assert backends.BACKENDS["DeepSeek"]["models"] == [
+        "deepseek-v4-flash",
+        "deepseek-v4-pro",
+        "deepseek-v4-flash-vision-exp",
+    ]
+
+
 def test_available_models_uses_fetched_and_filters_skip(monkeypatch) -> None:
     fetched = ["gpt-4o", "text-embedding-3-small", "whisper-1", "gpt-4o-mini"]
     monkeypatch.setattr(backends, "fetch_models", lambda base_url, api_key: fetched)

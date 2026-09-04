@@ -103,7 +103,9 @@ Repo-data:
 
 ## Commands
 
-Alla shell-script är ersatta av Python-entrypoints i `scripts/`. Kör med `.venv/bin/python`:
+Alla produktionsscript är ersatta av Python-entrypoints i `scripts/`. `web.sh`
+är det enda undantaget och är en tunn genväg till `scripts/web.py`.
+Kör med `.venv/bin/python`:
 
 ```bash
 # Tests
@@ -118,6 +120,7 @@ Alla shell-script är ersatta av Python-entrypoints i `scripts/`. Kör med `.ven
 # Workflow
 .venv/bin/python scripts/run_pipeline.py                   # Hela pipelinen
 .venv/bin/python scripts/run_pipeline.py --test 5          # Testläge: 5 filer
+.venv/bin/python scripts/run_pipeline.py --with-llm --profile "Deepseek v4 flash"
 .venv/bin/python scripts/download.py                       # Hämta PDF:er (Google Sheet)
 .venv/bin/python scripts/ocr.py                            # Full OCR-pipeline
 .venv/bin/python scripts/ocr.py --skip-redo                # Ingen Surya
@@ -129,6 +132,7 @@ Alla shell-script är ersatta av Python-entrypoints i `scripts/`. Kör med `.ven
 .venv/bin/python scripts/build_user_words.py
 .venv/bin/python scripts/ingest.py --rebuild
 .venv/bin/python scripts/web.py                            # Starta Streamlit
+# eller: ./web.sh
 
 # Bakgrundsjobb (adminsidan och CLI delar samma registry)
 .venv/bin/python scripts/jobs.py start run-pipeline --jobs 4
@@ -167,7 +171,19 @@ Env-variabler: `CLAUDE_CODE_OAUTH_TOKEN` (Pro/Max, räknas mot prenumeration) el
 
 **MCP-läge (Utredning.py)**: Konversationskontinuitet uppnås genom att fånga `session_id` från `ResultMessage` och skicka tillbaka det som `ClaudeAgentOptions(resume=...)` på nästa fråga. "Ny konversation" nollställer `chat_history` + `mcp_session_id`. När `mcp_mode` är aktivt ska sidofältet dölja RAG-specifika kontroller (reranker, top-K/top-N, facetter, fuzzy) men behålla kunskapsgrafens toggle eftersom grafen kan byggas för MCP-svar.
 
-**PDF-opener för citat/källor**: inline-citat och källkort använder `casebook_ui.render_pdf_opener` + `citations.pdf_anchor`. När sidnummer finns ska länken bära `page=N`; openern validerar både PDF-token och sida, bygger `file://...#page=N` och öppnar PDF:en med `webbrowser.open(..., new=2)` så den hamnar i en ny webbläsarflik i stället för macOS Preview. Utredning, Jämförelse, Utredningspärm och grafens dokumentöppningar ska använda samma opener.
+**LLM-konfiguration i Admin**: `render_llm_settings` visar profilval och profilens
+namn, standardstatus, tjänst, modell, endpoint och miljövariabel som en
+sammanhållen konfiguration. En ny profil får inte läggas till i session state
+innan hela formuläret sparas; namnbyte, payload och standardprofil appliceras
+tillsammans via den rena hjälparen `apply_llm_profile_form`. API-nyckelvärden
+får aldrig sparas. OpenAI-kompatibla modellistor hämtas från respektive
+`/v1/models` med fem minuters cache; den lokala katalogen är endast reserv när
+endpointen inte kan nås. Ett uttryckligt profilnamn måste finnas; okända namn
+ska avbryta med `OperationFailed` före LLM-anrop i stället för att falla tillbaka
+till Claude. En tom `api_key_env` för en känd molnbackend använder dess
+katalogdefinierade standardvariabel.
+
+**PDF-opener för citat/källor**: inline-citat och källkort använder `casebook_ui.render_pdf_opener` + `citations.pdf_anchor`. När sidnummer finns ska länken bära `page=N`; openern validerar både PDF-token och sida, bygger `file://...#page=N` och öppnar PDF:en med `webbrowser.open(..., new=2)` så den hamnar i en ny webbläsarflik i stället för macOS Preview. WPU-uppslag måste även acceptera stammar där ett `Pol-..._...`-dokument-ID följs direkt av titeltext. Utredning, Jämförelse, Utredningspärm och grafens dokumentöppningar ska använda samma opener.
 
 **Kunskapsgraf byggs lazy (Utredning.py)**: `_render_answer_graph` tar svaret, inte färdiga centers. Den dyra entitetsextraktionen (`_compute_answer_centers` → vald backend i `generated/llm_config.json`) och Neo4j-frågorna körs **först när användaren öppnar graf-toggeln** — inte automatiskt efter varje svar. DeepSeek/OpenAI använder vald modell; Claude använder Haiku för den lilla extraktionsuppgiften. Resultatet cachas per svar i session state och returneras så utredningspärmen kan spara det.
 

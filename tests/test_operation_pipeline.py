@@ -107,6 +107,86 @@ def test_pipeline_skips_wpu_and_llm_steps_when_disabled() -> None:
     assert calls == ["download", "ocr", "ingest"]
 
 
+def test_pipeline_passes_selected_llm_profile_to_correction(tmp_path, monkeypatch) -> None:
+    import config
+
+    config_file = tmp_path / "llm_config.json"
+    config_file.write_text(
+        '{"profiles": {"Deepseek v4 flash": {}}, "default": "Deepseek v4 flash"}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(config, "CONFIG_FILE", config_file)
+    received: dict[str, object] = {}
+
+    def ok(**_kw) -> int:
+        return 0
+
+    def llm_correct(**kwargs) -> int:
+        received.update(kwargs)
+        return 0
+
+    options = PipelineOptions(
+        root=Path("/root"), inp=Path("/in"), txt=Path("/txt"),
+        skip_wpu=True, with_llm=True, profile="Deepseek v4 flash",
+    )
+    rc = run_pipeline(
+        options,
+        _context(),
+        deps=PipelineDependencies(
+            download=ok, ocr=ok, llm_correct=llm_correct, quality=ok, ingest=ok,
+        ),
+    )
+
+    assert rc == 0
+    assert received["profile"] == "Deepseek v4 flash"
+
+
+def test_pipeline_rejects_unknown_llm_profile_before_starting_steps(
+    tmp_path, monkeypatch
+) -> None:
+    """Ett felskrivet profilnamn får inte starta en kostsam pipeline."""
+    import config
+
+    config_file = tmp_path / "llm_config.json"
+    config_file.write_text(
+        '{"profiles": {"Standard": {}}, "default": "Standard"}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(config, "CONFIG_FILE", config_file)
+    calls: list[str] = []
+
+    def record(name: str):
+        def run(**_kwargs) -> int:
+            calls.append(name)
+            return 0
+
+        return run
+
+    options = PipelineOptions(
+        root=tmp_path,
+        inp=tmp_path / "files",
+        txt=tmp_path / "text",
+        skip_wpu=True,
+        with_llm=True,
+        profile="Saknas",
+    )
+
+    with pytest.raises(OperationFailed, match="Okänd LLM-konfiguration 'Saknas'.*"):
+        run_pipeline(
+            options,
+            _context(),
+            deps=PipelineDependencies(
+                download=record("download"),
+                ocr=record("ocr"),
+                llm_correct=record("llm-correct"),
+                quality=record("quality"),
+                ingest=record("ingest"),
+            ),
+        )
+
+    assert calls == []
+
+
 def test_pipeline_raises_operation_failed_when_download_fails() -> None:
     with pytest.raises(OperationFailed, match="Steget download misslyckades"):
         run_pipeline(

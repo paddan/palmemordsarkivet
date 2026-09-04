@@ -38,6 +38,7 @@ from map_extract import (  # noqa: E402
     candidate_payload,
     parse_map_observation_extraction,
 )
+from operations.exceptions import OperationFailed  # noqa: E402
 
 try:
     from openai import AsyncOpenAI
@@ -259,7 +260,10 @@ def run_extract_map_observations(
 ) -> int:
     """Extrahera kartobservationskandidater. Returnerar exitkod."""
     ctx = _ctx(context)
-    base_cfg = _llm_config.load_profile(profile) if profile else _llm_config.load()
+    try:
+        base_cfg = _llm_config.load_profile(profile) if profile else _llm_config.load()
+    except ValueError as exc:
+        raise OperationFailed(str(exc)) from exc
     cfg = resolve_provider_cfg(
         base_cfg,
         provider=provider, model=model, base_url=base_url,

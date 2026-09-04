@@ -33,8 +33,14 @@ BACKENDS: dict[str, dict] = {
     },
     "DeepSeek": {
         "kind": "openai",
-        "model": "deepseek-chat",
-        "models": ["deepseek-chat", "deepseek-reasoner"],
+        # Dessa är de aktuella API-ID:n som DeepSeek publicerar. /v1/models
+        # hämtas när endpointen går att nå; listan är bara reserv för offline.
+        "model": "deepseek-v4-flash",
+        "models": [
+            "deepseek-v4-flash",
+            "deepseek-v4-pro",
+            "deepseek-v4-flash-vision-exp",
+        ],
         "base_url": "https://api.deepseek.com/v1",
         "env": "DEEPSEEK_API_KEY",
     },
@@ -108,8 +114,8 @@ def available_models(backend: dict, api_key: str = "", fetcher=None) -> list[str
     if not backend.get("base_url"):
         return static
     fetched = (fetcher or fetch_models)(backend["base_url"], api_key)
-    fetched = [
+    fetched = sorted(
         m for m in fetched
         if not any(s in m.lower() for s in MODEL_SKIP_SUBSTRINGS)
-    ]
+    )
     return fetched or static
