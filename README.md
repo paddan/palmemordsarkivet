@@ -99,7 +99,12 @@ organisation och utforska dess nätverk av relationer och källdokument som ett
 interaktivt ego-nätverk — dubbelklicka en nod för att fälla ut dess grannskap
 eller öppna ett källdokument. Samma graf kan även visas till ett svar i
 frågeläget, centrerad kring de entiteter svaret handlar om — den byggs först när
-du öppnar grafsektionen, inte automatiskt efter varje svar.
+du öppnar grafsektionen, inte automatiskt efter varje svar. I Graf-sidan kan du
+också återkommande hitta tveksamma noder och relationer, granska dem mot
+källsidan manuellt eller med LLM-förslag och sedan förhandsvisa, uppdatera och
+verifiera Neo4j. I samma vy kan du skapa en global namnregel, till exempel
+`RKA2` → `Rikskriminalen A2`, och se dess träffar innan den används över hela
+den granskade grafen.
 
 ![Web-gränssnitt — Graf](graf.png)
 

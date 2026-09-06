@@ -11,6 +11,7 @@ from graph.load_neo4j import (
     display_name,
     normalize_name,
     write_mentions,
+    write_relations,
 )
 
 
@@ -62,6 +63,18 @@ def test_write_batches_groups_by_label() -> None:
     # Person-batchen innehåller båda person-raderna
     person_call = next(c for c in session.run.call_args_list if ":Person" in c.args[0])
     assert len(person_call.kwargs["rows"]) == 2
+    assert all("graph_owner: 'palmemordsarkivet'" in query for query in queries)
+
+
+def test_relation_writer_marks_imported_edge_owner() -> None:
+    session = MagicMock()
+    write_relations(session, [{
+        "stem": "A", "sida": 1, "typ": "såg",
+        "fran_label": "Person", "fran_norm": "j",
+        "till_label": "Person", "till_norm": "k",
+    }])
+    assert "[r:RELATERAR" in session.run.call_args.args[0]
+    assert "graph_owner: 'palmemordsarkivet'" in session.run.call_args.args[0]
 
 
 # --- namnkanonisering (entity resolution light) ----------------------------
@@ -221,10 +234,13 @@ def test_run_load_graph_reads_password_file(tmp_path, monkeypatch) -> None:
 
     fake_state_db = MagicMock()
     fake_state_db.connect.return_value = MagicMock()
-    fake_state_db.iter_doc_entities.return_value = []
+    fake_state_db.read_graph_review_snapshot.return_value = ([], [])
+    rules = [{"typ": "organisation", "source": "RKA2", "target": "Rikskriminalen A2"}]
+    fake_state_db.list_graph_name_rules.return_value = rules
 
     with patch.object(load_neo4j, "state_db", fake_state_db), \
          patch.object(load_neo4j, "_ctx", return_value=FakeCtx()), \
+         patch("graph.review.build_reviewed_rows", return_value=([], [])) as build, \
          patch.dict(sys.modules, {"neo4j": FakeNeo4jModule}):
         rc = load_neo4j.run_load_graph(
             uri="bolt://localhost:7687", user="neo4j", batch=10)
@@ -232,3 +248,4 @@ def test_run_load_graph_reads_password_file(tmp_path, monkeypatch) -> None:
     assert rc == 0
     assert captured["uri"] == "bolt://localhost:7687"
     assert captured["auth"] == ("neo4j", "hemligt-lösenord")
+    build.assert_called_once_with([], [], rules)

@@ -557,7 +557,60 @@ containern och väntar tills Neo4j svarar:
 .venv/bin/python scripts/load_graph.py        # ladda grafen — lösenordet plockas upp automatiskt
 .venv/bin/python scripts/neo4j.py status      # kör den?
 .venv/bin/python scripts/neo4j.py stop
+
+# Genväg: ./neo4j.sh start, ./neo4j.sh stop eller ./neo4j.sh status
+# Utan argument startar ./neo4j.sh Neo4j.
 ```
+
+### Återkommande grafgranskning
+
+Graf-flikens vy **Granska och uppdatera** är ett guidat flöde med stegen
+**Analysera**, **Granska** och **Uppdatera**. Den hittar bland annat korta
+personnamn, initialer, OCR-skräp, dubbletter och relationer med saknade eller
+tvetydiga ändpunkter. Varje post visas för sig med ett kort källutdrag; hela
+källsidan, PDF-länk, filter och historik är utfällbara. Ett beslut kan behålla,
+utesluta eller ersätta just den förekomsten och måste motiveras.
+Huvudknappen analyserar högst 20 källsidor per LLM-omgång och visar hur många poster som
+återstår. Annan gräns, inklusive `0` för alla, ligger under avancerade
+inställningar.
+Originalet i `doc_entities` bevaras och beslutet slutar automatiskt att gälla
+om sidan extraheras på nytt.
+
+Under **Ersätt namn i hela grafen** kan du skapa en beständig, typbunden
+namnregel. Regeln matchar versaloberoende och ignorerar extra blanksteg, men
+matchar aldrig en annan entitetstyp. Exempelvis ersätter en organisationsregel
+`RKA2` → `Rikskriminalen A2` alla sådana organisationsförekomster och deras
+relationsändpunkter. Vyn räknar berörda omnämnanden, sidor och
+relationsförekomster innan
+regeln sparas. Originalet och ett uttryckligt manuellt ersättningsbeslut
+bevaras; den senare har företräde. Reglerna ingår i synkens fingerprint, så en
+förhandsvisning måste göras om om reglerna har ändrats.
+
+Granskningen kan också köras med en namngiven LLM-profil. Modellen måste lämna
+ett textbelägg som verkligen finns på källsidan och resultatet sparas som ett
+förslag. Först när förslaget accepteras i Graf-vyn blir det ett granskningsbeslut.
+LLM-förslag ändrar därför aldrig Neo4j direkt.
+
+```bash
+.venv/bin/python scripts/graph_review.py
+.venv/bin/python scripts/graph_review_llm.py --profile "Standard" --limit 20
+.venv/bin/python scripts/graph_sync.py
+# Förhandsvisningen skriver ut kontrollkoden:
+.venv/bin/python scripts/graph_sync.py --apply --expected <kontrollkod>
+# För en befintlig äldre graf i CLI: lägg till --adopt-legacy i både
+# förhandsvisningen och appliceringen. UI:t hanterar detta automatiskt.
+```
+
+`graph_sync.py` jämför först den granskade projektionen med Neo4j. Vid
+applicering måste kontrollkoden, målanslutningen och den levande grafen fortfarande
+matcha förhandsvisningen. Importerade `NÄMNER`- och källförsedda `RELATERAR`-kanter
+märks med `graph_owner='palmemordsarkivet'` och ersätts atomiskt; andra
+Neo4j-data lämnas kvar. En äldre graf har omärkta projektkanter och kräver ett
+uttryckligt engångsval i CLI:t att ta över dem innan de kan rensas. Det guidade
+UI:t tar med dem automatiskt och visar omfattningen i förhandsvisningen. En
+efterkontroll verifierar att inga avvikelser återstår. Kontrollkoder,
+fingeravtryck och jobbid:n döljs i normalflödet och finns bara under avancerad
+felsökning.
 
 Kör du **Docker** istället för podman finns även en compose-fil:
 
@@ -812,17 +865,21 @@ per-dokumentresultat behålls; ett avbrutet jobb markeras aldrig `succeeded`.
 | `src/map_extract.py` | Ren parsing/tidsnormalisering/platsmatchning för kartobservations-kandidater |
 | `scripts/extract_map_observations.py` → `src/extract_map_observations.py` | LLM-extraktion av person-position-tid-kandidater till `map_observation_candidates` |
 | `scripts/extract_entities.py` → `src/graph/extract_entities.py` | Entitets-/relationsextraktion till `doc_entities` i state.db (Claude Haiku) |
-| `scripts/load_graph.py` → `src/graph/load_neo4j.py` | Ladda kunskapsgrafen från state.db till Neo4j |
+| `scripts/load_graph.py` → `src/graph/load_neo4j.py` | Ladda den granskade grafprojektionen från state.db till Neo4j |
+| `scripts/graph_review.py` → `src/graph/review.py` | Regelbaserad kvalitetskontroll av entiteter och relationer |
+| `scripts/graph_review_llm.py` → `src/graph/review_llm.py` | Källbunden LLM-granskning som sparar manuellt godkända förslag |
+| `scripts/graph_sync.py` → `src/graph/review_service.py` | Förhandsvisa, transaktionellt uppdatera och efterkontrollera Neo4j |
 | `scripts/neo4j.py` → `src/operations/neo4j.py` | Starta/stoppa Neo4j via podman (genererar lösenord → `neo4j/.password`) |
 | `src/graph/viz.py` | Bygg ego-nätverk (flera center) + Cytoscape-konvertering för grafvyerna |
 | `src/graph/answer_entities.py` | Vald LLM-backend listar nyckelentiteter ur ett RAG-svar — DeepSeek/OpenAI använder vald modell, Claude använder Haiku |
-| `src/pages/3_Graf.py` | Streamlit-grafsida: sök entitet → interaktivt nätverk, fäll ut noder |
+| `src/pages/3_Graf.py` | Streamlit-grafsida: utforska nätverket eller granska noder/relationer med källtext och LLM-förslag |
 | `neo4j/docker-compose.yml` | Neo4j 5 för kunskapsgrafen med Docker (Browser på :7474) |
 | `scripts/web.py` | Startar Streamlit-servern |
+| `neo4j.sh` | Tunn genväg till `scripts/neo4j.py`; start (standard), stop och status |
 | `web.sh` | Tunn genväg till `scripts/web.py`; vidarebefordrar alla argument |
 | `src/operations/` | Delat operationslager: modeller, registry, CLI, `job_service`/`worker`, OCR/redactions/pipeline/neo4j-orkestrering |
 | `src/admin_ui.py` + `src/pages/8_Admin.py` | Lokal Streamlit-adminsida: bakgrundsjobb, operationer och LLM-inställningar |
-| `src/db.py` | SQLite-state: versionsstyrt schema + CRUD + delta-queries, inklusive `admin_jobs`, utredningspärm, källbokmärken och anteckningar |
+| `src/db.py` | SQLite-state: versionsstyrt schema + CRUD + delta-queries, inklusive `admin_jobs`, grafbeslut/LLM-förslag, utredningspärm, källbokmärken och anteckningar |
 | `tests/fixtures/state_db_v4.sql` + `tests/fixtures/state_db_v5_missing_surya.sql` | Gamla state-db-fixtures som verifierar schema-migreringar |
 | `tessdata/swe.user-words` | Palme-specifika ord (committat) |
 | `tessdata/tesseract.config` | `preserve_interword_spaces 1` (committat) |

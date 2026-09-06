@@ -246,6 +246,12 @@ def test_ingest_operation_exposes_reindex_since() -> None:
     assert "--reindex-since" in _flags("ingest")
 
 
+def test_graph_review_llm_uses_named_profile_and_bounded_page_count() -> None:
+    assert _flags("graph-review-llm") == {"--profile", "--limit"}
+    defaults = _defaults("graph-review-llm")
+    assert defaults == {"profile": "", "limit": 0}
+
+
 @pytest.mark.parametrize(
     "operation_id, expected_flags",
     (

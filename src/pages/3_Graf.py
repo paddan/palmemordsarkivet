@@ -12,14 +12,6 @@ from pathlib import Path
 
 import streamlit as st
 
-try:
-    from st_link_analysis import EdgeStyle, NodeStyle, st_link_analysis
-except ImportError:  # pragma: no cover — optional extra
-    st.set_page_config(page_title="Palmemordsarkivet — Graf", layout="wide")
-    st.title("Kunskapsgraf")
-    st.warning("Installera grafstödet med `pip install -e .[graph]`.")
-    st.stop()
-
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 
@@ -29,8 +21,22 @@ from graph import viz  # noqa: E402
 
 st.set_page_config(page_title="Palmemordsarkivet — Graf", layout="wide")
 st.title("Kunskapsgraf")
+mode = st.radio("Vad vill du göra?", ["Utforska", "Granska och uppdatera"], horizontal=True)
+if mode == "Granska och uppdatera":
+    st.caption("Analysera materialet, granska ett förslag i taget och uppdatera sedan grafen.")
+    from graph.review_ui import render_review
+
+    render_review(ROOT)
+    st.stop()
+
 st.caption("Sök en person, plats eller organisation och utforska dess nätverk i materialet. "
            "Dubbelklick: fäll ut entitetsnod · öppna dokumentnod.")
+
+try:
+    from st_link_analysis import EdgeStyle, NodeStyle, st_link_analysis
+except ImportError:  # pragma: no cover — optional extra
+    st.warning("Installera grafstödet med `pip install -e .[graph]`.")
+    st.stop()
 
 password = viz.resolve_password()
 if not password:

@@ -210,7 +210,7 @@ def test_init_schema_migrates_legacy_v4_fixture(tmp_path):
                 "SELECT version FROM schema_version ORDER BY version"
             )
         ]
-        assert versions == [4, 6, SCHEMA_VERSION]
+        assert versions == [4, 6, 7, 8, SCHEMA_VERSION]
     finally:
         conn.close()
 

@@ -66,7 +66,11 @@ src/
     ask.py             # RAG query + Codex integration
   graph/
     extract_entities.py # Per-sida entitets-/relationsextraktion via LLM → doc_entities i state.db
-    load_neo4j.py       # Ladda doc_entities → Neo4j (MERGE, idempotent) + namnkanonisering
+    review.py            # Ren kvalitetskontroll + applicering av manuella beslut
+    review_llm.py        # Källbunden LLM-granskning som bara skapar förslag
+    review_service.py    # Kontrollrapporter + verifierad transaktionell Neo4j-synk
+    review_ui.py         # Granskningskö, källtext, historik och LLM-förslag
+    load_neo4j.py        # Ladda granskad projektion → Neo4j + namnkanonisering
     viz.py              # Ego-nätverk för flera center (Cypher → noder/kanter, dedup) + Cytoscape-konvertering
     answer_entities.py  # Vald LLM-backend listar nyckelentiteter ur ett RAG-svar → inline-grafen i Utredning
   operations/
@@ -103,8 +107,8 @@ Repo-data:
 
 ## Commands
 
-Alla produktionsscript är ersatta av Python-entrypoints i `scripts/`. `web.sh`
-är det enda undantaget och är en tunn genväg till `scripts/web.py`.
+Alla produktionsscript är ersatta av Python-entrypoints i `scripts/`. `web.sh` och
+`neo4j.sh` är tunna genvägar till `scripts/web.py` respektive `scripts/neo4j.py`.
 Kör med `.venv/bin/python`:
 
 ```bash
@@ -150,11 +154,17 @@ Kör med `.venv/bin/python`:
 # Kunskapsgraf (valfritt; installera podman + .[graph])
 .venv/bin/python scripts/extract_entities.py --limit 5 --dry-run
 .venv/bin/python scripts/neo4j.py status
+# eller: ./neo4j.sh [start|stop|status] (start är standard)
 .venv/bin/python scripts/load_graph.py
+.venv/bin/python scripts/graph_review.py
+.venv/bin/python scripts/graph_review_llm.py --profile "Standard"
+.venv/bin/python scripts/graph_sync.py                 # förhandsvisa skillnader
+.venv/bin/python scripts/graph_sync.py --apply --expected <kontrollkod>
+# Äldre graf utan ägarmärkning: lägg till --adopt-legacy i båda kommandona.
 ```
 
 Alla entrypoints delar registry i `src/operations/registry.py`; adminsidan (`src/pages/8_Admin.py`)
-och CLI använder samma operationer/parametrar/defaults. Inför inga nya shell-wrappers.
+och CLI använder samma operationer/parametrar/defaults. Utöver `web.sh` och `neo4j.sh`, inför inga nya shell-wrappers.
 
 Env-variabler: `CLAUDE_CODE_OAUTH_TOKEN` (Pro/Max, räknas mot prenumeration) eller `ANTHROPIC_API_KEY`. Valfritt: `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`.
 
@@ -186,6 +196,26 @@ katalogdefinierade standardvariabel.
 **PDF-opener för citat/källor**: inline-citat och källkort använder `casebook_ui.render_pdf_opener` + `citations.pdf_anchor`. När sidnummer finns ska länken bära `page=N`; openern validerar både PDF-token och sida, bygger `file://...#page=N` och öppnar PDF:en med `webbrowser.open(..., new=2)` så den hamnar i en ny webbläsarflik i stället för macOS Preview. WPU-uppslag måste även acceptera stammar där ett `Pol-..._...`-dokument-ID följs direkt av titeltext. Utredning, Jämförelse, Utredningspärm och grafens dokumentöppningar ska använda samma opener.
 
 **Kunskapsgraf byggs lazy (Utredning.py)**: `_render_answer_graph` tar svaret, inte färdiga centers. Den dyra entitetsextraktionen (`_compute_answer_centers` → vald backend i `generated/llm_config.json`) och Neo4j-frågorna körs **först när användaren öppnar graf-toggeln** — inte automatiskt efter varje svar. DeepSeek/OpenAI använder vald modell; Claude använder Haiku för den lilla extraktionsuppgiften. Resultatet cachas per svar i session state och returneras så utredningspärmen kan spara det.
+
+**Grafgranskning (`graph/review*.py`)**: Originalen i `doc_entities` ändras aldrig.
+Manuella beslut gäller en exakt förekomst och sidans payload-hash; efter ny
+extraktion blir beslutet inaktuellt och appliceras inte. LLM-granskning använder
+en namngiven profil och sparar endast källbundna förslag, aldrig beslut. Neo4j
+uppdateras först efter en sparad förhandsvisning vars SQLite-underlag, mål-URI
+och levande graf-fingerprint fortfarande matchar; importerade kanter ersätts i
+en transaktion och en efterkontroll måste vara tom. Importerade kanter märks
+`graph_owner='palmemordsarkivet'`; äldre omärkta projektkanter tas bara över när
+`--adopt-legacy` valts uttryckligen i både förhandsvisning och applicering.
+Graf-vyn presenterar detta som de tre stegen Analysera, Granska och Uppdatera.
+Normalflödet visar en post i taget och döljer jobbid:n, fingeravtryck och rå JSON;
+de tekniska uppgifterna hör hemma under avancerad felsökning. Primärknappen för
+LLM-analys kör högst 20 källsidor per omgång; en obegränsad körning kräver ett
+medvetet val under avancerade inställningar.
+**Globala namnregler** lagras separat i `graph_name_rules` och appliceras först
+på den granskade projektionen. De är typbundna och matchar normaliserat namn;
+originalet i `doc_entities` ändras aldrig och ett uttryckligt manuellt
+ersättningsbeslut har företräde. Regler måste ingå i både projektionens och
+synkens fingerprint.
 
 **SQLite-state (`generated/db/state.db`)**: all operativ pipeline-state lever här —
 downloads, per-PDF-status (redaktion/merge/normalize), per-sida OCR-resultat,

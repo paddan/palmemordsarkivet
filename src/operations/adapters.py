@@ -292,3 +292,24 @@ def extract_entities_adapter(context, params: Mapping) -> None:
         context=context,
     )
     _raise_on_failure("extract-entities", rc)
+
+
+def graph_review_adapter(context, params: Mapping) -> None:
+    """Kör återkommande kvalitetskontroll av grafunderlaget."""
+    from graph.review_service import run_review
+
+    _raise_on_failure("graph-review", run_review(context=context))
+
+
+def graph_sync_adapter(context, params: Mapping) -> None:
+    """Förhandsvisa eller applicera en granskad grafprojektion."""
+    from graph.review_service import run_sync
+
+    _raise_on_failure("graph-sync", run_sync(context=context, **params))
+
+
+def graph_review_llm_adapter(context, params: Mapping) -> None:
+    """Skapa källbundna LLM-förslag för den manuella grafgranskningen."""
+    from graph.review_llm import run_llm_review
+
+    _raise_on_failure("graph-review-llm", run_llm_review(context=context, **params))

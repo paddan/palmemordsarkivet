@@ -36,10 +36,9 @@ SHELL_TO_PYTHON = {
 
 
 def test_shell_scripts_are_removed() -> None:
-    # web.sh är en återinförd tunn genväg (användarbegärd) till scripts/web.py —
-    # inte en migrerad produktionsscript, så den ska inte krävas borttagen.
+    # web.sh och neo4j.sh är användarbegärda tunna Python-genvägar.
     for shell in SHELL_TO_PYTHON:
-        if shell == "web.sh":
+        if shell in ("web.sh", "neo4j.sh"):
             continue
         assert not (PROJECT_ROOT / shell).exists(), f"{shell} ska vara borttagen"
 

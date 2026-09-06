@@ -261,10 +261,43 @@ def _register_builtin_operations() -> None:
         parameters=(
             _p("uri", "--uri", "str", "bolt://localhost:7687", "Neo4j-URI"),
             _p("user", "--user", "str", "neo4j", "Användare"),
-            _p("batch", "--batch", "int", 1000, "Sidor per transaktion"),
+            _p("batch", "--batch", "int", 1000, "Rader per skrivbatch"),
         ),
         admin_visible=True, mutating=True, confirmation=None,
         run=adapters.load_graph_adapter,
+    ))
+
+    _registry.register(OperationDefinition(
+        id="graph-review", label="Kontrollera grafkvalitet", group="Extraktion och graf",
+        description="Kontrollera grafunderlag och spara rapport utan att ändra Neo4j.",
+        parameters=(), admin_visible=True, mutating=True, confirmation=None,
+        run=adapters.graph_review_adapter,
+    ))
+    _registry.register(OperationDefinition(
+        id="graph-review-llm", label="LLM-granska grafkvalitet",
+        group="Extraktion och graf",
+        description="Skapa källbundna LLM-förslag för flaggade grafposter.",
+        parameters=(
+            _p("profile", "--profile", "str", "", "Namngiven LLM-profil"),
+            _p("limit", "--limit", "int", 0, "Max antal sidor (0 = alla)"),
+        ),
+        admin_visible=True, mutating=True, confirmation=None,
+        run=adapters.graph_review_llm_adapter,
+    ))
+    _registry.register(OperationDefinition(
+        id="graph-sync", label="Verifiera och uppdatera graf", group="Extraktion och graf",
+        description="Jämför Neo4j med granskat underlag. Förhandsvisning som standard.",
+        parameters=(
+            _p("uri", "--uri", "str", "bolt://localhost:7687", "Neo4j-URI"),
+            _p("user", "--user", "str", "neo4j", "Användare"),
+            _p("apply", "--apply", "bool", False, "Applicera uppdateringen"),
+            _p("expected", "--expected", "str", "", "Kontrollkod från förhandsvisningen"),
+            _p("adopt_legacy", "--adopt-legacy", "bool", False,
+               "Ta uttryckligen över äldre omärkta projektkanter"),
+        ),
+        admin_visible=True, mutating=True,
+        confirmation="Med Applicera uppdateringen ersätts importerade grafkanter med granskat underlag.",
+        run=adapters.graph_sync_adapter,
     ))
 
     _registry.register(OperationDefinition(

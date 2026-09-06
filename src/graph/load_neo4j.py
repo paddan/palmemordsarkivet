@@ -19,6 +19,7 @@ sys.path.insert(0, str(ROOT / "src"))
 import db as state_db  # noqa: E402
 
 LABELS = {"person": "Person", "plats": "Plats", "organisation": "Organisation"}
+GRAPH_OWNER = "palmemordsarkivet"
 
 _WS_RE = re.compile(r"\s+")
 
@@ -151,14 +152,15 @@ MERGE (d:Dokument {{stem: row.stem}})
   ON CREATE SET d.nr = row.nr, d.titel = row.titel
 MERGE (e:{label} {{norm: row.norm}})
   ON CREATE SET e.namn = row.namn
-MERGE (d)-[:NÄMNER {{sida: row.sida}}]->(e)
+MERGE (d)-[r:NÄMNER {{sida: row.sida, graph_owner: 'palmemordsarkivet'}}]->(e)
 """
 
 _RELATION_CYPHER = """
 UNWIND $rows AS row
 MATCH (a:{fl} {{norm: row.fran_norm}})
 MATCH (b:{tl} {{norm: row.till_norm}})
-MERGE (a)-[:RELATERAR {{typ: row.typ, stem: row.stem, sida: row.sida}}]->(b)
+MERGE (a)-[r:RELATERAR {{typ: row.typ, stem: row.stem, sida: row.sida,
+                         graph_owner: 'palmemordsarkivet'}}]->(b)
 """
 
 
@@ -210,35 +212,27 @@ def run_load_graph(*, uri: str, user: str, batch: int, context=None) -> int:
     conn = state_db.connect()
     state_db.init_schema(conn)
 
-    entries = state_db.iter_doc_entities(conn)
-    surname_map = build_surname_map(entries)
+    from graph.review import build_reviewed_rows
 
-    n_pages = n_mentions = n_relations = 0
+    try:
+        entries, decisions = state_db.read_graph_review_snapshot(conn)
+        name_rules = state_db.list_graph_name_rules(conn)
+    finally:
+        conn.close()
+    mentions, relations = build_reviewed_rows(entries, decisions, name_rules)
+    n_pages, n_mentions, n_relations = len(entries), len(mentions), len(relations)
+    if batch < 1:
+        from operations.exceptions import OperationFailed
+        raise OperationFailed("Batchstorleken måste vara minst 1.")
     with GraphDatabase.driver(uri, auth=(user, password)) as driver, \
             driver.session() as session:
         for stmt in CONSTRAINTS:
             session.run(stmt)
-        batch_m: list[dict] = []
-        batch_r: list[dict] = []
-        for row in entries:
-            ctx.check_cancelled()
-            mentions, relations = build_rows(
-                row["pdf_stem"], row["page_num"], row["payload"],
-                surname_map.get(row["pdf_stem"], {}))
-            batch_m.extend(mentions)
-            batch_r.extend(relations)
-            n_pages += 1
-            if n_pages % batch == 0:
-                write_mentions(session, batch_m)
-                write_relations(session, batch_r)
-                n_mentions += len(batch_m)
-                n_relations += len(batch_r)
-                batch_m, batch_r = [], []
-                ctx.log(f"  {n_pages} sidor laddade…")
-        write_mentions(session, batch_m)
-        write_relations(session, batch_r)
-        n_mentions += len(batch_m)
-        n_relations += len(batch_r)
+        for rows, writer in ((mentions, write_mentions), (relations, write_relations)):
+            for offset in range(0, len(rows), batch):
+                ctx.check_cancelled()
+                writer(session, rows[offset:offset + batch])
+                ctx.log(f"  {min(offset + batch, len(rows))}/{len(rows)} rader laddade…")
     ctx.log(f"Klart: {n_pages} sidor → {n_mentions} omnämnanden, "
             f"{n_relations} relationer.")
     return 0
@@ -250,7 +244,7 @@ def main() -> int:
     ap.add_argument("--uri", default=os.environ.get("NEO4J_URI", "bolt://localhost:7687"))
     ap.add_argument("--user", default=os.environ.get("NEO4J_USER", "neo4j"))
     ap.add_argument("--batch", type=int, default=1000,
-                    help="antal sidor per transaktion (default: 1000)")
+                    help="antal rader per skrivbatch (default: 1000)")
     args = ap.parse_args()
 
     return run_load_graph(uri=args.uri, user=args.user, batch=args.batch)

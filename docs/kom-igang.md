@@ -218,5 +218,19 @@ Neo4j är igång. Börja med en kostnadsfri dry-run och en begränsad provkörni
 .venv/bin/python scripts/neo4j.py          # starta samma container igen senare
 ```
 
+I Graf-sidans vy **Granska och uppdatera** leds du genom tre steg: **Analysera**
+med standardprofilen, **Granska** ett källbundet förslag i taget och
+**Uppdatera** Neo4j efter en lättläst förhandsvisning. Förslagen måste godkännas
+manuellt. Standardanalysen tar högst 20 källsidor per omgång. Profilval, annan
+begränsning, historik och teknisk felsökning finns i
+utfällbara avancerade delar. Systemet kontrollerar att varken underlaget eller
+Neo4j har ändrats mellan förhandsvisning och uppdatering.
+
+Under **Granska** finns även **Ersätt namn i hela grafen**. Välj entitetstyp,
+skriv en variant och dess kanoniska namn, exempelvis `RKA2` →
+`Rikskriminalen A2`, och välj **Visa träffar**. Regeln gäller sedan alla
+matchande entiteter och relationer i den granskade grafen. Originalextraktionen
+ändras inte och regeln kan tas bort igen.
+
 Full beskrivning (schema, kostnad, namnnormalisering) finns under
 [Kunskapsgraf](teknisk-referens.md#kunskapsgraf-neo4j).
