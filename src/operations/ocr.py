@@ -73,6 +73,12 @@ def run_surya_fallback(label: str, pdf_dir: Path, options: OcrOptions, context: 
         txt = options.txt / f"{stem}.txt"
         if pdf.is_file() and not _txt_has_content(txt):
             candidates.append((stem, pdf))
+        else:
+            context.log(
+                f"[surya] {label}/{stem}: ingen kandidat "
+                f"(pdf finns: {pdf.is_file()}, text finns: {_txt_has_content(txt)})",
+                level="debug",
+            )
     conn.close()
 
     if not candidates:
@@ -80,6 +86,11 @@ def run_surya_fallback(label: str, pdf_dir: Path, options: OcrOptions, context: 
         return 0
 
     context.log(f"Surya-fallback för Tesseract-fel ({label}): {len(candidates)} filer")
+    for stem, _pdf in candidates:
+        context.log(
+            f"[surya] {label}/{stem}: Tesseract gav ingen text — kör Surya på hela filen",
+            level="debug",
+        )
     failed = 0
     for i, (stem, pdf) in enumerate(candidates, 1):
         context.check_cancelled()
@@ -185,6 +196,9 @@ def run_ocr(options: OcrOptions, context: OperationContext | None = None) -> int
             files_dir=options.inp, rebuild=False, files_from=options.files_from,
             context=ctx,
         )
+    else:
+        orsak = "--skip-redo" if options.skip_redo else "surya är inte installerat"
+        ctx.log(f"[redo] Surya-omkörning hoppas över: {orsak}", level="debug")
 
     ctx.log("OCR-pipeline klar.")
     return 1 if rc else 0
@@ -210,10 +224,17 @@ def _run_redo(options: OcrOptions, ctx: OperationContext) -> int:
         failed = 0
         for stem, pages in raw.items():
             ctx.check_cancelled()
+            ctx.log(
+                f"[redo] {stem}: {len(pages)} sidor under tröskel "
+                f"{options.threshold}: {sorted(set(pages))[:20]}",
+                level="debug",
+            )
             pdf = options.inp / f"{stem}.pdf"
             if not pdf.exists():
                 pdf = wpu_dir / f"{stem}.pdf"
             if not pdf.exists():
+                ctx.log(f"[redo] {stem}: hoppar — PDF saknas i {options.inp} och {wpu_dir}",
+                        level="debug")
                 continue
             pages_arg = ",".join(str(p) for p in sorted(set(pages)))
             argv = [
@@ -224,7 +245,7 @@ def _run_redo(options: OcrOptions, ctx: OperationContext) -> int:
             if options.no_update_pdf:
                 argv.append("--no-update-pdf")
             if ctx.run_process(argv, cwd=options.root) == 0:
-                merge_pages.merge_one(stem, options.txt)
+                merge_pages.merge_one(stem, options.txt, create_missing=True)
                 txt_file = options.txt / f"{stem}.txt"
                 if txt_file.exists():
                     normalize_text.process_file(txt_file)

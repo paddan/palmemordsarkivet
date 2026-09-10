@@ -346,6 +346,12 @@ def run_ingest(
         if action == "new":
             todo.append((f, disk_mtime, False))
         elif action == "reingest":
+            stored = already.get(f.name)
+            ctx.log(
+                f"[delta] {f.name}: re-indexeras (lagrad mtime {stored!r}, "
+                f"på disk {disk_mtime:.3f}, reindex-since {reindex_since!r})",
+                level="debug",
+            )
             todo.append((f, disk_mtime, True))
         else:
             skipped += 1
@@ -355,6 +361,10 @@ def run_ingest(
     ctx.log(
         f"Indexerar {len(todo)} av {len(files)} filer "
         f"(nya: {new_count}, re-index: {reindex_count}, skippar: {skipped})."
+    )
+    ctx.log(
+        f"[delta] {skipped} filer hoppas över: oförändrad text_mtime i ingest-tabellen",
+        level="debug",
     )
 
     t0 = time.monotonic()

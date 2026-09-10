@@ -16,7 +16,7 @@ from graph.review import (
     validate_decision,
     validate_suggestion_evidence,
 )
-from graph.review_service import fingerprint
+from graph.review_service import fingerprint, reset_stale_decisions
 from operations import job_service
 from operations.exceptions import OperationFailed
 
@@ -222,6 +222,19 @@ def _review_queue(
             or folded_query
             in f"{item['pdf_stem']} {item['original']}".casefold()
         )
+    ]
+
+
+def orphan_decisions(items: list[dict], decisions: list[dict]) -> list[dict]:
+    """Beslut vars objekt inte längre finns i projektionen.
+
+    De kan aldrig appliceras igen, men blockerar uppdateringen tills de
+    återställs — därför måste de gå att se och återställa.
+    """
+    item_keys = {item["item_key"] for item in items}
+    return [
+        decision for decision in decisions
+        if decision["item_key"] not in item_keys
     ]
 
 
@@ -483,8 +496,18 @@ def _latest_valid_preview(runs: list[dict], current_fingerprint: str) -> dict | 
     return None
 
 
-def _render_update(runs: list[dict], current_fingerprint: str) -> None:
+def _render_update(
+    runs: list[dict], current_fingerprint: str, orphans: list[dict] | None = None,
+) -> None:
     st.subheader("3. Uppdatera")
+    if orphans:
+        st.warning(
+            f"{len(orphans)} granskningsbeslut hör till poster som inte längre finns "
+            "efter en ny extraktion. De kan aldrig appliceras men blockerar "
+            "uppdateringen tills de återställs."
+        )
+        if st.button("Återställ inaktuella beslut", use_container_width=True):
+            _run_action(reset_stale_decisions)
     latest = runs[0]["report"] if runs else {}
     if latest.get("kind") == "sync" and latest.get("verified"):
         st.success("Grafen är uppdaterad och efterkontrollen hittade inga avvikelser.")
@@ -534,7 +557,11 @@ def render_review(root: Path) -> None:
     )
     _render_analysis(profiles, jobs, review_count)
     _render_review(root, entries, decisions, name_rules, items, suggestions)
-    _render_update(runs, fingerprint(entries, decisions, name_rules))
+    _render_update(
+        runs,
+        fingerprint(entries, decisions, name_rules),
+        orphan_decisions(items, decisions),
+    )
     with st.expander("Avancerad felsökning"):
         st.write("Fullständiga jobbloggar och avbrytning finns på Admin-sidan.")
         for job in jobs:

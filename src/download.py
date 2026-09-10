@@ -105,8 +105,11 @@ def build_filename(values: dict[str, str], maxlen: int = 180) -> str:
     return name[:maxlen]
 
 
-_TRANSIENT_STATUS = {408, 429, 500, 502, 503, 504}
-_RETRYABLE_FAILURE_NOTES = {"failed:html-response"}
+# Drive svarar 403 både vid rate limit (userRateLimitExceeded/downloadQuotaExceeded)
+# och vid verklig nekad åtkomst. Att stämpla 403 som permanent tappar dokument
+# för gott, så det behandlas som transient i stället.
+_TRANSIENT_STATUS = {403, 408, 429, 500, 502, 503, 504}
+_RETRYABLE_FAILURE_NOTES = {"failed:html-response", "failed:403"}
 
 
 def _is_transient(exc: BaseException) -> bool:
@@ -227,10 +230,17 @@ def _ctx(context):
     return ensure_terminal_context(None)
 
 
-def run_download(*, out: Path, sheet_id: str, limit: int, context=None) -> int:
-    """Ladda ned arkivets PDF:er till ``out``. Idempotent via state.db."""
+def run_download(*, out: Path, sheet_id: str, limit: int, dry_run: bool = False,
+                 rebuild: bool = False, context=None) -> int:
+    """Ladda ned arkivets PDF:er till ``out``. Idempotent via state.db.
+
+    ``dry_run`` listar bara vad som skulle hämtas. ``rebuild`` ignorerar
+    manifestet och hämtar om filerna — även sådana som saknas på disk eller
+    tidigare stämplats som permanent misslyckade.
+    """
     ctx = _ctx(context)
-    out.mkdir(parents=True, exist_ok=True)
+    if not dry_run:
+        out.mkdir(parents=True, exist_ok=True)
 
     conn = state_db.connect()
     state_db.init_schema(conn)
@@ -295,7 +305,17 @@ def run_download(*, out: Path, sheet_id: str, limit: int, context=None) -> int:
     }
 
     # Filnamns-stem-fallback för befintliga nedladdningar (pre-manifest)
-    existing_stems = {p.with_suffix("").name for p in out.iterdir() if p.is_file()}
+    existing_stems = (
+        {p.with_suffix("").name for p in out.iterdir() if p.is_file()}
+        if out.is_dir() else set()
+    )
+
+    if rebuild:
+        # --rebuild: hämta om allt, även poster i manifestet, filer som redan
+        # ligger på disk och tidigare permanenta felnoter.
+        ctx.log("Ladda ned igen: manifestet ignoreras — alla filer hämtas om.")
+        manifest_ids = set()
+        existing_stems = set()
 
     session = requests.Session()
     failed = []
@@ -304,6 +324,19 @@ def run_download(*, out: Path, sheet_id: str, limit: int, context=None) -> int:
         1 for prefix, fid in todo
         if fid in manifest_ids or prefix in existing_stems
     )
+    if dry_run:
+        remaining = [
+            prefix for prefix, fid in todo
+            if fid not in manifest_ids and prefix not in existing_stems
+        ]
+        ctx.log(
+            f"Lista: {len(remaining)} av {total} filer skulle hämtas "
+            f"({n_done} redan hämtade)."
+        )
+        for prefix in remaining:
+            ctx.log(f"  [skulle hämtas] {prefix}")
+        return 0
+
     n_new = 0
     n_fail = 0
     n_dup = 0

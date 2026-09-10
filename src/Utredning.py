@@ -260,7 +260,11 @@ with st.sidebar:
         st.session_state["llm_profile"] = _all_llm["default"]
     _profile_name = st.selectbox("LLM-profil", _profile_names, key="llm_profile")
     _profile = _all_llm["profiles"][_profile_name]
-    backend = _llm_config.resolve_runtime_profile(_profile, BACKENDS)
+    try:
+        backend = _llm_config.resolve_runtime_profile(_profile, BACKENDS)
+    except ValueError as exc:
+        st.error(f"LLM-profilen {_profile_name!r} kan inte användas: {exc}")
+        st.stop()
     backend_name = backend["backend_name"]
     _profile_runtime_key = _llm_config.profile_cache_key(_profile_name, _profile)
     st.caption("Hantera profiler i **Admin → Inställningar → LLM-inställningar**.")
@@ -861,16 +865,21 @@ def _render_answer_graph(answer: str, state_key: str) -> list[dict] | None:
     answer_key = f"{state_key}_answer"
     extra_key = f"{state_key}_extra"
 
+    # Cache-identiteten måste beräknas innan toggeln läses: annars återanvänds
+    # föregående svars entiteter och sparas i utredningspärmen för fel fråga.
+    cache_identity = (answer, _profile_runtime_key)
+
     # Bygg inte grafen förrän användaren öppnar den.
     if not st.toggle("🕸 Visa kunskapsgraf", key=f"{state_key}_open",
                      help="Extraherar svarets entiteter och ritar deras nätverk "
                      "ur kunskapsgrafen. Byggs först när du öppnar den."):
+        if ss.get(answer_key) != cache_identity:
+            return []
         saved: list[dict] = ss.get(centers_key, [])
         return saved
 
     # Lat beräkning: kör entitetsextraktionen en gång per svar och cacha den.
     # Nytt svar nollställer även utfällda noder.
-    cache_identity = (answer, _profile_runtime_key)
     if ss.get(answer_key) != cache_identity:
         with st.spinner("Bygger kunskapsgraf…"):
             ss[centers_key] = _compute_answer_centers(answer, backend)

@@ -81,9 +81,13 @@ def _register_builtin_operations() -> None:
             _p("root", "--root", "path", ROOT, "Projektrot"),
             _p("out", "--out", "path", ROOT / "downloaded" / "files", "Målmapp"),
             _p("sheet_id", "--sheet-id", "str", "", "Google Sheets-ID"),
+            _p("dry_run", "--dry-run", "bool", False, "Lista utan att ladda ned"),
             _p("limit", "--limit", "int", 0, "Begränsa till N filer"),
+            _p("rebuild", "--rebuild", "bool", False, "Ladda ned igen"),
         ),
-        admin_visible=True, mutating=True, confirmation=None,
+        # Nedladdning körs som första steg i run-pipeline; engångshämtningar görs
+        # med scripts/download.py, så formuläret behövs inte i adminsidan.
+        admin_visible=False, mutating=True, confirmation=None,
         run=adapters.download_adapter,
     ))
 
@@ -97,7 +101,7 @@ def _register_builtin_operations() -> None:
             _p("limit", "--limit", "int", 0, "Begränsa till N filer"),
             _p("rebuild", "--rebuild", "bool", False, "Ladda ned igen"),
         ),
-        admin_visible=True, mutating=True, confirmation=None,
+        admin_visible=False, mutating=True, confirmation=None,
         run=adapters.download_wpu_adapter,
     ))
 
@@ -294,6 +298,8 @@ def _register_builtin_operations() -> None:
             _p("expected", "--expected", "str", "", "Kontrollkod från förhandsvisningen"),
             _p("adopt_legacy", "--adopt-legacy", "bool", False,
                "Ta uttryckligen över äldre omärkta projektkanter"),
+            _p("reset_stale", "--reset-stale", "bool", False,
+               "Återställ beslut vars objekt inte längre finns efter ny extraktion"),
         ),
         admin_visible=True, mutating=True,
         confirmation="Med Applicera uppdateringen ersätts importerade grafkanter med granskat underlag.",

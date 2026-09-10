@@ -236,3 +236,22 @@ def test_run_llm_config_logs_through_context(tmp_path, monkeypatch) -> None:
     assert any("Provider bytt" in msg for msg in logs)
     assert any("provider:  openai" in msg for msg in logs)
     assert any("model:     gpt-4o-mini" in msg for msg in logs)
+
+
+def test_resolve_runtime_profile_rejects_unknown_backend_name() -> None:
+    """Regression: okänt backend-namn fick tidigare tyst köra mot Claude.
+
+    Annars skickas ett jobb till fel LLM med fel modellnamn och kostnad.
+    """
+    profile = {
+        "backend_name": "Borttagen backend",
+        "provider": "openai",
+        "model": "gpt-test",
+        "base_url": "https://llm.example/v1",
+    }
+    catalog = {
+        "Claude": {"kind": "claude", "model": "claude-opus", "base_url": "", "env": None},
+    }
+
+    with pytest.raises(ValueError, match="Borttagen backend"):
+        config.resolve_runtime_profile(profile, catalog, environ={})

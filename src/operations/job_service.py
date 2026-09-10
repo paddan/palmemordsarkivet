@@ -16,7 +16,7 @@ import subprocess
 import sys
 import time
 import uuid
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -188,6 +188,22 @@ def _timestamp_age_seconds(timestamp: str | None) -> float | None:
     return (datetime.now(UTC) - ts.astimezone(UTC)).total_seconds()
 
 
+def _is_zombie(pid: int) -> bool:
+    """Returnera True om processen är avslutad men ännu inte omhändertagen.
+
+    ``os.kill(pid, 0)`` lyckas även för en zombie, så utan den här kontrollen
+    ser reconcile en kraschad worker som levande och låser ``active_slot``.
+    """
+    try:
+        out = subprocess.run(
+            ["ps", "-o", "stat=", "-p", str(pid)],
+            capture_output=True, text=True, timeout=5, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return out.stdout.strip().startswith("Z")
+
+
 def _process_exists(pid: int | None) -> bool:
     if pid is None:
         return False
@@ -197,7 +213,38 @@ def _process_exists(pid: int | None) -> bool:
         return False
     except PermissionError:
         return True
-    return True
+    return not _is_zombie(pid)
+
+
+def _descendant_pids(pid: int, table: Iterable[tuple[int, int]]) -> list[int]:
+    """Returnera alla underordnade pid:n till ``pid`` ur en (pid, ppid)-tabell."""
+    children: dict[int, list[int]] = {}
+    for child, parent in table:
+        children.setdefault(parent, []).append(child)
+    found: list[int] = []
+    stack = [pid]
+    while stack:
+        for child in children.get(stack.pop(), ()):
+            found.append(child)
+            stack.append(child)
+    return found
+
+
+def _process_tree_pids(pid: int) -> list[int]:
+    """Läs processlistan och returnera ``pid``:ns hela descendant-träd."""
+    try:
+        out = subprocess.run(
+            ["ps", "-eo", "pid=,ppid="],
+            capture_output=True, text=True, timeout=5, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    table = [
+        (int(parts[0]), int(parts[1]))
+        for parts in (line.split() for line in out.stdout.splitlines())
+        if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit()
+    ]
+    return _descendant_pids(pid, table)
 
 
 def reconcile_active_job(
@@ -260,7 +307,9 @@ def cancel_job(
     endast när heartbeaten är färsk, för att undvika att träffa ett återanvänt
     PID. Om jobbet inte når ett terminalt tillstånd inom ``kill_grace_seconds``
     eskalerar vi till SIGKILL mot processgruppen — workern startas med
-    ``start_new_session``, så dess PID är även processgruppens ID.
+    ``start_new_session``, så dess PID är även processgruppens ID. Workerns egna
+    barn ligger i egna sessioner och dödas därför separat; jobbet markeras
+    terminalt direkt eftersom workern inte längre kan skriva status själv.
     """
     db_path = db_path or default_db_path()
     conn = db.connect(db_path)
@@ -296,8 +345,18 @@ def cancel_job(
             if remaining <= 0:
                 break
             time.sleep(min(0.2, remaining))
+        # Barnen startas i egna sessioner (context.run_process) och nås därför
+        # inte av killpg mot workerns grupp — samla dem innan gruppen dör.
+        descendants = _process_tree_pids(pid)
         with contextlib.suppress(ProcessLookupError, PermissionError):
             os.killpg(pid, signal.SIGKILL)
+        for child_pid in descendants:
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.kill(child_pid, signal.SIGKILL)
+        # Workern hann inte skriva terminal status — gör det åt den, annars
+        # låser en kvarvarande zombie active_slot för alltid.
+        with contextlib.suppress(db.InvalidAdminJobTransition):
+            db.mark_admin_job_interrupted(conn, job["id"])
         return True
     finally:
         conn.close()

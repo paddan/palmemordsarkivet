@@ -40,7 +40,14 @@ def resolve_runtime_profile(
     env = os.environ if environ is None else environ
     fallback_name = next(iter(catalog))
     requested_name = str(profile.get("backend_name") or fallback_name)
-    backend_name = requested_name if requested_name in catalog else fallback_name
+    if requested_name not in catalog:
+        # Aldrig tyst falla tillbaka: en profil med borttaget/omdöpt backend-namn
+        # skulle då köra mot fel LLM med fel modellnamn och kostnadsmodell.
+        raise ValueError(
+            f"Okänt LLM-backend {requested_name!r} i profilen. "
+            f"Tillgängliga: {', '.join(repr(name) for name in catalog)}."
+        )
+    backend_name = requested_name
     backend = catalog[backend_name]
     api_key_env = str(profile.get("api_key_env") or backend.get("env") or "").strip()
     return {

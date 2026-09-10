@@ -56,7 +56,8 @@ def test_run_process_streams_output(tmp_path: Path) -> None:
 
 def test_run_process_logs_redacted_command_without_secret_values(tmp_path: Path) -> None:
     sink = RecordingSink()
-    context = OperationContext(sink=sink, cancel_requested=lambda: False)
+    # Kommandoraden är debug-logg och skrivs därför bara när debug är på.
+    context = OperationContext(sink=sink, cancel_requested=lambda: False, debug=True)
 
     context.run_process(
         [sys.executable, "-c", "pass", "--api-key", "hemlig-token"],
@@ -259,3 +260,31 @@ def test_redact_argv_masks_neo4j_auth_token() -> None:
     )
 
     assert redacted == ["-e", "***", "NEO4J_server_memory_heap_max__size=2G"]
+
+
+def test_debug_lines_require_the_debug_switch(tmp_path: Path) -> None:
+    """Debugloggning ska kunna slås av/på; övriga nivåer påverkas inte."""
+    from operations.context import DEBUG_ENV, debug_logging_enabled
+
+    off = OperationContext(sink=RecordingSink(), cancel_requested=lambda: False, debug=False)
+    off.log("detalj", level="debug")
+    off.log("händer")
+    assert off._sink.logs == [("info", "händer")]
+
+    on = OperationContext(sink=RecordingSink(), cancel_requested=lambda: False, debug=True)
+    on.log("detalj", level="debug")
+    assert on._sink.logs == [("debug", "detalj")]
+
+    assert debug_logging_enabled({DEBUG_ENV: "1"}) is True
+    assert debug_logging_enabled({DEBUG_ENV: "on"}) is True
+    assert debug_logging_enabled({DEBUG_ENV: ""}) is False
+    assert debug_logging_enabled({}) is False
+
+
+def test_debug_switch_is_read_from_the_environment(monkeypatch) -> None:
+    from operations.context import DEBUG_ENV
+
+    monkeypatch.setenv(DEBUG_ENV, "1")
+    sink = RecordingSink()
+    OperationContext(sink=sink, cancel_requested=lambda: False).log("detalj", level="debug")
+    assert sink.logs == [("debug", "detalj")]

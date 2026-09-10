@@ -249,3 +249,29 @@ def test_prepare_update_always_adopts_legacy_edges(tmp_path, monkeypatch):
     app = _setup(tmp_path, monkeypatch)
     next(v for v in app.button if v.label == "Förbered uppdatering").click().run()
     assert calls == [("graph-sync", {"adopt_legacy": True})]
+
+
+def test_orphan_decisions_are_listed_and_resettable(tmp_path, monkeypatch):
+    """Regression: beslut vars objekt försvunnit blockerade uppdateringen men
+    visades aldrig i vyn, så de gick inte att återställa någonstans."""
+    _setup(tmp_path, monkeypatch)
+    with closing(db.connect()) as conn:
+        db.save_graph_review_decision(
+            conn, item_key="test:1:entity:99", source_hash="gammal-hash",
+            action="keep", target={}, note="Beslut från en äldre extraktion",
+        )
+
+    app = _app(tmp_path)
+    assert any("inte längre finns" in warning.value for warning in app.warning)
+    next(
+        button for button in app.button if button.label == "Återställ inaktuella beslut"
+    ).click().run()
+
+    with closing(db.connect()) as conn:
+        assert db.list_graph_review_decisions(conn) == []
+
+
+def test_orphan_decisions_helper_ignores_live_items():
+    items = [{"item_key": "a"}, {"item_key": "b"}]
+    decisions = [{"item_key": "a"}, {"item_key": "c"}]
+    assert review_ui.orphan_decisions(items, decisions) == [{"item_key": "c"}]

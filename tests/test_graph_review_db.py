@@ -177,3 +177,29 @@ def test_suggestion_batch_invalid_rolls_back(conn):
     assert db.list_graph_review_suggestions(conn) == []
     with pytest.raises(ValueError):
         db.set_graph_review_suggestion_status(conn, 'one', 'hash', 'invalid')
+
+
+def test_reset_orphan_decisions_removes_only_vanished_items(conn):
+    """Regression: beslut vars objekt inte längre finns blockerade apply för alltid."""
+    save(conn, item_key='doc:1:entity:0')
+    save(conn, item_key='doc:1:entity:1')
+    save(conn, item_key='doc:2:entity:9')
+
+    removed = db.reset_orphan_graph_review_decisions(
+        conn, {'doc:1:entity:0', 'doc:1:entity:1'}, note='Objektet finns inte längre',
+    )
+
+    assert removed == 1
+    assert {d['item_key'] for d in db.list_graph_review_decisions(conn)} == {
+        'doc:1:entity:0', 'doc:1:entity:1',
+    }
+    history = db.get_graph_review_decision_history(conn, 'doc:2:entity:9')
+    assert history[-1]['action'] == 'reset'
+    assert 'finns inte längre' in history[-1]['note']
+
+
+def test_reset_orphan_decisions_keeps_everything_when_nothing_is_orphan(conn):
+    save(conn, item_key='doc:1:entity:0')
+    assert db.reset_orphan_graph_review_decisions(
+        conn, {'doc:1:entity:0'}, note='Inget att städa',
+    ) == 0

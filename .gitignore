@@ -35,6 +35,9 @@ test_ocr/
 # Genererad kunskapsgraf från /graphify (lokal tool-output + cache)
 graphify-out/
 
+# pi-agentens lokala state
+.pi/
+
 # Neo4j-datakatalog (kunskapsgrafen)
 neo4j/data/
 neo4j/.password

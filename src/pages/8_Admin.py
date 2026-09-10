@@ -8,22 +8,24 @@ import streamlit as st
 
 import db
 from admin_ui import (
+    NEO4J_OPERATION_IDS,
     format_job_status,
     group_admin_operations,
     render_active_job,
     render_llm_settings,
+    render_log_tab,
+    render_neo4j_section,
     render_operation_form,
     render_settings_tab,
 )
 from operations.job_service import (
     cancel_job,
-    read_log_tail,
     reconcile_active_job,
     start_job,
 )
 from operations.registry import get_registry
 
-st.set_page_config(page_title="Admin", page_icon="⚙️")
+st.set_page_config(page_title="Admin", page_icon="⚙️", layout="wide")
 
 TERMINAL_JOB_STATUSES = {"succeeded", "failed", "cancelled", "interrupted"}
 
@@ -31,7 +33,7 @@ st.title("Admin")
 
 registry = get_registry()
 
-# --- Aktivt jobb (progress + logg + avbryt) ---
+# --- Aktivt jobb: status och avbryt (loggen ligger i Logg-fliken) ---
 initial_job = reconcile_active_job()
 if initial_job is None:
     st.caption("Inget jobb körs.")
@@ -45,9 +47,6 @@ else:
         if st.button("Avbryt", key="active_job_cancel"):
             cancel_job()
             st.rerun(scope="app")
-        log_path = job.get("log_path")
-        if log_path:
-            st.code(read_log_tail(Path(log_path), lines=20))
 
     active_job_fragment()
 
@@ -60,8 +59,16 @@ grouped = group_admin_operations(registry)
 grouped.pop("LLM-inställningar", None)
 active_mutating = initial_job is not None and initial_job["status"] not in TERMINAL_JOB_STATUSES
 
+# Neo4j-kortet ligger först i graf-fliken: grafen kräver en startad databas.
+GRAPH_GROUP = "Extraktion och graf"
+
 ordered_group_names = [g for g in GROUP_ORDER if g in grouped]
-tab_names = [*ordered_group_names, "Jobbhistorik", "Inställningar"]
+tab_names = [*ordered_group_names, "Jobbhistorik", "Logg", "Inställningar"]
+
+conn = db.connect()
+db.init_schema(conn)
+recent_jobs = [dict(job) for job in db.list_admin_jobs(conn, limit=20)]
+conn.close()
 
 
 def _start_operation(definition, *, disabled: bool) -> None:
@@ -83,18 +90,14 @@ for tab, tab_name in zip(tabs, tab_names, strict=True):
             render_settings_tab()
             st.divider()
             render_llm_settings()
+        elif tab_name == "Logg":
+            render_log_tab(recent_jobs)
         elif tab_name == "Jobbhistorik":
-            conn = db.connect()
-            db.init_schema(conn)
-            recent_jobs = db.list_admin_jobs(conn, limit=20)
-            conn.close()
-
             if not recent_jobs:
                 st.caption("Inga jobb ännu.")
             else:
-                for row in recent_jobs:
-                    job = dict(row)
-                    status = format_job_status(job["status"])
+                for job in recent_jobs:
+                    status = format_job_status(str(job["status"]))
                     col1, col2 = st.columns([5, 1])
                     col1.markdown(
                         f"**{job['operation']}** — {status} · `{job['id'][:8]}` · {job['created_at']}"
@@ -113,10 +116,12 @@ for tab, tab_name in zip(tabs, tab_names, strict=True):
                         st.caption(f"Fel: {job['error']}")
                     if job.get("message"):
                         st.caption(f"Meddelande: {job['message']}")
-                    log_path = job.get("log_path")
-                    if log_path:
-                        with st.expander(f"Logg ({Path(log_path).name})", expanded=False):
-                            st.code(read_log_tail(Path(log_path), lines=30))
         else:
+            # Varje operation renderas som ett eget kort med rubrik och hjälp
+            # (se render_operation_form).
+            if tab_name == GRAPH_GROUP:
+                render_neo4j_section(disabled=active_mutating)
             for definition in grouped[tab_name]:
+                if definition.id in NEO4J_OPERATION_IDS:
+                    continue
                 _start_operation(definition, disabled=active_mutating)

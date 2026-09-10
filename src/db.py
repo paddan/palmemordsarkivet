@@ -14,7 +14,7 @@ import os
 import re
 import sqlite3
 import unicodedata
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Collection, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -1028,6 +1028,15 @@ def get_bad_pages(
            ORDER BY score ASC""",
         (threshold,),
     ))
+
+
+def list_page_stems(conn: sqlite3.Connection) -> list[str]:
+    """pdf_stems som har minst en per-sida-rad (underlag för merge)."""
+    return [
+        row["pdf_stem"] for row in conn.execute(
+            "SELECT DISTINCT pdf_stem FROM pdf_pages ORDER BY pdf_stem"
+        )
+    ]
 
 
 def list_redo_pages(
@@ -2453,6 +2462,35 @@ def list_graph_review_decisions(conn: sqlite3.Connection) -> list[dict]:
          "note": row["note"]}
         for row in conn.execute("SELECT * FROM graph_review_decisions ORDER BY item_key")
     ]
+
+
+def reset_orphan_graph_review_decisions(
+    conn: sqlite3.Connection, valid_item_keys: Collection[str], *, note: str,
+) -> int:
+    """Återställ beslut vars objekt inte längre finns i projektionen.
+
+    Ett sådant beslut kan aldrig appliceras igen (objektet finns inte kvar),
+    men blockerade tidigare all applicering eftersom det räknades som
+    inaktuellt. Historiken bevaras — återställningen loggas som ``reset``.
+    Returnerar antalet återställda beslut.
+    """
+    orphans = [
+        decision for decision in list_graph_review_decisions(conn)
+        if decision["item_key"] not in valid_item_keys
+    ]
+    if not orphans:
+        return 0
+    with graph_review_write_transaction(conn):
+        for decision in orphans:
+            save_graph_review_decision(
+                conn,
+                item_key=decision["item_key"],
+                source_hash=decision["source_hash"],
+                action="reset",
+                target={},
+                note=note,
+            )
+    return len(orphans)
 
 
 def save_graph_review_decision(

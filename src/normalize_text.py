@@ -159,11 +159,19 @@ def run_normalize(
             row = state_db.get_pdf_file(conn, f.stem)
             if row is None:
                 # Legacy / direktskrivna filer utan pdf_files-rad → ta med.
+                ctx.log(
+                    f"[delta] {f.stem}: normaliseras — ingen rad i pdf_files",
+                    level="debug",
+                )
                 files.append(f)
             elif row["text_mtime"] is None:
                 # Rad skapad av t.ex. mark_tesseract_done utan text_mtime —
                 # filen har aldrig normaliserats (delta-frågan kräver
                 # text_mtime IS NOT NULL och missar annars dessa).
+                ctx.log(
+                    f"[delta] {f.stem}: normaliseras — text_mtime saknas i pdf_files",
+                    level="debug",
+                )
                 files.append(f)
             elif f.stem in needing:
                 files.append(f)

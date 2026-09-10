@@ -284,3 +284,42 @@ def test_touch_mtime_command(tmp_path: Path) -> None:
     assert r.returncode == 0, r.stderr
     row = _db_row(db_path, "doc")
     assert row["text_mtime"] == txt.stat().st_mtime
+
+
+def test_answer_graph_reuses_cached_centers_only_for_the_same_answer() -> None:
+    """Regression: med stängd graf-toggle återanvändes föregående svars
+    entiteter och sparades i utredningspärmen kopplade till fel fråga."""
+    project_root = Path(__file__).resolve().parents[1]
+    text = (project_root / "src" / "Utredning.py").read_text(encoding="utf-8")
+
+    block = text.split("def _render_answer_graph", 1)[1].split("if not st.toggle(", 1)[0]
+    assert "cache_identity = (answer, _profile_runtime_key)" in block, (
+        "cache-identiteten måste beräknas innan graf-toggeln läses"
+    )
+    toggle_block = text.split("if not st.toggle(", 1)[1].split("cache_identity = (answer", 1)[0]
+    assert "answer_key" in toggle_block, (
+        "den cachade grenen måste kontrollera att cachen hör till aktuellt svar"
+    )
+
+
+def test_compare_page_keeps_result_in_session_state() -> None:
+    """Regression: jämförelseresultatet låg bara i lokala variabler och
+    raderades av varje rerun (bokmärke, PDF-knapp, sidofältsändring)."""
+    project_root = Path(__file__).resolve().parents[1]
+    text = (project_root / "src" / "pages" / "6_Jämförelse.py").read_text(encoding="utf-8")
+
+    assert 'st.session_state["compare_result"]' in text
+    render_block = text.split("result = st.session_state.get", 1)[1]
+    assert 'st.markdown(result["answer"]' in render_block
+    assert "render_source_cards" in render_block
+
+
+def test_admin_page_has_a_log_tab_that_owns_all_logging() -> None:
+    """All loggning ska samlas i Logg-fliken, inte renderas löst på sidan."""
+    project_root = Path(__file__).resolve().parents[1]
+    text = (project_root / "src" / "pages" / "8_Admin.py").read_text(encoding="utf-8")
+
+    assert '"Logg"' in text.split("tab_names = ", 1)[1].split("\n", 1)[0]
+    assert 'render_log_tab(recent_jobs)' in text
+    assert "read_log_tail" not in text
+    assert "st.code(" not in text

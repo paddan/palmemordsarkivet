@@ -32,6 +32,7 @@ from db import (
     list_map_observation_candidates,
     list_map_observations,
     list_map_places,
+    list_page_stems,
     list_source_annotations,
     list_source_bookmarks,
     llm_corrected,
@@ -1230,3 +1231,15 @@ def test_create_admin_job_duplicate_id_is_not_active_job_error(tmp_path):
     with pytest.raises(ActiveAdminJobError, match="job-2"):
         create_admin_job(conn, job_id="job-3", operation="ingest",
                          params_json="{}", log_path="job-3.log")
+
+
+def test_list_page_stems_returns_documents_with_pages(tmp_path):
+    conn = _fresh(tmp_path)
+    for stem, page in (("b", 1), ("a", 1), ("a", 2)):
+        record_page(
+            conn, pdf_stem=stem, page_num=page, engine="tesseract",
+            text=f"text {stem}{page}", score=80.0,
+        )
+
+    assert list_page_stems(conn) == ["a", "b"]
+    assert list_page_stems(_fresh(tmp_path / "tom")) == []

@@ -186,9 +186,9 @@ def run_llm_review(*, profile: str = "", limit: int = 0, context=None) -> int:
             profiles = _llm_config.load_all()
             profile_name = profiles["default"]
             saved = profiles["profiles"][profile_name]
+        cfg = _llm_config.resolve_runtime_profile(saved, BACKENDS)
     except (KeyError, ValueError) as exc:
         raise OperationFailed(str(exc)) from exc
-    cfg = _llm_config.resolve_runtime_profile(saved, BACKENDS)
     if cfg.get("kind") not in {"claude", "openai"}:
         raise OperationFailed(f"LLM-backenden {cfg.get('kind')!r} stöds inte.")
     if cfg["kind"] == "openai" and cfg.get("api_key_env") and not cfg.get("api_key"):

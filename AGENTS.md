@@ -160,6 +160,7 @@ Kör med `.venv/bin/python`:
 .venv/bin/python scripts/graph_review_llm.py --profile "Standard"
 .venv/bin/python scripts/graph_sync.py                 # förhandsvisa skillnader
 .venv/bin/python scripts/graph_sync.py --apply --expected <kontrollkod>
+.venv/bin/python scripts/graph_sync.py --reset-stale   # beslut vars objekt försvunnit
 # Äldre graf utan ägarmärkning: lägg till --adopt-legacy i båda kommandona.
 ```
 
@@ -174,8 +175,35 @@ Env-variabler: `CLAUDE_CODE_OAUTH_TOKEN` (Pro/Max, räknas mot prenumeration) el
 - Workern startas fristående (`start_new_session=True`) och överlever webbläsare/Streamlit-omstarter. Heartbeat skrivs var 5:e sekund; heartbeat äldre än 15 s utan levande process → `interrupted`.
 - Hemliga parametrar (API-nycklar, token, lösenord) sparas aldrig i `params_json` eller loggar; bakgrundsjobb läser dem ur processmiljön, och kommandorader redigeras före loggning.
 - Jobbloggar: `generated/admin_jobs/<job-id>.log` (append-only, tidsstämplad).
-- Cancel sker kontrollerat via `cancel_requested` → SIGTERM till processgrupp → SIGKILL efter grace; ett jobb får aldrig `succeeded` efter begärd cancel.
-- Adminsidan och CLI:n genereras ur samma `src/operations/registry.py` — lägg aldrig till operationer eller flaggor på bara ena sidan.
+- Cancel sker kontrollerat via `cancel_requested` → SIGTERM till processgrupp → SIGKILL efter grace; ett jobb får aldrig `succeeded` efter begärd cancel. Efter SIGKILL markeras jobbet `interrupted` direkt och workerns barn (egna sessioner) dödas separat, så en hårt dödad worker varken låser `active_slot` eller lämnar kvar tunga processer.
+- En worker som dött utan att skriva status upptäcks som zombie (inte som levande PID) av `reconcile_active_job`, som då frigör `active_slot`.
+- Adminsidan och CLI:n genereras ur samma `src/operations/registry.py` — lägg aldrig till operationer eller flaggor på bara ena sidan. Nya parametrar hamnar automatiskt i formulärets rutnät (`FORM_COLUMNS` fält per rad; sidan körs i full bredd) och hemliga parametrar får inget fält. Varje operation visas som ett eget kort (`st.container(border=True)`) med rubrik (operationens etikett) — utom Neo4j-operationerna, som är parameterlösa och delas upp i ett kort med knapparna Starta/Stopp/Status (`render_neo4j_section`), vilket alltid renderas först i fliken *Extraktion och graf* eftersom grafen kräver en startad databas — och fälten grupperas per sort av `parameter_groups` (Alternativ/Inställningar/Sökvägar) så att kryssrutor och talfält inte blandas. Varje kort har också en hjälp till höger (`OPERATION_HELP` i `src/admin_ui.py`: en förklaring plus en punktlista som förklarar varje val, med etiketter hämtade från formuläret och samma caption-stil som förklaringen via `section_help_markdown`). Punktlistan följer formulärets ordning (`form_field_order`) och **varje fält som visas måste ha en punkt** — testerna `test_help_explains_every_field_in_every_operation`, `test_help_bullets_follow_the_field_order` och `test_every_admin_operation_has_a_help_text` bevakar det. Äldre LLM-fält (`provider`/`model`/`base_url`) döljs i formulär som har en `profile`-parameter (`LEGACY_LLM_PARAMS`) men finns kvar som CLI-flaggor. Etiketter, knapptext och kortare rubriker per operation sätts i `FORM_LAYOUT` i `src/admin_ui.py` — lägg inte in layout i registret, och lägg inte till flaggor bara i formuläret. Talfält hålls smala (`FIELD_WIDTHS`, men över Streamlits brytpunkt ~148 px där stegknapparna döljs) och deras titel ritas separat ovanför fältet så att `width` inte tvingar fram radbrytning; radvikterna i `row_specs` packar fälten till vänster. Parametrar där användaren väljer en befintlig fil får en filväljare i `FILE_PICKERS` (operation, parameter) → källor + mönster, så att rullistan öppnar rätt katalog för funktionens syfte (PDF-arkivet, `state:pdf_pages` för dokument med per-sida-text, `generated/text`) — lägg inte till ett nytt filnamnsfält som textinmatning. Operationer som bara ska köras från CLI:t sätts till `admin_visible=False` (t.ex. `download` och `download-wpu`, som ingår i `run-pipeline`).
+
+## Loggning
+
+Lägg alltid in relevant debugloggning när du bygger eller ändrar funktionalitet.
+En framtida felsökning ska kunna se *varför* något hände — vilket värde som
+jämfördes, vilken fil som hoppades över och varför — inte bara att det hände.
+
+- Använd den befintliga vägen: `ctx.log("<vad och varför>", level="debug")` i
+  pipeline-/jobbkod (hamnar som `[debug]` i jobbloggen), `level="warning"` för
+  något som gick att fortsätta förbi och `level="error"` när en enhet
+  misslyckades. Riktiga fel skrivs dessutom med
+  `errors_log.log_error(component, item, message)`.
+- Logga beslut och avvikelser med kontext: fil/sida/id, värdet som jämfördes och
+  orsaken till att något hoppades över, t.ex. `hoppar 123.pdf: text_mtime äldre
+  än ingest-raden`. Undvik per-post-spam i heta loopar — logga summeringar
+  (antal, första exemplen) eller bara vid avvikelse.
+- Logga aldrig hemligheter (API-nycklar, token, lösenord) och inte hela
+  dokumenttexter.
+- Nivåerna syns och filtreras i Admin → Logg (ett fönster, källa väljs i en
+  lista: systemloggen `errors.log` eller en enskild jobblogg). `error` ska vara
+  så sällsynt att den alltid betyder att något faktiskt misslyckades.
+- Debugrader skrivs bara när debugloggning är på: växlingen **Debugloggning** i
+  Admin → Logg (sparas i `generated/admin_settings.json` och sätts som
+  `PALME_DEBUG_LOG` för jobb som startas efteråt) eller `PALME_DEBUG_LOG=1` i
+  miljön för förgrundskörning. `OperationContext.log(..., level="debug")` är
+  därför gratis när växlingen är av och får användas frikostigt.
 
 ## Non-obvious Design Decisions
 
@@ -190,7 +218,10 @@ får aldrig sparas. OpenAI-kompatibla modellistor hämtas från respektive
 `/v1/models` med fem minuters cache; den lokala katalogen är endast reserv när
 endpointen inte kan nås. Ett uttryckligt profilnamn måste finnas; okända namn
 ska avbryta med `OperationFailed` före LLM-anrop i stället för att falla tillbaka
-till Claude. En tom `api_key_env` för en känd molnbackend använder dess
+till Claude. Samma gäller ett okänt `backend_name` i profilen:
+`resolve_runtime_profile` höjer `ValueError` i stället för att välja katalogens
+första backend, och anroparen gör om det till ett begripligt fel. En tom
+`api_key_env` för en känd molnbackend använder dess
 katalogdefinierade standardvariabel.
 
 **PDF-opener för citat/källor**: inline-citat och källkort använder `casebook_ui.render_pdf_opener` + `citations.pdf_anchor`. När sidnummer finns ska länken bära `page=N`; openern validerar både PDF-token och sida, bygger `file://...#page=N` och öppnar PDF:en med `webbrowser.open(..., new=2)` så den hamnar i en ny webbläsarflik i stället för macOS Preview. WPU-uppslag måste även acceptera stammar där ett `Pol-..._...`-dokument-ID följs direkt av titeltext. Utredning, Jämförelse, Utredningspärm och grafens dokumentöppningar ska använda samma opener.
@@ -199,7 +230,13 @@ katalogdefinierade standardvariabel.
 
 **Grafgranskning (`graph/review*.py`)**: Originalen i `doc_entities` ändras aldrig.
 Manuella beslut gäller en exakt förekomst och sidans payload-hash; efter ny
-extraktion blir beslutet inaktuellt och appliceras inte. LLM-granskning använder
+extraktion blir beslutet inaktuellt och appliceras inte. Beslut vars objekt helt
+försvunnit (ny extraktion gav färre poster) kan aldrig appliceras igen men
+blockerade tidigare all uppdatering; de visas därför i Graf-vyns steg 3 med
+knappen **Återställ inaktuella beslut**, och kan återställas i CLI med
+`--reset-stale` (utan `--apply` — underlaget ändras, så en ny förhandsvisning
+krävs efteråt). Historiken bevaras som `reset`.
+LLM-granskning använder
 en namngiven profil och sparar endast källbundna förslag, aldrig beslut. Neo4j
 uppdateras först efter en sparad förhandsvisning vars SQLite-underlag, mål-URI
 och levande graf-fingerprint fortfarande matchar; importerade kanter ersätts i

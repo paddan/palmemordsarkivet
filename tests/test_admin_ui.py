@@ -103,8 +103,29 @@ def test_format_job_status_returns_swedish_labels() -> None:
 
 def test_load_settings_defaults_are_relative_to_base() -> None:
     settings = load_settings()
-    # Endast base-path lagras; underkatalogerna är hårdkodade.
-    assert settings == {"base": str(ROOT)}
+    # Base-path och debug-växlingen lagras; underkatalogerna är hårdkodade.
+    assert settings == {"base": str(ROOT), "debug_log": ""}
+
+
+def test_debug_logging_setting_round_trips_and_sets_the_environment(tmp_path, monkeypatch) -> None:
+    import os
+
+    from operations.context import DEBUG_ENV
+
+    monkeypatch.setattr(admin_ui, "SETTINGS_FILE", tmp_path / "admin_settings.json")
+    monkeypatch.delenv(DEBUG_ENV, raising=False)
+
+    assert admin_ui.apply_debug_logging(admin_ui.load_settings()) is False
+    assert os.environ[DEBUG_ENV] == ""
+
+    admin_ui.save_settings({admin_ui.BASE_KEY: str(ROOT), admin_ui.DEBUG_KEY: "1"})
+    assert admin_ui.load_settings()[admin_ui.DEBUG_KEY] == "1"
+    assert admin_ui.apply_debug_logging(admin_ui.load_settings()) is True
+    assert os.environ[DEBUG_ENV] == "1"
+
+    # Base-path-fältet får inte tappa debug-växlingen.
+    admin_ui.save_settings({admin_ui.BASE_KEY: "/tmp/base", admin_ui.DEBUG_KEY: "1"})
+    assert admin_ui.load_settings() == {"base": "/tmp/base", "debug_log": "1"}
 
 
 def test_resolve_path_default_joins_base_and_relative() -> None:
@@ -402,3 +423,749 @@ def test_pipeline_form_reveals_default_llm_profile_only_when_enabled(tmp_path) -
     assert not app.exception
     assert len(profiles) == 1
     assert profiles[0].value == "DeepSeek"
+
+
+def test_job_option_labels_show_operation_status_and_short_id() -> None:
+    labels = admin_ui.job_option_labels([
+        {"operation": "run-pipeline", "status": "running", "id": "abcdef1234567890",
+         "created_at": "2026-01-02T03:04:05+00:00"},
+        {"operation": "ingest", "status": "okänd-status", "id": "zzz", "created_at": "igår"},
+    ])
+    assert labels[0].startswith("run-pipeline · Körs · abcdef12 · ")
+    assert labels[1].startswith("ingest · okänd-status · zzz · ")
+
+
+def test_filter_log_lines_filters_on_level_and_query() -> None:
+    text = (
+        "2026-01-01 [info] Startar\n"
+        "2026-01-01 [warning] Saknar fil\n"
+        "2026-01-01 [error] SKIP foo.pdf: trasig\n"
+        "fortsättning på felet\n"
+        "2026-01-01 [info] Klart\n"
+    )
+
+    assert admin_ui.filter_log_lines(text) == text.splitlines()
+    assert admin_ui.filter_log_lines(text, level="error") == [
+        "2026-01-01 [error] SKIP foo.pdf: trasig",
+        "fortsättning på felet",
+    ]
+    assert admin_ui.filter_log_lines(text, level="warning") == ["2026-01-01 [warning] Saknar fil"]
+    # Fortsättningsraden ärver föregående rads nivå och följer med på fritextsökning.
+    assert admin_ui.filter_log_lines(text, query="fortsättning") == ["fortsättning på felet"]
+    assert admin_ui.filter_log_lines(text, level="info", query="klart") == [
+        "2026-01-01 [info] Klart",
+    ]
+
+
+def test_filter_log_lines_recognizes_debug_level() -> None:
+    """Debug är en riktig nivå i filtret — annars ärver raden föregående nivå."""
+    text = (
+        "2026-01-01 [info] Startar\n"
+        "2026-01-01 [debug] jämför text_mtime 12.5 mot 12.0\n"
+        "2026-01-01 [error] misslyckades\n"
+    )
+    assert admin_ui.filter_log_lines(text, level="debug") == [
+        "2026-01-01 [debug] jämför text_mtime 12.5 mot 12.0",
+    ]
+    assert "debug" in admin_ui.LOG_LEVEL_LABELS
+    assert admin_ui.LOG_LEVEL_LABELS["debug"] == "Debug"
+
+
+def test_filter_log_lines_treats_level_less_lines_as_errors() -> None:
+    """Felloggen har inga nivåmarkörer — alla dess rader är fel."""
+    text = "2026-01-01T10:00:00\tdownload\tfile.pdf\tHTTP 404\n"
+    assert admin_ui.filter_log_lines(text, level="error") == text.splitlines()
+    assert admin_ui.filter_log_lines(text, level="info") == []
+    assert admin_ui.filter_log_lines("", level="all") == []
+
+
+def _admin_page_app(tmp_path, monkeypatch, *, active: bool = True):
+    """Rendera adminsidan med ett jobb, en jobblogg och en fellogg."""
+    import os
+    from datetime import UTC, datetime
+
+    import db
+
+    monkeypatch.setenv("STATE_DB", str(tmp_path / "state.db"))
+    monkeypatch.setattr(admin_ui, "error_log_path", lambda: tmp_path / "errors.log")
+
+    job_log = tmp_path / "jobb.log"
+    job_log.write_text(
+        "2026-01-01T10:00:00+00:00 [info] Startar pipeline\n"
+        "2026-01-01T10:00:05+00:00 [info] Hämtar kalkylbladet\n"
+        "2026-01-01T10:00:10+00:00 [warning] Saknar textfil för 123.pdf\n"
+        "2026-01-01T10:00:15+00:00 [error] SKIP 456.pdf: trasig PDF\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "errors.log").write_text(
+        "2026-01-01T09:00:00\tdownload\t789.pdf\tHTTP 404\n", encoding="utf-8"
+    )
+
+    conn = db.connect(tmp_path / "state.db")
+    db.init_schema(conn)
+    db.create_admin_job(
+        conn, job_id="job-abc12345", operation="run-pipeline",
+        params_json="{}", log_path=str(job_log),
+    )
+    db.claim_admin_job(conn, "job-abc12345", pid=os.getpid())
+    if active:
+        conn.execute(
+            "UPDATE admin_jobs SET heartbeat_at=? WHERE id='job-abc12345'",
+            (datetime.now(UTC).isoformat(),),
+        )
+    else:
+        db.finish_admin_job(conn, "job-abc12345", status="succeeded", exit_code=0)
+    conn.commit()
+    conn.close()
+
+    from streamlit.testing.v1 import AppTest
+
+    at = AppTest.from_file("src/pages/8_Admin.py")
+    # Håll LLM-panelen borta från repots riktiga konfigurationsfil.
+    monkeypatch.setattr("config.CONFIG_FILE", tmp_path / "llm_config.json")
+    return at.run(timeout=60)
+
+
+def _shown_log(at) -> str:
+    return "\n".join(code.value for code in at.code)
+
+
+def _select_log_source(at, value: str):
+    return next(box for box in at.selectbox if box.key == "log_source").select(value).run()
+
+
+def test_admin_log_tab_defaults_to_the_running_job(tmp_path, monkeypatch) -> None:
+    """Ett enda loggfönster: kör ett jobb → dess logg, annars systemloggen."""
+    at = _admin_page_app(tmp_path, monkeypatch)
+
+    assert not list(at.exception)
+    assert "Logg" in [tab.label for tab in at.tabs]
+    assert [box.value for box in at.selectbox if box.key == "log_source"] == ["job-abc12345"]
+    shown = _shown_log(at)
+    assert "Startar pipeline" in shown
+    assert "SKIP 456.pdf: trasig PDF" in shown
+    assert "HTTP 404" not in shown  # felloggen ligger bakom systemloggen
+
+
+def test_admin_log_tab_can_show_the_system_log(tmp_path, monkeypatch) -> None:
+    at = _admin_page_app(tmp_path, monkeypatch)
+
+    at = _select_log_source(at, "system")
+
+    shown = _shown_log(at)
+    assert "HTTP 404" in shown
+    assert "Startar pipeline" not in shown
+    assert any("Systemlogg" in caption.value for caption in at.caption)
+
+
+def test_admin_log_tab_filters_on_level_and_search(tmp_path, monkeypatch) -> None:
+    at = _select_log_source(_admin_page_app(tmp_path, monkeypatch), "system")
+    at = _select_log_source(at, "job-abc12345")
+
+    next(box for box in at.selectbox if box.key == "log_level").select("error").run()
+    shown = _shown_log(at)
+    assert "SKIP 456.pdf: trasig PDF" in shown
+    assert "Hämtar kalkylbladet" not in shown
+    assert "Saknar textfil" not in shown
+
+    next(box for box in at.selectbox if box.key == "log_level").select("warning").run()
+    shown = _shown_log(at)
+    assert "Saknar textfil för 123.pdf" in shown
+    assert "Startar pipeline" not in shown
+
+    next(box for box in at.selectbox if box.key == "log_level").select("all").run()
+    next(box for box in at.text_input if box.key == "log_query").input("kalkylbladet").run()
+    shown = _shown_log(at)
+    assert "Hämtar kalkylbladet" in shown
+    assert "Startar pipeline" not in shown
+
+
+def test_admin_log_tab_defaults_to_system_log_without_a_running_job(tmp_path, monkeypatch) -> None:
+    at = _admin_page_app(tmp_path, monkeypatch, active=False)
+
+    assert [box.value for box in at.selectbox if box.key == "log_source"] == ["system"]
+    assert "HTTP 404" in _shown_log(at)
+
+
+def test_admin_log_tab_survives_a_deleted_job_selection(tmp_path, monkeypatch) -> None:
+    """Ett borttaget jobb får inte krascha vyn — valet faller tillbaka."""
+    import db
+
+    at = _select_log_source(_admin_page_app(tmp_path, monkeypatch), "job-abc12345")
+    with db.connect(tmp_path / "state.db") as conn:
+        db.finish_admin_job(conn, "job-abc12345", status="cancelled", exit_code=130)
+        db.delete_admin_job(conn, "job-abc12345")
+
+    at.run(timeout=60)
+    assert not list(at.exception)
+    assert [box.value for box in at.selectbox if box.key == "log_source"] == ["system"]
+
+
+def test_operation_form_renders_every_parameter_and_the_start_button(tmp_path) -> None:
+    """Rutnätet får inte tappa fält eller startknappen."""
+    from streamlit.testing.v1 import AppTest
+
+    app = AppTest.from_string(
+        "import admin_ui\n"
+        "from operations.registry import get_registry\n"
+        "admin_ui.render_operation_form(get_registry().get('ocr'), settings={'base': '.'})\n"
+    ).run(timeout=20)
+
+    assert not app.exception
+    keys = {
+        widget.key
+        for widget in [*app.selectbox, *app.text_input, *app.checkbox,
+                       *app.number_input, *app.button]
+    }
+    for expected in (
+        "ocr__mode", "ocr__threshold", "ocr__source", "ocr__skip_redo",
+        "ocr__fallback_only", "ocr__jobs", "ocr__start",
+    ):
+        assert expected in keys
+    # Hårdkodade sökvägar injiceras tyst — de ska inte bli egna fält.
+    assert "ocr__root" not in keys
+    assert "ocr__txt" not in keys
+
+
+def test_parameter_groups_keep_related_fields_together() -> None:
+    """Kryssrutor, inställningar och sökvägar ska hamna i egna grupper."""
+    from operations.models import ParameterDefinition
+
+    def param(name: str, kind: str) -> ParameterDefinition:
+        return ParameterDefinition(name, (f"--{name}",), kind, "", name)
+
+    parameters = [
+        param("skip", "bool"), param("mode", "choice"), param("dry", "bool"),
+        param("jobs", "int"), param("inp", "path"),
+    ]
+    groups = admin_ui.parameter_groups(parameters)
+
+    assert [name for name, _ in groups] == ["Alternativ", "Inställningar", "Sökvägar"]
+    by_name = dict(groups)
+    assert [parameter.name for parameter in by_name["Alternativ"]] == ["skip", "dry"]
+    assert [parameter.name for parameter in by_name["Inställningar"]] == ["mode", "jobs"]
+    assert [parameter.name for parameter in by_name["Sökvägar"]] == ["inp"]
+
+    # Kryssrutor en per rad; breda fält först och talfält sist i kompakta rader.
+    assert [[p.name for p in row] for row in admin_ui.group_rows("Alternativ", by_name["Alternativ"])] == [
+        ["skip"], ["dry"],
+    ]
+    assert [[p.name for p in row] for row in admin_ui.group_rows("Inställningar", by_name["Inställningar"])] == [
+        ["mode"], ["jobs"],
+    ]
+
+
+def test_parameter_groups_skip_empty_groups() -> None:
+    from operations.models import ParameterDefinition
+
+    only_bools = [ParameterDefinition("a", ("--a",), "bool", False, "a")]
+    assert [name for name, _ in admin_ui.parameter_groups(only_bools)] == ["Alternativ"]
+    assert admin_ui.parameter_groups([]) == []
+
+
+def test_form_labels_headers_and_buttons_come_from_the_layout() -> None:
+    assert admin_ui.form_button_label("run-pipeline", "Starta Full pipeline") == "Kör pipeline"
+    assert admin_ui.form_button_label("ocr", "Starta Full OCR") == "Starta Full OCR"
+    # Utan överstyrning blir operationens etikett rubriken.
+    assert admin_ui.form_header("ocr", "Full OCR") == "Full OCR"
+    assert admin_ui.form_header("ocr") == ""
+
+    labels = admin_ui.FORM_LAYOUT["run-pipeline"]["labels"]
+    assert labels == {
+        "skip_wpu": "Hoppa över wpu",
+        "skip_redo": "Hoppa över Surya",
+        "with_llm": "Kör LLM-korrigering",
+        "jobs": "Parallella processer",
+        "test_limit": "Testläge: Antal filer att ladda ner",
+    }
+
+
+def test_admin_log_filters_are_stacked_in_a_narrow_column() -> None:
+    text = (ROOT / "src" / "admin_ui.py").read_text(encoding="utf-8")
+    log_tab = text.split("def render_log_tab", 1)[1]
+    assert "st.columns([1, 4]" in log_tab, "filtren ska staplas i en smal kolumn"
+
+
+def test_number_fields_are_narrow(monkeypatch) -> None:
+    """Talen är små (antal filer, trösklar) — fälten ska inte spänna över raden."""
+    import streamlit as st
+
+    from operations.models import ParameterDefinition
+
+    calls: list[dict] = []
+    labels: list[str] = []
+    monkeypatch.setattr(
+        st, "number_input",
+        lambda label, **kwargs: calls.append(kwargs) or kwargs.get("value"),
+    )
+    monkeypatch.setattr(
+        st, "markdown", lambda body, **kwargs: labels.append(body) or None,
+    )
+
+    parameter = ParameterDefinition("jobs", ("--jobs",), "int", 4, "Parallella processer")
+    value = admin_ui._render_parameter(
+        parameter, widget_key="k", version=0, disabled=False, label="Parallella processer",
+    )
+
+    assert value == 4
+    assert calls[0]["width"] == admin_ui.FIELD_WIDTHS["int"]
+    # Streamlit döljer -/+ under 7.5rem (120 px) + stegknapparnas bredd.
+    assert admin_ui.FIELD_WIDTHS["int"] > 150, "stegknapparna försvinner på smala fält"
+    assert admin_ui.FIELD_WIDTHS["int"] <= 190, "fältet ska vara smalt, inte fullt brett"
+    # Titeln ritas separat så att ``width`` inte tvingar fram radbrytning.
+    assert calls[0]["label_visibility"] == "collapsed"
+    assert "Parallella processer" in labels[0]
+
+
+def test_pipeline_tab_shows_only_the_pipeline_operation(tmp_path, monkeypatch) -> None:
+    """Nedladdningarna körs som första steg i pipelinen eller via CLI:t."""
+    from streamlit.testing.v1 import AppTest
+
+    import db
+
+    monkeypatch.setenv("STATE_DB", str(tmp_path / "state.db"))
+    with db.connect(tmp_path / "state.db") as conn:
+        db.init_schema(conn)
+    monkeypatch.setattr("config.CONFIG_FILE", tmp_path / "llm_config.json")
+
+    app = AppTest.from_file("src/pages/8_Admin.py").run(timeout=60)
+
+    assert not app.exception
+    def label_of(widget) -> str:
+        return widget.label
+
+    assert [label_of(box) for box in app.checkbox if box.key.startswith("run-pipeline__")] == [
+        "Hoppa över wpu", "Hoppa över Surya", "Kör LLM-korrigering",
+    ]
+    assert [box.label for box in app.number_input if box.key.startswith("run-pipeline__")] == [
+        "Parallella processer", "Testläge: Antal filer att ladda ner",
+    ]
+    assert [button.label for button in app.button if button.key == "run-pipeline__start"] == [
+        "Kör pipeline",
+    ]
+
+    # Nedladdningsformulären är dolda i adminsidan men finns kvar i CLI:t.
+    assert [button.label for button in app.button
+            if button.key == "run-pipeline__start"] == ["Kör pipeline"]
+    assert not [button for button in app.button
+                if button.key in ("download__start", "download-wpu__start")]
+    assert not [field for field in app.text_input if field.key == "download__sheet_id"]
+
+    from operations.registry import get_registry
+
+    registry = get_registry()
+    assert [definition.id for definition in admin_ui.group_admin_operations(registry)["Pipeline"]] == [
+        "run-pipeline",
+    ]
+    download_flags = {flag for parameter in registry.get("download").parameters
+                      for flag in parameter.flags}
+    assert "--dry-run" in download_flags and "--rebuild" in download_flags
+
+
+def test_numeric_rows_are_compact_and_labels_fit() -> None:
+    """Två talfält ska ligga intill varandra, med plats för titeln i sin kolumn."""
+    from operations.models import ParameterDefinition
+
+    def param(name: str, kind: str, help_text: str) -> ParameterDefinition:
+        return ParameterDefinition(name, (f"--{name}",), kind, 0, help_text)
+
+    row = [
+        param("jobs", "int", "Parallella processer"),
+        param("test_limit", "int", "Testläge: Antal filer att ladda ner"),
+    ]
+
+    assert admin_ui.is_numeric_row(row) is True
+    widths, total = admin_ui.numeric_row_spec(row, {})
+
+    # Raden har fast bredd: fälten hamnar intill varandra i stället för att
+    # spridas ut över en sida i full bredd.
+    assert total < 520
+    for parameter, width in zip(row, widths, strict=True):
+        assert width <= admin_ui.FIELD_WIDTHS["int"] + 120
+        assert admin_ui.label_width_px(parameter.help) <= width, "titeln radbryts"
+    # Första fältet fyller nästan hela sin kolumn → litet avstånd till nästa.
+    assert widths[0] - admin_ui.FIELD_WIDTHS["int"] <= 32
+
+    mixed = [param("inp", "path", "PDF"), param("jobs", "int", "Parallella processer")]
+    assert admin_ui.is_numeric_row(mixed) is False
+
+
+def test_every_admin_section_is_a_card_with_heading_and_help(tmp_path, monkeypatch) -> None:
+    """Varje operation ska vara ett eget avsnitt med rubrik och hjälptext."""
+    from operations.registry import get_registry
+
+    at = _admin_page_app(tmp_path, monkeypatch, active=False)
+
+    assert not list(at.exception)
+    grouped = admin_ui.group_admin_operations(get_registry())
+    grouped.pop("LLM-inställningar", None)
+
+    headings = [sub.value for sub in at.subheader]
+    captions = [caption.value for caption in at.caption]
+    for definitions in grouped.values():
+        for definition in definitions:
+            if definition.id in admin_ui.NEO4J_OPERATION_IDS:
+                # Neo4j-operationerna delar ett kort med egna knappar.
+                assert admin_ui.NEO4J_HEADING in headings
+                assert any(caption.startswith(admin_ui.NEO4J_HELP.text) for caption in captions)
+                continue
+            assert admin_ui.form_header(definition.id, definition.label) in headings
+            assert any(
+                caption.startswith(admin_ui.operation_help(definition.id).text)
+                for caption in captions
+            )
+
+    # Kortet (border) ger avgränsningen mellan sektionerna.
+    source = (ROOT / "src" / "admin_ui.py").read_text(encoding="utf-8")
+    form = source.split("def render_operation_form", 1)[1].split("def render_active_job", 1)[0]
+    assert "st.container(border=True)" in form
+
+
+def test_form_fields_are_grouped_in_render_order() -> None:
+    """Kryssrutor får inte blandas med val och talfält i samma rutnät."""
+    from streamlit.testing.v1 import AppTest
+
+    app = AppTest.from_string(
+        "import admin_ui\n"
+        "from operations.registry import get_registry\n"
+        "admin_ui.render_operation_form(get_registry().get('ocr-pages'), settings={'base': '.'})\n"
+    ).run(timeout=20)
+
+    assert not app.exception
+    kinds = [type(element).__name__ for element in list(app.main)]
+    headings = [getattr(element, "value", "") for element in list(app.main)]
+
+    first_settings = headings.index("##### Inställningar")
+    first_paths = headings.index("##### Sökvägar")
+    assert headings.index("##### Alternativ") < first_settings < first_paths
+    # Alla kryssrutor ligger i Alternativ-gruppen, före val/talfälten.
+    assert "Checkbox" not in kinds[first_settings:first_paths + 1]
+    checkboxes = [index for index, kind in enumerate(kinds) if kind == "Checkbox"]
+    assert checkboxes and max(checkboxes) < first_settings
+
+
+def _column_index_of(app, predicate) -> int | None:
+    """Hitta vilken kolumn (0 = vänster) ett element ligger i."""
+    def walk(node, depth: int = 0, column: int | None = None) -> int | None:
+        if depth > 4:
+            return None
+        try:
+            children = list(node.children.values())
+        except AttributeError:
+            return None
+        for index, child in enumerate(children):
+            name = type(child).__name__
+            current = index if name == "Column" else column
+            if predicate(child):
+                return current
+            found = walk(child, depth + 1, current)
+            if found is not None:
+                return found
+        return None
+
+    return walk(app.main)
+
+
+def test_legacy_llm_fields_are_hidden_for_every_operation_with_a_profile() -> None:
+    """Provider/modell/URL styrs av LLM-konfigurationen och ska inte visas."""
+    from operations.registry import get_registry
+
+    registry = get_registry()
+    for operation_id in ("llm-correct", "extract-entities", "extract-map-observations"):
+        definition = registry.get(operation_id)
+        names = [
+            parameter.name
+            for parameter in admin_ui._visible_parameters(definition, operation_id)
+        ]
+        assert "profile" in names
+        assert not set(names) & set(admin_ui.LEGACY_LLM_PARAMS)
+        # Flaggorna finns kvar i registret så att CLI:t fungerar som förut.
+        flags = {flag for parameter in definition.parameters for flag in parameter.flags}
+        assert {"--provider", "--model", "--base-url"} <= flags
+
+
+def test_no_admin_form_shows_a_legacy_llm_field(tmp_path, monkeypatch) -> None:
+    """Provider, modell och API-URL styrs av LLM-konfigurationen — inga fält."""
+    at = _admin_page_app(tmp_path, monkeypatch, active=False)
+
+    assert not list(at.exception)
+    labels = [
+        widget.label
+        for widget in [*at.text_input, *at.selectbox, *at.number_input, *at.checkbox,
+                       *at.toggle, *at.radio]
+    ]
+    removed = {"LLM-provider", "Modellnamn", "API-URL"}
+    assert not set(labels) & removed, f"kvar i adminformulären: {sorted(set(labels) & removed)}"
+    # Profilväljaren finns kvar i varje operation som har en profilparameter.
+    from operations.registry import get_registry
+
+    visible_profiles = [
+        definition for definition in get_registry().admin_operations()
+        if any(
+            parameter.name == "profile"
+            for parameter in admin_ui._visible_parameters(definition, definition.id)
+        )
+    ]
+    assert labels.count("LLM-konfiguration") == len(visible_profiles)
+
+
+def test_section_help_is_rendered_to_the_right_of_the_fields() -> None:
+    from streamlit.testing.v1 import AppTest
+
+    app = AppTest.from_string(
+        "import admin_ui\n"
+        "from operations.registry import get_registry\n"
+        "admin_ui.render_operation_form(get_registry().get('ocr-pages'), settings={'base': '.'})\n"
+    ).run(timeout=20)
+
+    assert not app.exception
+    help_info = admin_ui.operation_help("ocr-pages")
+    help_captions = [
+        element.value for element in app.caption
+        if element.value.startswith(help_info.text)
+    ]
+    assert len(help_captions) == 1, "förklaring och punktlista ska vara en hjälptext"
+    assert "- **Motor** —" in help_captions[0]
+    for _, meaning in help_info.options:
+        assert f"— {meaning}" in help_captions[0]
+    assert _column_index_of(
+        app, lambda element: type(element).__name__ == "Caption"
+        and element.value.startswith(help_info.text),
+    ) == 1, "hjälpen ska ligga i högerkolumnen"
+    assert _column_index_of(
+        app, lambda element: type(element).__name__ == "Subheader",
+    ) == 0, "rubriken hör till fältkolumnen"
+
+
+def test_every_admin_operation_has_a_help_text() -> None:
+    from operations.registry import get_registry
+
+    # LLM-inställningar renderas av panelen i Inställningar, inte som ett kort.
+    missing = [
+        definition.id
+        for definition in get_registry().admin_operations()
+        if definition.group != "LLM-inställningar"
+        and not admin_ui.operation_help(definition.id).text
+    ]
+    assert missing == [], "lägg till en kort förklaring i OPERATION_HELP"
+
+
+def test_help_explains_every_field_in_every_operation() -> None:
+    """Alla fält som visas ska ha en punkt, och inga punkter ska peka fel."""
+    from operations.registry import get_registry
+
+    for definition in get_registry().admin_operations():
+        if definition.group == "LLM-inställningar":
+            continue
+        fields = [parameter.name for parameter in admin_ui.form_fields(definition)]
+        options = admin_ui.operation_help(definition.id).options
+        explained = dict(options)
+
+        missing = [name for name in fields if name not in explained]
+        assert missing == [], f"{definition.id} saknar förklaring för {missing}"
+
+        parameter_names = {parameter.name for parameter in definition.parameters}
+        stale = [name for name, _ in options if name not in parameter_names]
+        assert stale == [], f"{definition.id} förklarar okända fält {stale}"
+
+        # Fält som aldrig renderas (tysta sökvägar) ska inte ha någon punkt.
+        silent = admin_ui._silent_parameters(list(definition.parameters))
+        assert not set(explained) & silent, f"{definition.id} förklarar dolda fält"
+
+
+def test_help_bullets_follow_the_field_order() -> None:
+    """Punktlistan ska ha samma ordning som fälten i formuläret."""
+    from streamlit.testing.v1 import AppTest
+
+    for operation_id in ("ocr", "ocr-pages", "merge-wpu", "ingest", "run-pipeline"):
+        app = AppTest.from_string(
+            "import admin_ui\n"
+            "from operations.registry import get_registry\n"
+            f"admin_ui.render_operation_form(get_registry().get('{operation_id}'), "
+            "settings={'base': '.'})\n"
+        ).run(timeout=20)
+        assert not app.exception
+
+        widget_labels = [
+            element.label for element in list(app.main)
+            if type(element).__name__ in ("Checkbox", "Selectbox", "NumberInput", "TextInput")
+        ]
+        bullet_labels = [
+            line.removeprefix("- **").split("** —")[0]
+            for caption in app.caption
+            for line in caption.value.splitlines()
+            if line.startswith("- **")
+        ]
+        assert bullet_labels == widget_labels, f"{operation_id}: punkterna följer inte fälten"
+
+
+def test_neo4j_operations_share_one_card_with_three_buttons(tmp_path, monkeypatch) -> None:
+    """Starta/Stopp/Status ska vara en sektion, inte tre separata kort."""
+    at = _admin_page_app(tmp_path, monkeypatch, active=False)
+
+    assert not list(at.exception)
+    assert [sub.value for sub in at.subheader].count(admin_ui.NEO4J_HEADING) == 1
+    buttons = {
+        button.key: button.label for button in at.button
+        if button.key in {f"{operation_id}__start" for operation_id in admin_ui.NEO4J_OPERATION_IDS}
+    }
+    assert buttons == {
+        "neo4j-start__start": "Starta",
+        "neo4j-stop__start": "Stopp",
+        "neo4j-status__start": "Status",
+    }
+    # Den gemensamma hjälpen förklarar alla tre knapparna.
+    expected = admin_ui.section_help_markdown(admin_ui.NEO4J_HELP.text, [
+        f"- **{label}** — {meaning}" for label, meaning in admin_ui.NEO4J_HELP.options
+    ])
+    assert [c.value for c in at.caption if c.value == expected] == [expected]
+
+    # Sektionen ligger först i graf-fliken: grafen kräver en startad databas.
+    def position(predicate) -> int:
+        for index, element in enumerate(list(at.main)):
+            if predicate(element):
+                return index
+        raise AssertionError("elementet saknas")
+
+    graph_tab = position(
+        lambda element: type(element).__name__ == "Tab"
+        and element.label == "Extraktion och graf"
+    )
+    neo4j = position(
+        lambda element: type(element).__name__ == "Subheader"
+        and element.value == admin_ui.NEO4J_HEADING
+    )
+    first_operation = position(
+        lambda element: type(element).__name__ == "Subheader"
+        and element.value == "Entitetsextraktion"
+    )
+    assert graph_tab < neo4j < first_operation
+    assert neo4j > position(lambda element: type(element).__name__ == "Tab")
+
+
+def test_neo4j_buttons_start_their_operation(tmp_path, monkeypatch) -> None:
+    from operations import job_service
+
+    calls: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        job_service, "start_job",
+        lambda operation_id, params, **kwargs: calls.append((operation_id, params)) or {"id": "jobb"},
+    )
+    at = _admin_page_app(tmp_path, monkeypatch, active=False)
+    assert not list(at.exception)
+    next(button for button in at.button if button.key == "neo4j-status__start").click().run()
+
+    assert calls == [("neo4j-status", {})]
+
+
+def _archive(tmp_path):
+    """Minimalt arkiv: PDF:er, textfiler och en sida i state.db."""
+    import db
+
+    (tmp_path / "downloaded" / "files").mkdir(parents=True)
+    (tmp_path / "downloaded" / "wpu_files").mkdir(parents=True)
+    (tmp_path / "generated" / "text").mkdir(parents=True)
+    (tmp_path / "downloaded" / "files" / "b — dokument — 2021.pdf").write_bytes(b"%PDF")
+    (tmp_path / "downloaded" / "files" / "a — dokument — 2020.pdf").write_bytes(b"%PDF")
+    (tmp_path / "downloaded" / "wpu_files" / "wpu — dokument.pdf").write_bytes(b"%PDF")
+    (tmp_path / "generated" / "text" / "b — dokument.txt").write_text("text")
+
+    conn = db.connect(tmp_path / "state.db")
+    db.init_schema(conn)
+    db.record_page(
+        conn, pdf_stem="b — dokument", page_num=1, engine="surya", text="x", score=80.0,
+    )
+    conn.close()
+    return tmp_path
+
+
+def test_file_choices_read_the_directories_the_function_uses(tmp_path) -> None:
+    _archive(tmp_path)
+    settings = {"base": str(tmp_path)}
+
+    pdfs = admin_ui.file_choices(
+        admin_ui.FILE_PICKERS[("ocr-pages", "in")]["sources"], "*.pdf", settings=settings,
+    )
+    assert [label for _, label in pdfs] == [
+        "a — dokument — 2020", "b — dokument — 2021", "wpu — dokument",
+    ]
+    assert str(tmp_path / "downloaded" / "files" / "a — dokument — 2020.pdf") == pdfs[0][0]
+
+    texts = admin_ui.file_choices(("generated/text",), "*.txt", settings=settings)
+    assert [label for _, label in texts] == ["b — dokument"]
+    # Okänd katalog ger inga val i stället för att krascha.
+    assert admin_ui.file_choices(("generated/saknas",), "*.txt", settings=settings) == []
+
+
+def _picker_form(tmp_path, monkeypatch, operation_id):
+    from streamlit.testing.v1 import AppTest
+
+    monkeypatch.setenv("STATE_DB", str(tmp_path / "state.db"))
+    return AppTest.from_string(
+        "from pathlib import Path\n"
+        "import admin_ui\n"
+        "from operations.registry import get_registry\n"
+        f"admin_ui.render_operation_form(\n"
+        f"    get_registry().get('{operation_id}'), settings={{'base': {str(tmp_path)!r}}}\n"
+        ")\n"
+    ).run(timeout=20)
+
+
+def test_file_pickers_replace_the_text_fields(tmp_path, monkeypatch) -> None:
+    _archive(tmp_path)
+
+    pdf_form = _picker_form(tmp_path, monkeypatch, "ocr-pages")
+    pickers = {box.key: list(box.options) for box in pdf_form.selectbox}
+    assert "ocr-pages__in" in pickers, "PDF-filen ska väljas, inte skrivas"
+    assert not [field for field in pdf_form.text_input if field.key.startswith("ocr-pages__in")]
+    assert pickers["ocr-pages__in"] == [
+        "— välj PDF —",
+        "a — dokument — 2020",
+        "b — dokument — 2021",
+        "wpu — dokument",
+    ]
+
+    stem_form = _picker_form(tmp_path, monkeypatch, "merge-pages")
+    stems = next(box for box in stem_form.selectbox if box.key == "merge-pages__stem")
+    assert [label for label in stems.options] == ["— välj dokument —", "b — dokument"]
+    assert stems.label == "Dokument"
+
+    text_form = _picker_form(tmp_path, monkeypatch, "llm-correct")
+    texts = next(box for box in text_form.selectbox if box.key == "llm-correct__test")
+    assert list(texts.options) == ["— välj textfil —", "b — dokument"]
+    assert texts.label == "Textfil att rätta"
+
+
+def test_picked_file_is_passed_as_a_path(tmp_path, monkeypatch) -> None:
+    """Valet i väljaren ska bli rätt värde till operationen."""
+    from streamlit.testing.v1 import AppTest
+
+    _archive(tmp_path)
+    monkeypatch.setenv("STATE_DB", str(tmp_path / "state.db"))
+    app = AppTest.from_string(
+        "import json\n"
+        "import streamlit as st\n"
+        "import admin_ui\n"
+        "from operations.registry import get_registry\n"
+        f"params = admin_ui.render_operation_form(\n"
+        f"    get_registry().get('ocr-pages'), settings={{'base': {str(tmp_path)!r}}}\n"
+        ")\n"
+        "if params:\n"
+        "    st.code(json.dumps(params, default=str, ensure_ascii=False), language='json')\n"
+    ).run(timeout=20)
+    pdf = tmp_path / "downloaded" / "files" / "a — dokument — 2020.pdf"
+
+    next(box for box in app.selectbox if box.key == "ocr-pages__in").select(str(pdf)).run()
+    assert not list(app.error)  # valet fyller det obligatoriska fältet
+    next(button for button in app.button if button.key == "ocr-pages__start").click().run()
+
+    assert any(str(pdf) in code.value for code in app.code)
+
+
+def test_missing_required_field_names_the_label(tmp_path, monkeypatch) -> None:
+    """Felmeddelandet ska säga vilket fält som saknas, inte parameternamnet."""
+    _archive(tmp_path)
+
+    form = _picker_form(tmp_path, monkeypatch, "ocr-pages")
+
+    assert [error.value for error in form.error] == ["Välj ett värde för: PDF-fil"]

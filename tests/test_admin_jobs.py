@@ -6,6 +6,7 @@ import io
 import json
 import os
 import signal
+import subprocess
 import sys
 import threading
 import time
@@ -17,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 import db  # noqa: E402
+from operations import job_service  # noqa: E402
 from operations.exceptions import OperationCancelled, OperationFailed  # noqa: E402
 from operations.job_service import (  # noqa: E402
     cancel_job,
@@ -454,8 +456,8 @@ def test_cancel_job_escalates_to_sigkill_after_grace(tmp_path: Path, monkeypatch
         lambda pid, sig: signals.append(("killpg", pid, sig)),
     )
 
-    # Jobbet "ignorerar" SIGTERM: statusen förblir cancel_requested tills
-    # grace-perioden löpt ut och processgruppen dödas.
+    # Jobbet "ignorerar" SIGTERM: efter grace-perioden dödas processgruppen och
+    # jobbet markeras terminalt direkt — annars låser en zombie active_slot.
     assert cancel_job(db_path=db_path, kill_grace_seconds=0.1) is True
 
     sigterm = ("kill", os.getpid(), signal.SIGTERM)
@@ -466,7 +468,9 @@ def test_cancel_job_escalates_to_sigkill_after_grace(tmp_path: Path, monkeypatch
 
     conn = db.connect(db_path)
     try:
-        assert db.get_admin_job(conn, "job-1")["status"] == "cancel_requested"
+        job = db.get_admin_job(conn, "job-1")
+        assert job["status"] == "interrupted"
+        assert db.get_active_admin_job(conn) is None
     finally:
         conn.close()
 
@@ -753,3 +757,86 @@ def test_jobs_cli_start_with_worker_failure_gives_friendly_error(tmp_path: Path,
     assert rc == 1
     assert "worker" in err.getvalue()
     assert "Traceback" not in err.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# Regression: en worker som dött hårt får inte låsa jobbsystemet.
+# En zombie (avslutad men ännu inte omhändertagen) svarar på os.kill(pid, 0)
+# och sågs tidigare som levande, så reconcile satte aldrig "interrupted".
+# ---------------------------------------------------------------------------
+
+def _zombie_pid() -> tuple[subprocess.Popen, int]:
+    """Starta ett barn som avslutas direkt utan att omhändertas (zombie)."""
+    proc = subprocess.Popen([sys.executable, "-c", "pass"])
+    deadline = time.monotonic() + 10.0
+    while time.monotonic() < deadline:
+        stat = subprocess.run(
+            ["ps", "-o", "stat=", "-p", str(proc.pid)],
+            capture_output=True, text=True, check=False,
+        ).stdout.strip()
+        if stat.startswith("Z"):
+            return proc, proc.pid
+        time.sleep(0.02)
+    proc.wait()
+    raise AssertionError("barnet blev aldrig en zombie")
+
+
+def test_process_exists_treats_zombie_as_dead() -> None:
+    proc, pid = _zombie_pid()
+    try:
+        assert job_service._process_exists(pid) is False
+    finally:
+        proc.wait()
+
+
+def test_reconcile_frees_slot_when_worker_is_zombie(tmp_path: Path) -> None:
+    """Regression: zombbie-worker ska frigöra active_slot, inte låsa den."""
+    proc, pid = _zombie_pid()
+    try:
+        db_path = tmp_path / "state.db"
+        _create_job(tmp_path, db_path)
+        conn = db.connect(db_path)
+        db.claim_admin_job(conn, "job-1", pid=pid)
+        conn.execute(
+            "UPDATE admin_jobs SET heartbeat_at='2000-01-01T00:00:00+00:00' WHERE id='job-1'"
+        )
+        conn.commit()
+        conn.close()
+
+        job = reconcile_active_job(db_path=db_path)
+
+        assert job is not None
+        assert job["status"] == "interrupted"
+        _create_job(tmp_path, db_path, job_id="job-2")  # sloten är fri
+    finally:
+        proc.wait()
+
+
+def test_cancel_job_kills_descendants_orphaned_by_sigkill(tmp_path: Path, monkeypatch) -> None:
+    """Regression: efter SIGKILL på workern måste dess barn också dödas.
+
+    Barnen startas i egna sessioner, så killpg mot worker-pid:n når dem inte.
+    """
+    db_path = tmp_path / "state.db"
+    _create_job(tmp_path, db_path)
+    conn = db.connect(db_path)
+    db.claim_admin_job(conn, "job-1", pid=os.getpid())
+    conn.close()
+
+    monkeypatch.setattr("operations.job_service._process_tree_pids", lambda pid: [1111, 2222])
+    monkeypatch.setattr("operations.job_service.os.kill", lambda pid, sig: None)
+    monkeypatch.setattr("operations.job_service.os.killpg", lambda pid, sig: None)
+    killed: list[int] = []
+    monkeypatch.setattr(
+        "operations.job_service.os.kill",
+        lambda pid, sig: killed.append(pid) if sig == signal.SIGKILL else None,
+    )
+
+    assert cancel_job(db_path=db_path, kill_grace_seconds=0.1) is True
+    assert killed == [1111, 2222]
+
+
+def test_descendant_pids_walks_the_whole_tree() -> None:
+    table = [(2, 1), (3, 2), (4, 5), (5, 1), (6, 3)]
+    assert sorted(job_service._descendant_pids(1, table)) == [2, 3, 4, 5, 6]
+    assert job_service._descendant_pids(99, table) == []

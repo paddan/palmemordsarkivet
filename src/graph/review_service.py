@@ -204,18 +204,54 @@ def require_preview(expected: str, uri: str, user: str, adopt_legacy: bool) -> d
             return report
     raise OperationFailed("En sparad förhandsvisning för denna Neo4j-anslutning saknas.")
 
+# Motivering som skrivs i historiken när ett beslut vars objekt försvunnit
+# återställs (annars blockerar det all applicering för alltid).
+_ORPHAN_DECISION_NOTE = "Objektet finns inte längre efter ny extraktion"
+
+
+def reset_stale_decisions() -> int:
+    """Återställ beslut vars objekt inte längre finns i projektionen.
+
+    Besluten kan aldrig appliceras igen, men räknades som inaktuella och
+    stoppade därför varje uppdatering. Historiken bevaras. Objektnycklarna
+    räknas om under skrivlåset så att ett samtidigt beslut inte tappas.
+    """
+    from graph.review import audit_entries
+
+    with closing(db.connect()) as conn, db.graph_review_write_transaction(conn):
+        entries, decisions = db.read_graph_review_snapshot(conn)
+        item_keys = {item["item_key"] for item in audit_entries(entries, decisions)}
+        removed: int = db.reset_orphan_graph_review_decisions(
+            conn, item_keys, note=_ORPHAN_DECISION_NOTE,
+        )
+        return removed
+
+
 def run_sync(*, uri: str = "bolt://localhost:7687", user: str = "neo4j",
              apply: bool = False, expected: str = "", adopt_legacy: bool = False,
-             context=None) -> int:
+             reset_stale: bool = False, context=None) -> int:
     """Förhandsvisa som standard; applicera bara en uttryckligen vald snapshot."""
     ctx = context or ensure_terminal_context(None)
     ctx.check_cancelled()
+    if reset_stale and apply:
+        raise OperationFailed(
+            "Kör --reset-stale utan --apply: återställningen ändrar underlaget, "
+            "så en ny förhandsvisning krävs efteråt."
+        )
+    if reset_stale:
+        removed = reset_stale_decisions()
+        ctx.log(f"Återställde {removed} inaktuella granskningsbeslut.")
+        ctx.log("Kör en ny förhandsvisning innan du applicerar grafen.")
+        return 0
     report, mentions, relations = read_projection()
     if apply and (not expected or expected != report["fingerprint"]):
         raise OperationFailed("Underlaget har ändrats eller förhandsvisning saknas. "
                               "Kör en ny förhandsvisning och ange dess --expected-värde.")
     if apply and report.get("stale", 0):
-        raise OperationFailed("Inaktuella granskningsbeslut måste granskas eller återställas först.")
+        raise OperationFailed(
+            "Inaktuella granskningsbeslut måste återställas först. Använd "
+            "knappen i Graf-fliken eller kör om med --reset-stale."
+        )
     preview = require_preview(expected, uri, user, adopt_legacy) if apply else None
     report.update(uri=uri, user=user, adopt_legacy=adopt_legacy)
     with connect_graph(uri=uri, user=user) as driver:

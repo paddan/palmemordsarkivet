@@ -58,7 +58,13 @@ def _resolve_backend() -> dict:
     """Plocka aktivt backend ur sparad llm-config (sätts i Utredning)."""
     saved = _llm_config.load()
     name = saved.get("backend_name", "Claude")
-    base = _backends.BACKENDS.get(name, _backends.BACKENDS["Claude"])
+    base = _backends.BACKENDS.get(name)
+    if base is None:
+        # Aldrig tyst falla tillbaka till Claude: då jämförs källorna med fel
+        # modell och fel kostnadsmodell utan att någon får veta det.
+        raise ValueError(
+            f"Okänt LLM-backend {name!r}. Välj en giltig profil under Admin → LLM-inställningar."
+        )
     return {
         "name": name,
         "kind": base["kind"],
@@ -130,7 +136,12 @@ async def _run_compare(topic: str, hits: list[dict], cfg: dict, placeholder) -> 
     return final
 
 
-backend = _resolve_backend()
+try:
+    backend = _resolve_backend()
+except ValueError as exc:
+    st.error(str(exc))
+    st.stop()
+
 with st.sidebar:
     st.header("Inställningar")
     st.caption(f"AI-modell: **{backend['name']}** ({backend['model']})")
@@ -156,10 +167,13 @@ with st.form("compare"):
     )
     submitted = st.form_submit_button("Jämför källor", type="primary")
 
-if submitted and topic.strip():
+just_ran = bool(submitted and topic.strip())
+
+if just_ran:
     with st.status("Söker i indexet…", expanded=False) as status:
         hits = search(table, embed_model, topic, top_k)
         if not hits:
+            st.session_state.pop("compare_result", None)
             status.update(label="Inga träffar", state="error")
             st.stop()
         if do_rerank:
@@ -168,24 +182,40 @@ if submitted and topic.strip():
         else:
             hits = hits[:top_n]
         status.update(label=f"Jämför {len(hits)} utdrag", state="complete")
+    st.session_state["compare_result"] = {
+        "topic": topic,
+        "hits": hits,
+        "answer": "",
+        "backend_name": backend["name"],
+        "model": backend["model"],
+    }
 
+# Resultatet renderas från session state: klick på källkortens knappar (PDF,
+# bokmärke, anteckning) eller ändrade sidofältsval får inte kasta bort ett dyrt
+# svar. I körningen som just sökte streamas svaret in på plats i renderingen.
+result = st.session_state.get("compare_result")
+if result:
+    hits = result["hits"]
     groups = _compare.group_hits_by_source(hits)
     st.caption(f"Jämför {len(hits)} utdrag ur {len(groups)} källor.")
-
-    st.subheader(f"Jämförelse ({backend['name']})")
-    placeholder = st.empty()
-    answer = asyncio.run(_run_compare(topic, hits, backend, placeholder))
+    st.subheader(f"Jämförelse ({result['backend_name']})")
+    if just_ran:
+        result["answer"] = asyncio.run(
+            _run_compare(result["topic"], hits, backend, st.empty())
+        )
+    else:
+        st.markdown(result["answer"], unsafe_allow_html=True)
 
     with st.expander(f"Källor ({len(hits)})", expanded=False):
         _casebook_ui.render_source_cards(ROOT, hits, conn, key_prefix="compare_source")
 
     _casebook_ui.render_casebook_save(
         conn,
-        question=f"Jämförelse: {topic}",
-        answer=answer,
+        question=f"Jämförelse: {result['topic']}",
+        answer=result["answer"],
         mode="jämförelse",
-        backend_name=backend["name"],
-        model=backend["model"],
+        backend_name=result["backend_name"],
+        model=result["model"],
         sources=hits,
         centers=[],
         key="compare_save",

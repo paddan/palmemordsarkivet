@@ -123,7 +123,8 @@ def test_download_adapter_raises_on_failure(monkeypatch) -> None:
     with pytest.raises(OperationFailed, match="download"):
         download_adapter(
             context,
-            {"out": Path("/out"), "sheet_id": "abc", "limit": 0},
+            {"out": Path("/out"), "sheet_id": "abc", "limit": 0,
+             "dry_run": False, "rebuild": False},
         )
 
 

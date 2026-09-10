@@ -50,6 +50,8 @@ def download_adapter(context, params: Mapping) -> None:
         out=params["out"],
         sheet_id=params["sheet_id"] or download.SHEET_ID,
         limit=params["limit"],
+        dry_run=params["dry_run"],
+        rebuild=params["rebuild"],
         context=context,
     )
     _raise_on_failure("download", rc)

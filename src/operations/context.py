@@ -69,6 +69,23 @@ def _redact_argv(argv: Sequence[str]) -> list[str]:
     return result
 
 
+# Sätts av Admin → Logg (eller manuellt i miljön) för att slå på debugrader i
+# jobbloggen. Nya jobb ärver variabeln från processen som startar dem.
+DEBUG_ENV = "PALME_DEBUG_LOG"
+_TRUTHY = {"1", "true", "yes", "on"}
+
+
+def debug_value_enabled(value: object) -> bool:
+    """Returnera True för "1"/"true"/"yes"/"on" (skiftlägesokänsligt)."""
+    return str(value or "").strip().casefold() in _TRUTHY
+
+
+def debug_logging_enabled(environ: Mapping[str, str] | None = None) -> bool:
+    """Returnera True när debugloggning är påslagen i miljön."""
+    env = os.environ if environ is None else environ
+    return debug_value_enabled(env.get(DEBUG_ENV))
+
+
 class ProgressSink:
     """Abstrakt mottagare för logg- och progresshändelser."""
 
@@ -127,6 +144,10 @@ class OperationContext:
     användaren eller workern har begärt avbrott. ``run_process`` startar externa
     processer i en egen processgrupp så att hela trädet kan termineras
     kontrollerat.
+
+    Debugloggning slås på med ``PALME_DEBUG_LOG`` (eller Admin → Logg, som sätter
+    variabeln för jobb den startar) och styr om ``log(..., level="debug")``
+    skrivs alls — anropet är annars gratis.
     """
 
     def __init__(
@@ -136,12 +157,14 @@ class OperationContext:
         cancel_requested: Callable[[], bool],
         terminate_grace_seconds: float = 5.0,
         pipe_drain_seconds: float = 10.0,
+        debug: bool | None = None,
     ) -> None:
         self._sink = sink
         self._cancel_requested = cancel_requested
         self._terminate_grace_seconds = terminate_grace_seconds
         self._pipe_drain_seconds = pipe_drain_seconds
         self._current_step = ""
+        self._debug = debug_logging_enabled() if debug is None else debug
 
     def step(self, name: str, *, completed: int = 0, total: int | None = None) -> None:
         """Påbörja ett nytt steg och rapportera dess initiala progress."""
@@ -162,7 +185,9 @@ class OperationContext:
         )
 
     def log(self, message: str, *, level: str = "info") -> None:
-        """Skriv en loggrad."""
+        """Skriv en loggrad. ``debug`` skrivs bara när debugloggning är på."""
+        if level == "debug" and not self._debug:
+            return
         self._sink.write_log(message, level)
 
     def check_cancelled(self) -> None:
@@ -189,9 +214,9 @@ class OperationContext:
         if env:
             full_env.update(env)
 
-        self._sink.write_log(
+        self.log(
             f"$ {' '.join(_redact_argv(list(argv)))} (cwd={cwd})",
-            "debug",
+            level="debug",
         )
 
         process = subprocess.Popen(

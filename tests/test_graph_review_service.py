@@ -149,3 +149,40 @@ def test_projection_fingerprint_changes_when_global_name_rules_change():
     assert service.fingerprint([], [], []) != service.fingerprint([], [], [{
         "typ": "organisation", "source": "RKA2", "target": "Rikskriminalen A2",
     }])
+
+
+def test_run_sync_reset_stale_removes_orphans_and_logs(tmp_path, monkeypatch):
+    """Regression: inaktuella beslut gick inte att bli av med — vyn visade dem
+    aldrig, så både CLI och UI fastnade i "Inaktuella granskningsbeslut"."""
+    import db as state_db
+
+    monkeypatch.setenv("STATE_DB", str(tmp_path / "state.db"))
+    conn = state_db.connect(tmp_path / "state.db")
+    state_db.init_schema(conn)
+    state_db.save_graph_review_decision(
+        conn, item_key="doc:1:entity:9", source_hash="hash", action="keep",
+        target={}, note="Beslut från en äldre extraktion",
+    )
+    conn.close()
+
+    monkeypatch.setattr(service, "connect_graph", MagicMock())
+    monkeypatch.setattr(service, "compare_graph", lambda *a, **k: {"graph_fingerprint": "g"})
+    ctx = MagicMock()
+
+    # Återställningen är en ren SQLite-åtgärd: ingen Neo4j-anslutning behövs.
+    assert service.run_sync(reset_stale=True, context=ctx) == 0
+
+    conn = state_db.connect(tmp_path / "state.db")
+    try:
+        assert state_db.list_graph_review_decisions(conn) == []
+        history = state_db.get_graph_review_decision_history(conn, "doc:1:entity:9")
+        assert history[-1]["action"] == "reset"
+    finally:
+        conn.close()
+    assert any("inaktuella" in str(call.args[0]).casefold() for call in ctx.log.call_args_list)
+
+
+def test_run_sync_rejects_reset_stale_together_with_apply(monkeypatch):
+    monkeypatch.setattr(service, "read_projection", lambda: ({"fingerprint": "x"}, [], []))
+    with pytest.raises(OperationFailed, match="reset-stale"):
+        service.run_sync(apply=True, expected="x", reset_stale=True, context=MagicMock())

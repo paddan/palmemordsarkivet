@@ -68,13 +68,19 @@ För utveckling/tester:
 
 ```bash
 .venv/bin/python scripts/download.py
+.venv/bin/python scripts/download.py --dry-run    # lista vad som skulle hämtas
+.venv/bin/python scripts/download.py --rebuild    # hämta om allt (ignorera manifestet)
 .venv/bin/python scripts/download.py --out files --help
 ```
 
 - Hämtar Google Sheet som CSV, plockar ut Drive-ID från "Länk till kopia".
 - Filnamn blir `<Nr> — <Titel> — <Beställt> — <Upplagt> — <Anmärkning> — <Sidor>.pdf`.
 - Korrekt extension via magic-bytes (PDF/JPG/PNG/...).
-- Idempotent: hoppa över redan nedladdade. Visar progress + ETA.
+- Idempotent: hoppa över redan nedladdade. Visar progress + ETA. `--dry-run`
+  hämtar inget och skriver inga nedladdningsrader (state.db öppnas för att läsa
+  manifestet); `--rebuild` hämtar om även filer som ligger på disk eller står i
+  manifestet — använd det om ett dokument saknas lokalt eller fastnat som
+  permanent misslyckat.
 
 För hela arkivet (tar några timmar), kör i bakgrunden:
 
@@ -597,6 +603,9 @@ LLM-förslag ändrar därför aldrig Neo4j direkt.
 .venv/bin/python scripts/graph_sync.py
 # Förhandsvisningen skriver ut kontrollkoden:
 .venv/bin/python scripts/graph_sync.py --apply --expected <kontrollkod>
+# Beslut vars objekt försvunnit efter en ny extraktion kan aldrig appliceras men
+# blockerar uppdateringen tills de återställs (samma knapp finns i Graf-vyns steg 3):
+.venv/bin/python scripts/graph_sync.py --reset-stale
 # För en befintlig äldre graf i CLI: lägg till --adopt-legacy i både
 # förhandsvisningen och appliceringen. UI:t hanterar detta automatiskt.
 ```
@@ -694,7 +703,10 @@ tillsammans. Utredning väljer en profil per session.
 
 Ett uttryckligt profilnamn i en operation, exempelvis `--profile NAMN`, måste
 finnas i filen. Ett felstavat namn avbryter operationen före LLM-anropet och
-byter aldrig tyst till standardprofilen. Om `api_key_env` lämnas tomt för en
+byter aldrig tyst till standardprofilen. Detsamma gäller profilens
+`backend_name`: ett namn som inte finns i backend-katalogen avbryter med ett
+begripligt fel i stället för att köra jobbet mot katalogens första backend. Om
+`api_key_env` lämnas tomt för en
 känd molnbackend används i stället backendens standardvariabel, som
 `DEEPSEEK_API_KEY` för DeepSeek; lokala backends kan vara nyckelfria.
 
@@ -815,15 +827,68 @@ per-dokumentresultat behålls; ett avbrutet jobb markeras aldrig `succeeded`.
 
 - Lokal, utan inloggning; exponerar bara produktionsflöden (installation,
   tester, tessdata och webbstart visas inte).
-- Aktivt jobb-panel överst med progress, logg och Avbryt; uppdateras med
+- Aktivt jobb-panel överst med progress och Avbryt; uppdateras med
   `st.fragment(run_every=...)` bara medan ett jobb är aktivt.
+- **Logg**-fliken äger all loggning och använder hela sidbredden
+  (`layout="wide"`): **ett** loggfönster med källväljare — **Systemlogg (nu)**
+  (felloggen, som alla steg skriver till) eller en av de senaste jobbloggarna.
+  Förvalet är det körande jobbet, annars systemloggen. Filtren — källa, nivå
+  (Alla/Debug/Info/Varning/Fel), fritextsökning och debug-växlingen — ligger
+  staplade i en smal vänsterkolumn, så loggfönstret får resten av bredden.
+  Fönstret uppdateras automatiskt medan ett jobb körs. Läsningen skannar de sista
+  5 000 raderna och visar högst 300 träffar, så en flera MB stor logg inte
+  blockerar sidan.
+- **Debugloggning** slås på/av med växlingen i Logg-fliken. Inställningen sparas
+  i `generated/admin_settings.json` och sätts som `PALME_DEBUG_LOG` för jobb som
+  startas efter växlingen (pågående jobb påverkas inte). För förgrundskörning
+  sätts samma variabel manuellt: `PALME_DEBUG_LOG=1 .venv/bin/python
+  scripts/run_pipeline.py`. Debugrader skrivs via `ctx.log(..., level="debug")`
+  och inkluderar bl.a. kommandoraden för varje underprocess, delta-beslut i
+  ingest/normalize och Surya-fallbackens urval.
 - Medan ett aktivt skrivande jobb finns är startknapparna för andra skrivande
   operationer avstängda; jobbstatus, logg och Neo4j-status förblir tillgängliga.
 - API-nycklar visas eller lagras inte — sidan visar bara om relevant
   miljövariabel är tillgänglig. LLM-provider, modell och base URL sparas via
   den gemensamma konfigurationsmodulen (`generated/llm_config.json`).
+- Varje operation är ett eget kort (`st.container(border=True)`) i fliken med
+  rubrik (operationens etikett, eller en kortare från `FORM_LAYOUT`). Till höger
+  i kortet står avsnittets hjälp (`OPERATION_HELP`): en kort förklaring av vad
+  det gör, följd av en punktlista som förklarar varje val. Punktlistans etiketter
+  hämtas från formuläret, så de matchar fälten, och hela hjälpen renderas som en
+  `st.caption` (`section_help_markdown`) så att förklaring och punkter får samma
+  stil. Punkterna står i samma ordning som fälten i formuläret, och varje fält
+  som visas har en förklaring (båda kontrolleras av tester).
+- Parametrar som är en fil (Sid-OCR:s PDF, *Slå ihop per-sida-text*:s dokument och
+  LLM-korrigeringens textfil) väljs i en **filväljare** i stället för att skrivas:
+  rullistan listas ur den katalog som hör till funktionens syfte
+  (`FILE_PICKERS` — PDF-arkivet, dokument med per-sida-text i state.db, respektive
+  `generated/text`), och listan cachas i en minut.
+- Neo4j-operationerna (`neo4j-start`, `neo4j-stop`, `neo4j-status`) har inga
+  parametrar och visas som en gemensam sektion **Neo4j** först i fliken
+  *Extraktion och graf* — grafen kräver en startad databas — med knapparna
+  Starta, Stopp och Status.
+- Modell, provider och API-URL väljs med **LLM-konfiguration** (profilen). De
+  äldre flaggorna `--provider`/`--model`/`--base-url` finns bara kvar i CLI:t och
+  visas aldrig som fält i adminsidan.
+- Fälten i ett kort grupperas per sort — **Alternativ** (kryssrutor, en per rad),
+  **Inställningar** (val, text och tal) och **Sökvägar** (obligatoriska filer) —
+  så att likartade fält hamnar intill varandra. Grupprubriken visas bara när
+  kortet har fler än en grupp.
 - Formulär, validering och startknappar genereras ur samma operationsregistry
-  som CLI:n, så parametrar/defaults är identiska.
+  som CLI:n, så parametrar/defaults är identiska. Parametrarna läggs i ett rutnät
+  (`FORM_COLUMNS` fält per rad) eftersom sidan körs i full bredd; hårdkodade
+  sökvägar injiceras tyst utan eget fält. Talfält får en smal, fast bredd
+  (`FIELD_WIDTHS`, 170/180 px) — under ~148 px döljer Streamlit stegknapparna
+  (`-`/`+`), och etiketten ritas därför separat ovanför fältet så att en lång
+  titel inte tvingas radbrytas. Rader med bara talfält får en fast pixelbredd
+  (`numeric_row_spec`: etikettens uppskattade bredd per kolumn), så två talfält
+  ligger ~25 px isär i stället för att spridas ut över en sida i full bredd.
+  Övriga rader läggs i ett 12-vikt-rutnät där etikettens längd styr kolumnbredden
+  och resten blir en tom spacer.
+  `FORM_LAYOUT` i `src/admin_ui.py` styr etiketter, knapptext och kortare
+  rubriker per operation. Nedladdningarna (`download`, `download-wpu`) är
+  `admin_visible=False`: de körs som första steg i `run-pipeline` eller via
+  CLI:t (`scripts/download.py [--dry-run|--rebuild]`).
 
 ## Filer
 
@@ -916,9 +981,22 @@ entitetsextraktion (extract_entities), graf-laddning (load_neo4j) och
 nyckelentiteter ur svar (answer_entities).
 Fixturen som genererar en mini-PDF med pymupdf skipas gracefully om pymupdf inte är installerat.
 
-## Felloggning
+## Loggning
 
-Skript skriver tab-separerade rader till `generated/errors.log`:
+Två loggar täcker allt: **jobbloggen** (`generated/admin_jobs/<jobb-id>.log`) med
+en rad per händelse i formatet ``ISO8601 [nivå] meddelande`` — nivåerna `info`,
+`debug`, `warning` och `error` — och **systemloggen** `generated/errors.log`
+(tab-separerade felrader från alla steg). Båda visas i samma fönster i
+Admin → Logg, där källan väljs i en lista: systemloggen eller en enskild
+jobblogg. Nivå- och fritextfiltret gäller den valda källan. Jobbloggen skrivs av
+workern via `ctx.log(...)`; `errors.log` är för fel som någon behöver åtgärda,
+medan vanliga avvikelser hör hemma som `warning` i jobbloggen.
+
+`debug` skrivs bara när debugloggning är påslagen: växlingen **Debugloggning** i
+Admin → Logg, eller `PALME_DEBUG_LOG=1` för förgrundskörning. Den styr även
+kommandoraden som loggas för varje underprocess. Övriga nivåer skrivs alltid.
+
+Skript skriver tab-separerade rader till **felloggen** `generated/errors.log`:
 ``ISO8601\tcomponent\titem\tmessage``. Alla Python-entrypoints loggar via
 `errors_log.log_error` (roteras automatiskt vid 10 MB). Append-only, idempotent.
 
