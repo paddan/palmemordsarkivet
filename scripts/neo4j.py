@@ -1,16 +1,21 @@
-"""CLI för att starta/stoppa lokal Neo4j via podman."""
+"""CLI för att starta/stoppa lokal Neo4j via operationsregistret.
+
+Går via registret (inte modulen direkt) så att CLI:n och adminsidans knappar
+kör exakt samma kodväg — samma parametrar, samma loggning, samma avbrytning.
+"""
 
 from __future__ import annotations
 
 import sys
-from pathlib import Path
 
-_SRC = str(Path(__file__).resolve().parents[1] / "src")
-if _SRC in sys.path:
-    sys.path.remove(_SRC)
-sys.path.insert(0, _SRC)
+from _bootstrap import run
 
-from operations.neo4j import neo4j_start, neo4j_status, neo4j_stop  # noqa: E402
+# Positionsargumentet i skalet → operation-id i registret.
+_OPERATIONS = {
+    "start": "neo4j-start",
+    "stop": "neo4j-stop",
+    "status": "neo4j-status",
+}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -20,14 +25,14 @@ def main(argv: list[str] | None = None) -> int:
     if cmd in ("-h", "--help"):
         print("Användning: scripts/neo4j.py [start|stop|status]")
         return 0
-    if cmd == "start":
-        return neo4j_start()
-    if cmd == "stop":
-        return neo4j_stop()
-    if cmd == "status":
-        return neo4j_status()
-    print(f"okänt kommando: {cmd} (start|stop|status)", file=sys.stderr)
-    return 2
+
+    operation_id = _OPERATIONS.get(cmd)
+    if operation_id is None:
+        print(f"okänt kommando: {cmd} (start|stop|status)", file=sys.stderr)
+        return 2
+
+    # Extra argument ignoreras, precis som tidigare — operationerna är parameterlösa.
+    return run(operation_id, [])
 
 
 if __name__ == "__main__":  # pragma: no cover

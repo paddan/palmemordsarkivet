@@ -1,7 +1,11 @@
 #!/bin/sh
-# Tunn genväg till det portabla Python-entrypointet.
+# Tunn genväg till scripts/neo4j.py — vidarebefordrar alla argument.
+# Ingen egen logik här: flaggor och defaults bor i Python-sidan.
 
 set -eu
 
 PROJECT_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-exec "$PROJECT_ROOT/.venv/bin/python" "$PROJECT_ROOT/scripts/neo4j.py" "$@"
+PYTHON="$PROJECT_ROOT/.venv/bin/python"
+[ -x "$PYTHON" ] || PYTHON=python3
+
+exec "$PYTHON" "$PROJECT_ROOT/scripts/neo4j.py" "$@"

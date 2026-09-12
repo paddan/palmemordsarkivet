@@ -12,17 +12,41 @@ detaljer om varje steg, se [Teknisk referens](teknisk-referens.md).
 - Minst en stödd LLM-backend: Claude, OpenAI, DeepSeek, OpenRouter eller en
   OpenAI-kompatibel lokal tjänst
 
+## Kortkommandon
+
+Varje entrypoint i `scripts/` har en tunn genväg i projektroten med samma namn:
+`./run_pipeline.sh` är exakt samma kommando som
+`.venv/bin/python scripts/run_pipeline.py`. Genvägen vidarebefordrar alla argument
+och har ingen egen logik, så flaggor och standardvärden är identiska med
+Python-formen. Kör den från projektroten — inget `cd` behövs.
+
+| Genväg | Vad den gör |
+|---|---|
+| `./install.sh --dev` | installerar beroenden (brew, pip, tessdata); `--no-surya` hoppar Surya-OCR |
+| `./run_pipeline.sh` | hela pipelinen: download → OCR → ingest (`--test 5`, `--with-llm`, `--profile NAMN`, `--jobs N`) |
+| `./download.sh`, `./download_wpu.sh` | hämtar PDF:er från palmemordsarkivet.se respektive wpu.nu |
+| `./ocr.sh`, `./ocr_tesseract.sh` | OCR till text (`--skip-redo` hoppar Surya) |
+| `./ingest.sh --rebuild` | bygger vektorindexet i LanceDB |
+| `./web.sh` | startar Streamlit-webgränssnittet |
+| `./jobs.sh status` | bakgrundsjobb: `start`, `status`, `log --follow`, `cancel`, `list` |
+| `./llm_config.sh` | interaktiv meny för att välja LLM-backend och modell |
+| `./test.sh --static` | tester samt ruff och mypy |
+
+Alla `scripts/*.py` har en genväg, så samma form fungerar för till exempel
+`./graph_sync.sh`, `./merge_pages.sh` och `./setup_tessdata.sh`. Finns ingen
+`.venv` ännu (första körningen av `./install.sh`) används `python3`.
+
 ## 1. Installera
 
 ```bash
-.venv/bin/python scripts/install.py           # installera pipeline/webgränssnitt (brew, Python-paket, tessdata)
-.venv/bin/python scripts/install.py --no-surya  # snabbare install utan Surya-OCR
-.venv/bin/python scripts/install.py --dev     # valfritt: installera pytest/ruff/mypy för utveckling
+./install.sh  # installera pipeline/webgränssnitt (brew, Python-paket, tessdata)
+./install.sh --no-surya  # snabbare install utan Surya-OCR
+./install.sh --dev  # valfritt: installera pytest/ruff/mypy för utveckling
 ```
 
 `scripts/install.py` sköter pipeline- och webgränssnittsberoendena via Homebrew och pip — se
 [Vad install.py gör](teknisk-referens.md#vad-installpy-gör) för detaljer.
-Kör `.venv/bin/python scripts/test.py` för pytest; lägg till `--static` när du vill köra ruff och mypy.
+Kör `./test.sh` för pytest; lägg till `--static` när du vill köra ruff och mypy.
 
 ## 2. Sätt en API-nyckel
 
@@ -56,9 +80,9 @@ konfigurationerna i `generated/llm_config.json` mellan sessioner — se
 Allt i ett kommando:
 
 ```bash
-.venv/bin/python scripts/run_pipeline.py      # kör alla steg i ett (download → OCR → ingest)
-.venv/bin/python scripts/run_pipeline.py --with-llm --profile "Deepseek v4 flash"  # inkluderar LLM-korrigering med vald profil
-.venv/bin/python scripts/web.py               # Starta webgränssnittet och ställ frågor
+./run_pipeline.sh  # kör alla steg i ett (download → OCR → ingest)
+./run_pipeline.sh --with-llm --profile "Deepseek v4 flash"  # inkluderar LLM-korrigering med vald profil
+./web.sh  # Starta webgränssnittet och ställ frågor
 ```
 
 `--profile` måste vara namnet på en sparad LLM-konfiguration. Om namnet inte
@@ -68,11 +92,11 @@ till standardprofilen.
 Eller steg för steg:
 
 ```bash
-.venv/bin/python scripts/download.py          # 1. Ladda ner alla PDF:er (3 762 st, tar några timmar)
-.venv/bin/python scripts/download_wpu.py      # 1b. (valfritt) Ladda ner WPU PDF:er (7 155 st)
-.venv/bin/python scripts/ocr.py               # 2. OCR → text (Tesseract + Surya-fallback/svåra sidor, tar flera timmar)
-.venv/bin/python scripts/ingest.py            # 3. Bygg vektorindex i LanceDB (kan ta flera timmar)
-.venv/bin/python scripts/web.py               # 4. Starta webgränssnittet och ställ frågor
+./download.sh  # 1. Ladda ner alla PDF:er (3 762 st, tar några timmar)
+./download_wpu.sh  # 1b. (valfritt) Ladda ner WPU PDF:er (7 155 st)
+./ocr.sh  # 2. OCR → text (Tesseract + Surya-fallback/svåra sidor, tar flera timmar)
+./ingest.sh  # 3. Bygg vektorindex i LanceDB (kan ta flera timmar)
+./web.sh  # 4. Starta webgränssnittet och ställ frågor
 ```
 
 Varje steg är idempotent — avbryt och fortsätt när som helst.
@@ -82,11 +106,11 @@ hittar nya filer, så väntande arbete från en tidigare avbruten körning slutf
 ## 4. Ställ frågor
 
 ```bash
-./web.sh                          # Starta Streamlit-webgränssnittet
+./web.sh  # Starta Streamlit-webgränssnittet
 ```
 
-`./web.sh` är en tunn genväg till `.venv/bin/python scripts/web.py` och
-vidarebefordrar eventuella Streamlit-flaggor.
+`./web.sh` startar Streamlit och vidarebefordrar eventuella Streamlit-flaggor —
+se [Kortkommandon](#kortkommandon) för fler genvägar.
 
 Fliken **Utredning** har två flikar: **Fråga arkivet (RAG)** (snabbt,
 deterministiskt — bra för faktafrågor) och **Utredningsläge (MCP)** (autonomt,
@@ -133,8 +157,8 @@ börjar tom tills verifierade observationer läggs till.
 För att leta fram kandidater ur OCR-texten utan att publicera dem direkt:
 
 ```bash
-.venv/bin/python scripts/extract_map_observations.py --dry-run --limit 20
-.venv/bin/python scripts/extract_map_observations.py --limit 20
+./extract_map_observations.sh --dry-run --limit 20
+./extract_map_observations.sh --limit 20
 ```
 
 Öppna sedan Karta-fliken och granska förslagen under **Granska extraherade
@@ -171,21 +195,21 @@ Om en känd molntjänsts miljövariabelfält lämnas tomt används tjänstens
 standardvariabel, till exempel `DEEPSEEK_API_KEY` för DeepSeek eller
 `OPENROUTER_API_KEY` för OpenRouter.
 
-Kör `.venv/bin/python scripts/llm_config.py` utan argument i terminalen för en **interaktiv meny** där
+Kör `./llm_config.sh` utan argument i terminalen för en **interaktiv meny** där
 du väljer backend och modell ur samma lista som Admin (Claude / OpenAI /
 DeepSeek / OpenRouter / Ollama / OpenAI-kompatibel). Vill du hellre sätta värdena direkt går
 det med flaggor:
 
 ```bash
-.venv/bin/python scripts/llm_config.py                                  # interaktiv meny: välj backend + modell
+./llm_config.sh  # interaktiv meny: välj backend + modell
 
 # Eller sätt direkt (sparas och används av framtida körningar och webgränssnittet)
 export CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...  # eller ANTHROPIC_API_KEY
-.venv/bin/python scripts/llm_config.py --provider claude --model claude-haiku-4-5-20251001
+./llm_config.sh --provider claude --model claude-haiku-4-5-20251001
 
 # Alternativt OpenAI
 export OPENAI_API_KEY=sk-...
-.venv/bin/python scripts/llm_config.py --provider openai --model gpt-4o-mini
+./llm_config.sh --provider openai --model gpt-4o-mini
 ```
 
 En dyr modell som Opus kan bli kostsam för hela arkivet. Välj därför gärna en
@@ -194,7 +218,7 @@ billigare modell uttryckligen innan extraktionen.
 Du kan också skriva över det sparade valet för bara en körning:
 
 ```bash
-.venv/bin/python scripts/extract_entities.py --limit 20 \
+./extract_entities.sh --limit 20 \
   --provider claude --model claude-haiku-4-5-20251001
 ```
 
@@ -204,21 +228,21 @@ Extraktionen skriver resultatet till `generated/db/state.db` och kräver inte at
 Neo4j är igång. Börja med en kostnadsfri dry-run och en begränsad provkörning:
 
 ```bash
-.venv/bin/python scripts/extract_entities.py --dry-run    # visa hur många sidor som återstår, utan LLM-anrop
-.venv/bin/python scripts/extract_entities.py --limit 20   # provkör på 20 dokument
-.venv/bin/python scripts/extract_entities.py              # extrahera resten av arkivet
+./extract_entities.sh --dry-run  # visa hur många sidor som återstår, utan LLM-anrop
+./extract_entities.sh --limit 20  # provkör på 20 dokument
+./extract_entities.sh  # extrahera resten av arkivet
 ```
 
 ### 4. Starta, använd och stoppa Neo4j
 
 ```bash
-.venv/bin/python scripts/neo4j.py          # starta Neo4j; skapar container och lösenord första gången
-.venv/bin/python scripts/neo4j.py status   # kontrollera om Neo4j kör
-.venv/bin/python scripts/load_graph.py     # ladda extraherade entiteter/relationer från state.db
-.venv/bin/python scripts/web.py            # öppna "Graf"-sidan i sidofältet
+./neo4j.sh  # starta Neo4j; skapar container och lösenord första gången
+./neo4j.sh status  # kontrollera om Neo4j kör
+./load_graph.sh  # ladda extraherade entiteter/relationer från state.db
+./web.sh  # öppna "Graf"-sidan i sidofältet
 
-.venv/bin/python scripts/neo4j.py stop     # stoppa Neo4j
-.venv/bin/python scripts/neo4j.py          # starta samma container igen senare
+./neo4j.sh stop  # stoppa Neo4j
+./neo4j.sh  # starta samma container igen senare
 ```
 
 I Graf-sidans vy **Granska och uppdatera** leds du genom tre steg: **Analysera**

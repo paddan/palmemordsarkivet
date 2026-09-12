@@ -92,13 +92,11 @@ embedas och matchas mot vektorindexet, de bästa utdragen rerankas, och de
 källhänvisningar. Snabbt och förutsägbart — passar enkla faktafrågor där ett
 söksteg räcker.
 
-![Web-gränssnitt — RAG-läge](cross-encoder.png)
-
 #### MCP (utredningsläge)
 
 AI söker *autonomt* via
 [Model Context Protocol](https://modelcontextprotocol.io). Istället för en
-fast pipeline får Claude tillgång till verktyg (`search_archive`, `get_page`)
+fast pipeline får AI:n tillgång till verktyg (`search_archive`, `get_page`)
 som den anropar hur många gånger den vill — provar olika söktermer, följer
 upp intressanta träffar och läser hela sidor för mer kontext. Bättre täckning
 på komplexa flerstegs-frågor, men långsammare (~1–3 min).
@@ -113,8 +111,6 @@ Inställningar → LLM-inställningar** och väljs i Utredningssidans sidofält.
 samma panel anger du profilnamn, standardstatus, tjänst och modell; endpoint,
 miljövariabel och priser (USD per 1M token, för kostnadsräkningen) ligger under
 avancerade inställningar. Själva API-nyckeln sparas aldrig.
-
-![Web-gränssnitt — MCP-läge](utredningsläge.png)
 
 ### Utredningspärm
 
@@ -149,7 +145,7 @@ webbläsarens PDF-visare kan hoppa till rätt sida.
 mordkvällen. Platskatalogen seedas och används för snabbval i formuläret, medan
 observationerna kan redigeras i appen; rörelser visas bara när de har tid,
 koordinater och källa. Kartförslag kan dessutom extraheras som en separat
-granskningskö med `.venv/bin/python scripts/extract_map_observations.py` och godkänns manuellt innan
+granskningskö med `./extract_map_observations.sh` och godkänns manuellt innan
 de syns på kartan.
 
 ### Graf
@@ -167,8 +163,6 @@ verifiera Neo4j. Beslut som blivit inaktuella efter en ny extraktion kan
 I samma vy kan du skapa en global namnregel, till exempel
 `RKA2` → `Rikskriminalen A2`, och se dess träffar innan den används över hela
 den granskade grafen.
-
-![Web-gränssnitt — Graf](graf.png)
 
 ## Dokumentation
 

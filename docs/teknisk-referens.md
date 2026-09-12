@@ -65,6 +65,11 @@ För utveckling/tester:
 
 ## Användning
 
+Alla kommandon nedan skrivs som `.venv/bin/python scripts/X.py …`. Samma kommando
+går att skriva `./X.sh …` från projektroten: varje entrypoint har en tunn genväg
+med samma namn som bara vidarebefordrar argumenten — se
+[Kortkommandon](kom-igang.md#kortkommandon).
+
 ### 1. Ladda ner PDF-filerna
 
 ```bash
@@ -1000,8 +1005,7 @@ per-dokumentresultat behålls; ett avbrutet jobb markeras aldrig `succeeded`.
 | `src/pages/3_Graf.py` | Streamlit-grafsida: utforska nätverket eller granska noder/relationer med källtext och LLM-förslag |
 | `neo4j/docker-compose.yml` | Neo4j 5 för kunskapsgrafen med Docker (Browser på :7474) |
 | `scripts/web.py` | Startar Streamlit-servern |
-| `neo4j.sh` | Tunn genväg till `scripts/neo4j.py`; start (standard), stop och status |
-| `web.sh` | Tunn genväg till `scripts/web.py`; vidarebefordrar alla argument |
+| `*.sh` i projektroten | Tunna genvägar till `scripts/*.py` (`./ingest.sh` = `.venv/bin/python scripts/ingest.py`); en per entrypoint, ingen egen flaggparsning eller logik |
 | `src/operations/` | Delat operationslager: modeller, registry, CLI, `job_service`/`worker`, OCR/redactions/pipeline/neo4j-orkestrering |
 | `src/admin_ui.py` + `src/pages/8_Admin.py` | Lokal Streamlit-adminsida: bakgrundsjobb, operationer och LLM-inställningar |
 | `src/db.py` | SQLite-state: versionsstyrt schema + CRUD + delta-queries, inklusive `admin_jobs`, grafbeslut/LLM-förslag, utredningspärm, källbokmärken och anteckningar |

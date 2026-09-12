@@ -38,10 +38,3 @@ def test_pyproject_includes_karta_module() -> None:
     py_modules = set(data["tool"]["setuptools"]["py-modules"])
 
     assert "karta" in py_modules
-
-
-def test_project_root_only_has_approved_shell_shortcuts() -> None:
-    """Produktionsflöden ska sakna shell-wrappers utöver webb- och Neo4j-genvägarna."""
-    root = Path(__file__).resolve().parents[1]
-
-    assert sorted(path.name for path in root.glob("*.sh")) == ["neo4j.sh", "web.sh"]

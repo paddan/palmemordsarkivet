@@ -37,6 +37,14 @@ class OperationRegistry:
             )
         )
 
+    def all_operations(self) -> tuple[OperationDefinition, ...]:
+        """Returnera samtliga operationer, även de som bara körs från CLI:t.
+
+        Används för att kontrollera att varje operation nås från ett
+        ``scripts``-entrypoint (och därmed från sin shell-genväg).
+        """
+        return tuple(self._definitions.values())
+
 
 _registry = OperationRegistry()
 

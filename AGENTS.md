@@ -22,7 +22,7 @@ passar projektets befintliga arkitektur och instruktioner.
 
 När du gör förändringar i projektet ska du **alltid** uppdatera den användarvända dokumentationen och `AGENTS.md` i samma commit — om ändringen påverkar något i dem.
 
-- `README.md` — presentationssida (svenska): vad projektet är + de tre skärmbilderna, länkar vidare
+- `README.md` — presentationssida (svenska): vad projektet är, länkar vidare
 - `docs/kom-igang.md` — snabbstart (svenska): krav, installation, API-nyckel, kör pipelinen, ställ första frågan
 - `docs/teknisk-referens.md` — detaljerad dokumentation (svenska): alla steg/flaggor, state-db, kunskapsgraf, LLM-config, filöversikt, tester
 - `AGENTS.md` — instruktioner för framtida Codex-sessioner
@@ -107,9 +107,10 @@ Repo-data:
 
 ## Commands
 
-Alla produktionsscript är ersatta av Python-entrypoints i `scripts/`. `web.sh` och
-`neo4j.sh` är tunna genvägar till `scripts/web.py` respektive `scripts/neo4j.py`.
-Kör med `.venv/bin/python`:
+Alla produktionsscript är Python-entrypoints i `scripts/`. Varje entrypoint har
+dessutom en tunn genväg i projektroten med samma namn — `./run_pipeline.sh` är
+samma kommando som `.venv/bin/python scripts/run_pipeline.py`. Kör med
+`.venv/bin/python`:
 
 ```bash
 # Tests
@@ -165,7 +166,18 @@ Kör med `.venv/bin/python`:
 ```
 
 Alla entrypoints delar registry i `src/operations/registry.py`; adminsidan (`src/pages/8_Admin.py`)
-och CLI använder samma operationer/parametrar/defaults. Utöver `web.sh` och `neo4j.sh`, inför inga nya shell-wrappers.
+och CLI använder samma operationer/parametrar/defaults. Samma kommandon kan köras
+som `./X.sh` i stället för `.venv/bin/python scripts/X.py`. Shell-genvägarna ska
+förbli dumma: en per `scripts/X.py`, med `exec … "$@"` och ingen egen flaggparsning
+eller logik — flaggor, defaults och validering bor i registret.
+
+**Ny operation kräver tre saker i samma ändring:** posten i
+`src/operations/registry.py`, ett `scripts/X.py` som kör `run("<operation-id>")`
+och en `./X.sh`. Annars hamnar operationen bara i Admin (eller bara i skalet) och
+då glider ytorna isär. `tests/test_scripts.py` kräver att registret, entrypoints
+och genvägarna är **samma mängd** i båda riktningarna; Admin-formuläret,
+CLI-flaggorna och hjälptexterna genereras ur samma definition och bevakas av
+`tests/test_admin_ui.py` och `tests/test_operation_registry.py`.
 
 Env-variabler: `CLAUDE_CODE_OAUTH_TOKEN` (Pro/Max, räknas mot prenumeration) eller `ANTHROPIC_API_KEY`. Valfritt: `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, `OPENROUTER_API_KEY` (backend-katalogen i `src/backends.py` styr vilka modeller som listas).
 

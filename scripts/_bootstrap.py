@@ -18,12 +18,17 @@ def _prioritize_source_tree() -> None:
     sys.path.insert(0, source)
 
 
-def run(operation_id: str) -> int:
-    """Kör en registrerad operation med argument från den aktuella terminalen."""
+def run(operation_id: str, argv: list[str] | None = None) -> int:
+    """Kör en registrerad operation med argument från den aktuella terminalen.
+
+    ``argv`` är till för entrypoints som har ett eget positionsargument före
+    operationens flaggor (t.ex. ``neo4j.py start``); utan det läses
+    ``sys.argv[1:]``.
+    """
     # Gamla shell-wrappers cd:ade till repo-roten före körning — gör likadant så
     # att relativa sökvägar (t.ex. --out files) tolkas mot projektroten, inte cwd.
     os.chdir(ROOT)
     _prioritize_source_tree()
     from operations.cli import run_operation_cli
 
-    return run_operation_cli(operation_id, sys.argv[1:])
+    return run_operation_cli(operation_id, sys.argv[1:] if argv is None else argv)

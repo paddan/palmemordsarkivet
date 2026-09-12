@@ -1,52 +1,94 @@
-"""Regressionstester för Python-entrypoints och borttagna shell-script."""
+"""Regressionstester för Python-entrypoints och deras shell-genvägar."""
 
 from __future__ import annotations
 
+import ast
+import os
 import subprocess
 import sys
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
-SHELL_TO_PYTHON = {
-    "build_user_words.sh": "build_user_words.py",
-    "detect_redactions.sh": "detect_redactions.py",
-    "download.sh": "download.py",
-    "download_wpu.sh": "download_wpu.py",
-    "extract_entities.sh": "extract_entities.py",
-    "extract_map_observations.sh": "extract_map_observations.py",
-    "ingest.sh": "ingest.py",
-    "install.sh": "install.py",
-    "llm_config.sh": "llm_config.py",
-    "llm_correct.sh": "llm_correct.py",
-    "load_graph.sh": "load_graph.py",
-    "merge_pages.sh": "merge_pages.py",
-    "merge_wpu.sh": "merge_wpu.py",
-    "neo4j.sh": "neo4j.py",
-    "normalize.sh": "normalize.py",
-    "ocr.sh": "ocr.py",
-    "ocr_pages.sh": "ocr_pages.py",
-    "ocr_tesseract.sh": "ocr_tesseract.py",
-    "quality.sh": "quality.py",
-    "run_pipeline.sh": "run_pipeline.py",
-    "setup_tessdata.sh": "setup_tessdata.py",
-    "test.sh": "test.py",
-    "web.sh": "web.py",
-}
+# Hjälpmoduler i scripts/ är inte entrypoints och ska inte ha någon genväg.
+NON_ENTRYPOINTS = {"__init__", "_bootstrap"}
 
 
-def test_shell_scripts_are_removed() -> None:
-    # web.sh och neo4j.sh är användarbegärda tunna Python-genvägar.
-    for shell in SHELL_TO_PYTHON:
-        if shell in ("web.sh", "neo4j.sh"):
-            continue
-        assert not (PROJECT_ROOT / shell).exists(), f"{shell} ska vara borttagen"
+def _entrypoint_stems() -> list[str]:
+    return sorted(
+        path.stem
+        for path in (PROJECT_ROOT / "scripts").glob("*.py")
+        if path.stem not in NON_ENTRYPOINTS
+    )
 
 
-def test_python_replacements_exist() -> None:
-    for py in SHELL_TO_PYTHON.values():
-        path = PROJECT_ROOT / "scripts" / py
-        assert path.exists(), f"{py} saknas"
+def test_every_entrypoint_has_a_dumb_shell_shortcut() -> None:
+    """Varje ``scripts/X.py`` ska nås som ``./X.sh`` — utan egen logik i skalet.
+
+    Genvägen får bara vidarebefordra argumenten; flaggor, defaults och validering
+    bor i operationsregistret, annars uppstår två sanningar som glider isär.
+    """
+    for stem in _entrypoint_stems():
+        path = PROJECT_ROOT / f"{stem}.sh"
+        assert path.exists(), f"{path.name} saknas (genväg till scripts/{stem}.py)"
+        assert os.access(path, os.X_OK), f"{path.name} är inte körbar"
+        body = path.read_text(encoding="utf-8")
+        assert f"scripts/{stem}.py" in body, f"{path.name} pekar inte på scripts/{stem}.py"
+        assert '"$@"' in body, f"{path.name} vidarebefordrar inte argumenten"
+        assert body.count("exec ") == 1, f"{path.name} ska avsluta med ett enda exec"
+        assert "case " not in body and "--help" not in body, (
+            f"{path.name} har egen flaggparsning — genvägarna ska vara dumma"
+        )
+
+
+def test_no_shell_shortcut_without_an_entrypoint() -> None:
+    for path in PROJECT_ROOT.glob("*.sh"):
+        assert (PROJECT_ROOT / "scripts" / f"{path.stem}.py").exists(), (
+            f"{path.name} saknar scripts/{path.stem}.py"
+        )
+
+
+def _mentioned_operation_ids(path: Path) -> set[str]:
+    """Strängliteraler i en entrypoint, utan docstrings.
+
+    Varje operation ett ``scripts/X.py`` kan köra står som en literal i filen
+    (``run("ingest")`` eller en tabell över positionsargument).
+    """
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    docstrings = {
+        doc
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+        if (doc := ast.get_docstring(node, clean=False))
+    }
+    return {
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and node.value not in docstrings
+    }
+
+
+def test_every_operation_is_reachable_from_a_shell_shortcut() -> None:
+    """Registry ↔ entrypoint ↔ genväg ska vara samma mängd.
+
+    Likheten fångar båda riktningarna: en ny operation som bara finns i Admin
+    (ingen ``scripts/X.py``, alltså ingen ``./X.sh``) och ett entrypoint som kör
+    ett operation-id som inte finns. Admin, CLI och shell kan därför inte glida
+    isär utan att testet faller.
+    """
+    from operations.registry import get_registry
+
+    registered = {definition.id for definition in get_registry().all_operations()}
+    mentioned: set[str] = set()
+    for path in sorted((PROJECT_ROOT / "scripts").glob("*.py")):
+        mentioned |= _mentioned_operation_ids(path) & registered
+
+    assert mentioned == registered, (
+        f"operationer utan entrypoint/genväg: {sorted(registered - mentioned)}; "
+        f"entrypoint mot okänt id: {sorted(mentioned - registered)}"
+    )
 
 
 def test_web_shell_shortcut_forwards_to_python_entrypoint() -> None:
