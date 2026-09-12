@@ -249,12 +249,13 @@ katalogdefinierade standardvariabel.
 **Token- och kostnadsräknare (`llm_usage`)**: Varje avslutat LLM-anrop bokförs i
 tabellen `llm_usage` i state.db med **profilnamnet som nyckel** (ackumuleras
 alltså mellan sessioner, till skillnad från `st.session_state`), och visas både
-överst i Utrednings sidofält och i Admin → Inställningar vid profilen. Kostnaden
-tas från leverantören när den finns (Claude Agent SDK:s `total_cost_usd`, en
-klientberäkning — inte en faktura),
-annars ur profilens `input_price_usd`/`output_price_usd`/`cache_hit_price_usd`
-(USD per 1M token). Saknas priserna visas `kostnad okänd` och summan märks
-ofullständig — aldrig en påhittad nolla. Ett anrop där leverantören inte
+längst ner i Utrednings sidofält (mindre text via CSS-klassen `.palme-usage`,
+kompakt form `↑34k ↓8k`) och i Admin → Inställningar vid profilen. Kostnaden tas
+från leverantören när den finns (Claude Agent SDK:s `total_cost_usd`, en
+klientberäkning — inte en faktura), annars ur profilens
+`input_price_usd`/`output_price_usd`/`cache_hit_price_usd` (USD per 1M token).
+Saknas priserna visas `kostnad okänd` och summan märks ofullständig — aldrig en
+påhittad nolla. Ett anrop där leverantören inte
 rapporterar någon usage alls bokförs ändå (annars visar räknaren "0 anrop" mot
 en endpoint som struntar i `stream_options`). Räknaren omfattar bara
 Utredning-sidans fyra svarsvägar: kunskapsgrafens entitetsextraktion,

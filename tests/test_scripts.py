@@ -231,18 +231,20 @@ def test_utredning_reports_token_usage_for_every_llm_path() -> None:
     assert "if usage is None and cost is None" not in text
     assert "if cost is None and usage:" in text
     assert "_render_usage_panel(cfg)" in text
-    assert "Profilen totalt:" in text
-    assert "Denna session:" in text
+    assert "Totalt:" in text
+    assert "Session:" in text
+    assert "palme-usage" in text
 
-    # Panelen ligger överst i sidofältet: platshållaren skapas före
-    # "Inställningar" och skrivs om både vid rendering och när ett anrop
-    # bokförts (annars visar sidofältet förra anropets siffror).
+    # Panelen ligger längst ner i sidofältet (efter kunskapsgrafens toggle) och
+    # skrivs om både vid rendering och när ett anrop bokförts — annars visar
+    # sidofältet förra anropets siffror.
     sidebar = text.split("with st.sidebar:", 1)[1].split("_render_usage_panel(backend)", 1)[0]
     assert "_usage_slot = st.empty()" in sidebar
-    assert sidebar.index("_usage_slot = st.empty()") < sidebar.index('st.header("Inställningar")')
+    assert sidebar.index("_usage_slot = st.empty()") > sidebar.index('key="show_graph"')
     assert text.count("_render_usage_panel(") == 3  # def + sidofältet + efter anrop
-    # Två "$" i samma markdown-block blir LaTeX-matte hos Streamlit.
-    assert '.replace("$", "\\\\$")' in text
+    # Två "$" i samma markdown-block blir LaTeX-matte hos Streamlit; panelen
+    # ritas som HTML och använder därför en HTML-entitet.
+    assert '.replace("$", "&#36;")' in text
 
 
 def test_every_page_uses_the_shared_compact_header() -> None:

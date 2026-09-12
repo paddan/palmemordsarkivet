@@ -293,27 +293,32 @@ def _render_usage_panel(cfg: dict) -> None:
     profile = str(st.session_state.get("llm_profile") or "")
     totals = _state_db.get_llm_usage(_casebook_ui.state_conn(), profile)
     rader = [
-        "**Token & kostnad**",
-        f"Profilen totalt: {_llm_usage.format_summary(_llm_usage.totals_from_row(totals))}",
-        "Denna session: "
+        "<span class='palme-usage-titel'>Token & kostnad</span>",
+        f"Totalt: {_llm_usage.format_summary(_llm_usage.totals_from_row(totals))}",
+        "Session: "
         f"{_llm_usage.format_summary(st.session_state.get('llm_usage_session') or {})}",
     ]
     if cfg.get("kind") != "claude" and not (cfg.get("prices") or {}):
-        rader.append("_Priser saknas — sätt dem i Admin → Inställningar._")
-    # Streamlit tolkar två $ i samma markdown-block som LaTeX-matte; escapade
-    # visas kostnadssiffrorna som text.
-    _usage_slot.markdown("  \n".join(rader).replace("$", "\\$"))
+        rader.append("Priser saknas — sätt dem i Admin → Inställningar.")
+    # Två $ i samma markdown-block blir LaTeX-matte hos Streamlit. Här ritas
+    # panelen som HTML (för den mindre stilen), och där gäller inte markdowns
+    # backslash-escape — dollartecknet skrivs som HTML-entitet i stället.
+    _usage_slot.markdown(
+        "<div class='palme-usage'>"
+        + "<br>".join(rader).replace("$", "&#36;")
+        + "</div>",
+        unsafe_allow_html=True,
+    )
 
 
 st.session_state.setdefault("do_rerank", True)
 
-# Räknarens plats överst i sidofältet. Ett st.empty() (inte container) så att
-# samma yta kan skrivas om när ett anrop bokförts — sidofältet ritas före
+# Räknarens plats längst ner i sidofältet. Ett st.empty() (inte container) så
+# att samma yta kan skrivas om när ett anrop bokförts — sidofältet ritas före
 # frågan och skulle annars visa förra anropets siffror.
 _usage_slot = None
 
 with st.sidebar:
-    _usage_slot = st.empty()
     st.header("Inställningar")
     _all_llm = _llm_config.load_all()
     _profile_names = list(_all_llm["profiles"].keys())
@@ -338,6 +343,7 @@ with st.sidebar:
         "öppnar den — inte automatiskt efter varje svar. "
         "Kräver att Neo4j är igång (.venv/bin/python scripts/neo4j.py).",
     )
+    _usage_slot = st.empty()
 
 _render_usage_panel(backend)
 

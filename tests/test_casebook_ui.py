@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+from pathlib import Path
 
 import casebook_ui
 import db as _db
@@ -165,3 +166,12 @@ def test_open_pdf_in_browser_uses_new_browser_tab(tmp_path, monkeypatch) -> None
     casebook_ui.open_pdf_in_browser(pdf, page=12)
 
     assert calls == [(f"{pdf.resolve().as_uri()}#page=12", 2)]
+
+
+def test_shared_css_sizes_the_usage_panel_below_body_text() -> None:
+    """Räknaren i sidofältet ska vara mindre än Streamlits brödtext (1rem)."""
+    text = (Path(__file__).resolve().parents[1] / "src" / "casebook_ui.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert ".palme-usage { font-size: 0.78rem;" in text

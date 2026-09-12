@@ -138,7 +138,7 @@ def test_add_usage_counts_a_call_that_reported_nothing():
 
     assert totals["calls"] == 1
     assert totals["cost_partial"] is True
-    assert llm_usage.format_summary(totals) == "1 anrop · in 0 · ut 0 · kostnad okänd"
+    assert llm_usage.format_summary(totals) == "1 anrop · ↑0 ↓0 · kostnad okänd"
 
 
 def test_format_summary_swedish_numbers_and_unknown_cost():
@@ -154,12 +154,27 @@ def test_format_summary_swedish_numbers_and_unknown_cost():
     line = llm_usage.format_summary(totals)
 
     assert "12 anrop" in line
-    assert "in 34 512" in line
-    assert "ut 8 210" in line
+    assert "↑35k ↓8k" in line
     assert "≈ $0.0021" in line
 
     utan_pris = {**totals, "cost": 0.0, "cost_partial": True}
     assert "kostnad okänd" in llm_usage.format_summary(utan_pris)
+
+
+def test_format_count_compacts_thousands_and_millions():
+    assert llm_usage.format_count(0) == "0"
+    assert llm_usage.format_count(512) == "512"
+    assert llm_usage.format_count(1_756) == "2k"
+    assert llm_usage.format_count(335_158) == "335k"
+    assert llm_usage.format_count(9_999) == "10k"
+    # Halva steg avrundas uppåt (round() är banker's rounding och gav 2 500 → 2k).
+    assert llm_usage.format_count(2_500) == "3k"
+    assert llm_usage.format_count(4_500) == "5k"
+    # 999 500 får inte bli "1000k" — byt till miljoner i stället.
+    assert llm_usage.format_count(999_499) == "999k"
+    assert llm_usage.format_count(999_500) == "1.0m"
+    assert llm_usage.format_count(1_500_000) == "1.5m"
+    assert llm_usage.format_count(12_345_678) == "12m"
 
 
 def test_format_summary_handles_empty_totals():

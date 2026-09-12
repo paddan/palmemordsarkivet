@@ -760,10 +760,10 @@ OpenAI-kompatibel endpoint anger profilen endast miljövariabelns namn i
 Varje avslutat LLM-anrop i Utredning bokförs i `llm_usage` (state.db) under
 profilens namn: antal anrop, indata-/utdata-token, cachade indata-token och
 kostnad. Summeringen **ärvs mellan sessioner** — den nollställs inte när
-webbläsaren laddas om — och visas både överst i Utrednings sidofält ("Profilen totalt" och "Denna
-session") och i Admin → Inställningar vid varje profil
-(`Ackumulerat: … · senast <modell>`). Ett namnbyte flyttar räknaren med
-profilen; **Ta bort** raderar den, så ett återanvänt namn inte ärver gamla
+webbläsaren laddas om — och visas både längst ner i Utrednings sidofält
+("Totalt" och "Session", kompakt form `↑34k ↓8k`) och i Admin → Inställningar
+vid varje profil (`Ackumulerat: … · senast <modell>`). Ett namnbyte flyttar
+räknaren med profilen; **Ta bort** raderar den, så ett återanvänt namn inte ärver gamla
 siffror.
 
 Kostnaden hämtas i första hand från leverantören: Claude Agent SDK rapporterar

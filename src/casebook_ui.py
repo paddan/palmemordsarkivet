@@ -205,6 +205,8 @@ _LAYOUT_CSS = """
 .palme-header { font-size: 0.95rem; line-height: 1.4; margin: 0 0 0.9rem 0; }
 .palme-header .palme-titel { font-weight: 600; }
 .palme-header .palme-meta { color: rgba(128, 128, 128, 0.95); }
+.palme-usage { font-size: 0.78rem; line-height: 1.35; }
+.palme-usage .palme-usage-titel { font-weight: 600; }
 </style>
 """
 

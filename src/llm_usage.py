@@ -19,6 +19,7 @@ Principer:
 """
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 
 # Nycklar i en LLM-profil (generated/llm_config.json), USD per 1M token.
@@ -166,9 +167,24 @@ def totals_from_row(row: Mapping[str, object]) -> dict:
     }
 
 
-def format_tokens(count: int) -> str:
-    """Tusentalsavgränsat antal med vanligt svenskt mellanslag."""
-    return f"{_int(count):,}".replace(",", " ")
+def format_count(count: int) -> str:
+    """Kompakt antal: ``512``, ``335k``, ``1.5m``.
+
+    Tusental avrundas uppåt vid halva steget (2 500 → ``3k``; ``round()`` är
+    banker's rounding och skulle ge ``2k``). Når det avrundade tusentalet 1 000
+    byter vi till miljoner, så 999 500 blir ``1.0m`` i stället för ``1000k``.
+    Miljoner visas med en decimal under tio miljoner — sidofältet är smalt och
+    exakta token är ointressanta där."""
+    value = _int(count)
+    if abs(value) < 1_000:
+        return str(value)
+    tusental = math.floor(value / 1_000 + 0.5)
+    if abs(tusental) < 1_000:
+        return f"{tusental}k"
+    miljoner = value / 1_000_000
+    if abs(miljoner) < 10:
+        return f"{miljoner:.1f}m"
+    return f"{math.floor(miljoner + 0.5)}m"
 
 
 def format_cost(cost: float) -> str:
@@ -177,14 +193,15 @@ def format_cost(cost: float) -> str:
 
 
 def format_summary(totals: Mapping[str, object]) -> str:
-    """Kompakt rad: `12 anrop · in 34 512 · ut 8 210 · ≈ $0.0021`."""
+    """Kompakt rad: `12 anrop · ↑34k ↓8k · ≈ $0.0021`."""
     calls = _int(totals.get("calls"))
     if not calls:
         return "0 anrop"
     parts = [
         f"{calls} anrop",
-        f"in {format_tokens(_int(totals.get('input')))}",
-        f"ut {format_tokens(_int(totals.get('output')))}",
+        # Pilarna hör ihop som en enhet (↑indata ↓utdata).
+        f"↑{format_count(_int(totals.get('input')))} "
+        f"↓{format_count(_int(totals.get('output')))}",
     ]
     cost = _number(totals.get("cost")) or 0.0
     if not cost and not totals.get("cost_partial"):

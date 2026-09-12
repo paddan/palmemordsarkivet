@@ -230,7 +230,7 @@ def test_llm_settings_shows_accumulated_usage_and_saves_prices(tmp_path, monkeyp
 
     assert not app.exception
     assert any(
-        caption.value == "Ackumulerat: 1 anrop · in 1 200 · ut 300 · ≈ $0.0200"
+        caption.value == "Ackumulerat: 1 anrop · ↑1k ↓300 · ≈ $0.0200"
         " · senast claude-opus-4-8"
         for caption in app.caption
     )
