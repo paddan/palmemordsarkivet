@@ -167,7 +167,7 @@ Kör med `.venv/bin/python`:
 Alla entrypoints delar registry i `src/operations/registry.py`; adminsidan (`src/pages/8_Admin.py`)
 och CLI använder samma operationer/parametrar/defaults. Utöver `web.sh` och `neo4j.sh`, inför inga nya shell-wrappers.
 
-Env-variabler: `CLAUDE_CODE_OAUTH_TOKEN` (Pro/Max, räknas mot prenumeration) eller `ANTHROPIC_API_KEY`. Valfritt: `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`.
+Env-variabler: `CLAUDE_CODE_OAUTH_TOKEN` (Pro/Max, räknas mot prenumeration) eller `ANTHROPIC_API_KEY`. Valfritt: `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, `OPENROUTER_API_KEY` (backend-katalogen i `src/backends.py` styr vilka modeller som listas).
 
 **Jobbinvarianter (bakgrundsjobb/admin):**
 

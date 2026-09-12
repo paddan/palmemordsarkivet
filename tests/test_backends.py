@@ -46,6 +46,25 @@ def test_available_models_uses_fetched_and_filters_skip(monkeypatch) -> None:
     assert "whisper-1" not in models
 
 
+def test_openrouter_is_an_openai_compatible_backend() -> None:
+    """OpenRouter nås som OpenAI-protokollet; listan hämtas live från /v1/models."""
+    orouter = backends.BACKENDS["OpenRouter"]
+    assert orouter["kind"] == "openai"
+    assert orouter["base_url"] == "https://openrouter.ai/api/v1"
+    assert orouter["env"] == "OPENROUTER_API_KEY"
+    assert orouter["model"] in orouter["models"]
+
+
+def test_batch_variants_are_filtered_from_fetched_models(monkeypatch) -> None:
+    """Regression: OpenRouters ``:batch``-slugar kräver /api/beta/batches och
+    svarar "no endpoints found" mot chat completions."""
+    fetched = ["openai/gpt-4o", "anthropic/claude-opus-5:batch", "deepseek/deepseek-chat"]
+    monkeypatch.setattr(backends, "fetch_models", lambda base_url, api_key: fetched)
+    models = backends.available_models(backends.BACKENDS["OpenRouter"], api_key="k")
+    assert "anthropic/claude-opus-5:batch" not in models
+    assert "openai/gpt-4o" in models
+
+
 def test_available_models_uses_injected_fetcher(monkeypatch) -> None:
     # Webui injicerar sin cachade fetcher; den ska användas istället för modulens.
     monkeypatch.setattr(backends, "fetch_models", lambda base_url, api_key: ["wrong"])

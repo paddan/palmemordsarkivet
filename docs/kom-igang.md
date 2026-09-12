@@ -9,7 +9,7 @@ detaljer om varje steg, se [Teknisk referens](teknisk-referens.md).
 
 - macOS (testat på Darwin 25), Python 3.11+
 - [Homebrew](https://brew.sh)
-- Minst en stödd LLM-backend: Claude, OpenAI, DeepSeek eller en
+- Minst en stödd LLM-backend: Claude, OpenAI, DeepSeek, OpenRouter eller en
   OpenAI-kompatibel lokal tjänst
 
 ## 1. Installera
@@ -40,6 +40,9 @@ export OPENAI_API_KEY=sk-...
 
 # DeepSeek (V4 / Reasoner):
 export DEEPSEEK_API_KEY=sk-...
+
+# OpenRouter (alla modeller via ett konto):
+export OPENROUTER_API_KEY=sk-or-...
 ```
 
 OAuth-token genereras med `claude setup-token` (engångsåtgärd). I **Admin →
@@ -165,11 +168,12 @@ profil eller skapa en ny, redigera namn, standardstatus, tjänst och modell och
 spara allt tillsammans. Endpoint och namnet på eventuell API-nyckelvariabel
 ligger under **Avancerade inställningar**; själva nyckeln sparas aldrig.
 Om en känd molntjänsts miljövariabelfält lämnas tomt används tjänstens
-standardvariabel, till exempel `DEEPSEEK_API_KEY` för DeepSeek.
+standardvariabel, till exempel `DEEPSEEK_API_KEY` för DeepSeek eller
+`OPENROUTER_API_KEY` för OpenRouter.
 
 Kör `.venv/bin/python scripts/llm_config.py` utan argument i terminalen för en **interaktiv meny** där
 du väljer backend och modell ur samma lista som Admin (Claude / OpenAI /
-DeepSeek / Ollama / OpenAI-kompatibel). Vill du hellre sätta värdena direkt går
+DeepSeek / OpenRouter / Ollama / OpenAI-kompatibel). Vill du hellre sätta värdena direkt går
 det med flaggor:
 
 ```bash

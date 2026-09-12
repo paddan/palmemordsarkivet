@@ -1,6 +1,6 @@
 """Delad LLM-backend-katalog — en sanning för Utredning-sidan och llm_config_cli.
 
-Innehåller listan över valbara backends (Claude/OpenAI/DeepSeek/Ollama/custom),
+Innehåller listan över valbara backends (Claude/OpenAI/DeepSeek/OpenRouter/Ollama/custom),
 modell-filtret och hjälpfunktioner för att hämta tillgängliga modeller från en
 OpenAI-kompatibel /v1/models-endpoint. Konsumeras av:
 
@@ -44,6 +44,15 @@ BACKENDS: dict[str, dict] = {
         "base_url": "https://api.deepseek.com/v1",
         "env": "DEEPSEEK_API_KEY",
     },
+    "OpenRouter": {
+        "kind": "openai",
+        # Modellistan hämtas live från /v1/models — den publika endpointen kräver
+        # ingen nyckel. Statiska listan är bara offline-reserv och default.
+        "model": "openai/gpt-4o",
+        "models": ["openai/gpt-4o"],
+        "base_url": "https://openrouter.ai/api/v1",
+        "env": "OPENROUTER_API_KEY",
+    },
     "Ollama (lokal)": {
         "kind": "openai",
         "model": "gemma3:12b",
@@ -67,6 +76,9 @@ MODEL_SKIP_SUBSTRINGS = {
     "embedding", "tts", "whisper", "dall", "instruct",
     "realtime", "audio", "transcription", "moderation",
     "babbage", "davinci", "search",
+    # OpenRouter: :batch-slugarna går bara mot /api/beta/batches, inte chat
+    # completions — valbara i listan skulle de ge "no endpoints found".
+    ":batch",
 }
 
 

@@ -350,6 +350,12 @@ profil som ska användas för frågan.
 - **DeepSeek V4** — kräver `DEEPSEEK_API_KEY`. Aktuella API-ID:n hämtas
   från DeepSeeks `/v1/models`; reservlistan innehåller `deepseek-v4-flash`,
   `deepseek-v4-pro` och `deepseek-v4-flash-vision-exp`.
+- **OpenRouter** — kräver `OPENROUTER_API_KEY`. Hela modellistan hämtas live från
+  `https://openrouter.ai/api/v1/models`, som är publik och inte kräver någon
+  nyckel; katalogens namn är bara offline-reserv och default.
+  Modell-id:n har formen `leverantör/modell` (`openai/gpt-4o`,
+  `anthropic/claude-sonnet-4.5`). Varianter som går mot OpenRouters batch-API
+  (`:batch`) filtreras bort eftersom de inte svarar på chat completions.
 - **OpenAI-kompatibel (custom)** — pekar på vilken `/v1`-endpoint som helst
   (Ollama, LM Studio, llama.cpp, vLLM, fjärr-OpenAI-providers...). URL,
   modellnamn och namnet på API-nyckelns miljövariabel konfigureras i Admin.
@@ -724,7 +730,8 @@ byter aldrig tyst till standardprofilen. Detsamma gäller profilens
 begripligt fel i stället för att köra jobbet mot katalogens första backend. Om
 `api_key_env` lämnas tomt för en
 känd molnbackend används i stället backendens standardvariabel, som
-`DEEPSEEK_API_KEY` för DeepSeek; lokala backends kan vara nyckelfria.
+`DEEPSEEK_API_KEY` för DeepSeek eller `OPENROUTER_API_KEY` för OpenRouter;
+lokala backends kan vara nyckelfria.
 
 Profilerna lagras i `generated/llm_config.json`. Filen skapas automatiskt — ta
 bort den för att återgå till standardprofilen (Claude Opus 4.8). API-nycklar
@@ -748,8 +755,8 @@ OpenAI-kompatibel endpoint anger profilen endast miljövariabelns namn i
 
 | Fält | Möjliga värden |
 |---|---|
-| `provider` | `claude` eller `openai`; DeepSeek, Ollama och egna endpoints använder det OpenAI-kompatibla protokollet |
-| `model` | t.ex. `claude-opus-4-8`, `gpt-4o`, `deepseek-v4-flash`, `deepseek-v4-pro` |
+| `provider` | `claude` eller `openai`; DeepSeek, OpenRouter, Ollama och egna endpoints använder det OpenAI-kompatibla protokollet |
+| `model` | t.ex. `claude-opus-4-8`, `gpt-4o`, `deepseek-v4-flash`, `openai/gpt-4o` (OpenRouter) |
 | `base_url` | Tomt för molntjänster; URL för lokal endpoint (`http://localhost:11434/v1` för Ollama) |
 | `backend_name` | Visningsnamn i gränssnittet (valfritt) |
 | `api_key_env` | Namnet på miljövariabeln som innehåller API-nyckeln; aldrig nyckelvärdet |
@@ -796,7 +803,7 @@ Snabbaste sättet att se eller byta vald LLM utan att starta Streamlit.
 
 Kör utan argument i en terminal startas en **interaktiv meny** där backend och
 modell väljs ur samma backend-katalog som Admin (Claude / OpenAI / DeepSeek /
-Ollama / OpenAI-kompatibel). För OpenAI-kompatibla providers hämtas modell-listan
+OpenRouter / Ollama / OpenAI-kompatibel). För OpenAI-kompatibla providers hämtas modell-listan
 live från `/v1/models` (faller tillbaka på en inbyggd lista om endpoint eller
 nyckel saknas), och konfigurerbara backends frågar efter endpoint-URL och en
 valfri API-nyckel. Admin använder samma katalog och uppdaterar sin lista högst
@@ -834,7 +841,7 @@ worker-process och fortsätter även om webbläsaren eller Streamlit stängs.
 - Parametrar sparas som normaliserad JSON i `params_json`. Parametrar markerade
   `secret` (t.ex. `--api-key`) avvisas i bakgrundsläget — API-nycklar läses i
   stället ur processmiljön (`CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`,
-  `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`) och skrivs aldrig till JSON eller logg.
+  `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, `OPENROUTER_API_KEY`) och skrivs aldrig till JSON eller logg.
 
 ### Worker och livscykel
 
@@ -968,7 +975,7 @@ per-dokumentresultat behålls; ett avbrutet jobb markeras aldrig `succeeded`.
 | `src/rag/mcp_server.py` | MCP-server med `search_archive` och `get_page` (startas av ask.py/Utredning.py) |
 | `generated/llm_config.json` | Sparad LLM-konfiguration (backend, modell, URL) — se ovan |
 | `src/config.py` | Läser/skriver `generated/llm_config.json` (delas av Utredning-sidan och llm_correct) |
-| `src/backends.py` | Delad backend-katalog (Claude/OpenAI/DeepSeek/Ollama/custom) + `fetch_models`/`available_models` — delas av Utredning-sidan och `scripts/llm_config.py` |
+| `src/backends.py` | Delad backend-katalog (Claude/OpenAI/DeepSeek/OpenRouter/Ollama/custom) + `fetch_models`/`available_models` — delas av Utredning-sidan och `scripts/llm_config.py` |
 | `scripts/llm_config.py` → `src/llm_config_cli.py` | Visa/ändra `generated/llm_config.json` utan webgränssnittet (interaktiv meny i terminal) |
 | `src/citations.py` | Slår upp `[Nr X, sida Y]` (även `[Nr X, sida Y, Z]` och sida-lösa `[Nr X]`) och WPU-prefix som `[Pol-..., sida Y]` mot PDF:er och renderar citatlänkar; hanterar även WPU-stammar där dokument-ID och titel sitter ihop utan avskiljare |
 | `src/Utredning.py` | Streamlit-sida för frågor (RAG- och MCP-flik), token-/kostnadsräknare, svarsgraf, sparknapp, källbokmärken samt facett-/fuzzy-sökfilter |
