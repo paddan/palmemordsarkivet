@@ -541,6 +541,11 @@ def render_llm_settings() -> None:
 
     import backends
     import config as llm_config
+    import db
+    import llm_usage
+
+    conn = db.connect()
+    db.init_schema(conn)
 
     if "llm_profiles" not in st.session_state:
         all_cfg = llm_config.load_all()
@@ -593,11 +598,19 @@ def render_llm_settings() -> None:
             disabled=creating or len(profiles) <= 1,
             use_container_width=True,
         ):
+            if len(profiles) <= 1:
+                # Kan bara nås programmatiskt (knappen är inaktiverad när bara en
+                # profil finns) — men next(iter(...)) nedan skulle krascha här.
+                st.error("Den sista konfigurationen kan inte tas bort.")
+                st.stop()
             del profiles[selected]
             next_name = next(iter(profiles))
             if selected == default_name:
                 default_name = next_name
             llm_config.save_profiles(profiles, default_name)
+            # Räknaren hör till profilen; annars ärver en ny profil med samma
+            # namn den borttagnas token och kostnader.
+            db.delete_llm_usage(conn, selected)
             st.session_state["llm_profiles"] = profiles
             st.session_state["llm_default"] = default_name
             st.session_state["llm_pending_selection"] = next_name
@@ -628,6 +641,14 @@ def render_llm_settings() -> None:
                 else None
             ),
         )
+
+        if not creating:
+            # Ackumulerade token/kostnader för profilen (state.db), samma siffra
+            # som Utrednings sidofält visar.
+            usage = db.get_llm_usage(conn, selected)
+            rad = llm_usage.format_summary(llm_usage.totals_from_row(usage))
+            senast = f" · senast {usage['last_model']}" if usage["last_model"] else ""
+            st.caption(f"Ackumulerat: {rad}{senast}")
 
         keys = list(backends.BACKENDS.keys())
         saved_name = profile.get("backend_name", keys[0])
@@ -699,6 +720,42 @@ def render_llm_settings() -> None:
                 key=api_key_env_key,
                 help="Endast variabelns namn sparas, aldrig själva API-nyckeln.",
             )
+            st.caption(
+                "Priser (valfritt) — USD per 1M token. Används för kostnadsräkningen "
+                "i Utrednings sidofält och här intill; tomt ger \"kostnad okänd\"."
+            )
+            price_defaults = profile if profile.get("backend_name") == backend_name else {}
+            price_cols = st.columns(3)
+            input_price = price_cols[0].number_input(
+                "Input ($/1M)",
+                min_value=0.0,
+                value=float(price_defaults.get("input_price_usd") or 0.0),
+                step=0.01,
+                format="%.4f",
+                key=f"llm_input_price_{profile_key}_{backend_name}",
+                help="Pris för icke-cachade indata-token.",
+            )
+            output_price = price_cols[1].number_input(
+                "Output ($/1M)",
+                min_value=0.0,
+                value=float(price_defaults.get("output_price_usd") or 0.0),
+                step=0.01,
+                format="%.4f",
+                key=f"llm_output_price_{profile_key}_{backend_name}",
+                help="Pris för genererade token.",
+            )
+            cache_hit_price = price_cols[2].number_input(
+                "Cache-träff ($/1M)",
+                min_value=0.0,
+                value=float(price_defaults.get("cache_hit_price_usd") or 0.0),
+                step=0.01,
+                format="%.4f",
+                key=f"llm_cache_hit_price_{profile_key}_{backend_name}",
+                help=(
+                    "Pris för cachade indata-token (DeepSeek cachar automatiskt). "
+                    "Tomt = samma pris som Input."
+                ),
+            )
 
         # En tom override betyder inte att kända molntjänster blir nyckelfria:
         # runtime-konfigurationen faller då tillbaka till backend-katalogens env.
@@ -721,6 +778,9 @@ def render_llm_settings() -> None:
                 model=model,
                 base_url=base_url,
                 api_key_env=api_key_env,
+                input_price_usd=input_price,
+                output_price_usd=output_price,
+                cache_hit_price_usd=cache_hit_price,
             )
             try:
                 updated, updated_default = apply_llm_profile_form(
@@ -736,6 +796,9 @@ def render_llm_settings() -> None:
             else:
                 saved_name = name.strip()
                 llm_config.save_profiles(updated, updated_default)
+                if not creating and saved_name != selected:
+                    # Räknaren följer med vid namnbyte i stället för att lämnas kvar.
+                    db.rename_llm_usage(conn, selected, saved_name)
                 st.session_state["llm_profiles"] = updated
                 st.session_state["llm_default"] = updated_default
                 st.session_state["llm_creating"] = False
@@ -808,15 +871,29 @@ def llm_profile_payload(
     model: str,
     base_url: str,
     api_key_env: str,
-) -> dict[str, str]:
-    """Bygg den persistenta profilen utan hemliga API-nyckelvärden."""
-    return {
+    input_price_usd: float | None = 0.0,
+    output_price_usd: float | None = 0.0,
+    cache_hit_price_usd: float | None = 0.0,
+) -> dict:
+    """Bygg den persistenta profilen utan hemliga API-nyckelvärden.
+
+    Priser (USD per 1M token) sparas bara när de är satta; en tom ruta ska ge
+    \"kostnad okänd\" i gränssnittet, inte en nollkostnad."""
+    payload: dict = {
         "backend_name": backend_name,
         "provider": provider,
         "model": model,
         "base_url": base_url,
         "api_key_env": api_key_env.strip(),
     }
+    for key, value in (
+        ("input_price_usd", input_price_usd),
+        ("output_price_usd", output_price_usd),
+        ("cache_hit_price_usd", cache_hit_price_usd),
+    ):
+        if value:
+            payload[key] = float(value)
+    return payload
 
 
 def numeric_input_bounds(

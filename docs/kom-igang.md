@@ -85,9 +85,9 @@ hittar nya filer, så väntande arbete från en tidigare avbruten körning slutf
 `./web.sh` är en tunn genväg till `.venv/bin/python scripts/web.py` och
 vidarebefordrar eventuella Streamlit-flaggor.
 
-Fliken **Utredning** har två lägen: **RAG** (snabbt, deterministiskt — bra för
-faktafrågor) och **MCP/utredningsläge** (autonomt, bättre täckning på komplexa
-frågor). Toggla i sidofältet. Detaljer i
+Fliken **Utredning** har två flikar: **Fråga arkivet (RAG)** (snabbt,
+deterministiskt — bra för faktafrågor) och **Utredningsläge (MCP)** (autonomt,
+bättre täckning på komplexa frågor). Detaljer i
 [Teknisk referens](teknisk-referens.md#4-ställ-frågor).
 
 När du hittar något intressant kan du spara svaret i fliken **Utredningspärm**.
@@ -99,8 +99,7 @@ snabbt komma tillbaka till samma PDF eller sida senare, och skriva fria
 **anteckningar** på en källa via ✏️-rutan på källkorten (samlas på en egen flik
 i Utredningspärmen).
 
-I Utredning-flikens sidofält finns två extra sökfilter för RAG-läget
-(de döljs när **Utredningsläge (MCP)** är aktivt):
+I RAG-flikens hopfällbara **Sökinställningar** finns två extra sökfilter:
 **facetter** (begränsa träffarna till dokument som nämner en viss person/plats/
 organisation ur kunskapsgrafen) och **OCR-tolerant fuzzy-sökning** (fångar
 söktermer som OCR:en felstavat, t.ex. *Engstrcm* för *Engström* — första

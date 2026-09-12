@@ -6,6 +6,7 @@ from pathlib import Path
 
 import streamlit as st
 
+import casebook_ui as _casebook_ui
 import db
 from admin_ui import (
     NEO4J_OPERATION_IDS,
@@ -29,7 +30,7 @@ st.set_page_config(page_title="Admin", page_icon="⚙️", layout="wide")
 
 TERMINAL_JOB_STATUSES = {"succeeded", "failed", "cancelled", "interrupted"}
 
-st.title("Admin")
+_casebook_ui.render_page_header("Admin")
 
 registry = get_registry()
 

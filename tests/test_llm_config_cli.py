@@ -64,6 +64,34 @@ def test_resolve_runtime_profile_keeps_known_backend_env_compatible() -> None:
     assert runtime["api_key_env"] == "OPENAI_API_KEY"
 
 
+def test_resolve_runtime_profile_exposes_profile_prices() -> None:
+    """Räknaren i Utredning behöver profilens priser (USD per 1M token)."""
+    profile = {
+        "backend_name": "DeepSeek",
+        "model": "deepseek-v4-flash",
+        "input_price_usd": 0.14,
+        "output_price_usd": 0.28,
+        "cache_hit_price_usd": 0.0028,
+    }
+    catalog = {
+        "DeepSeek": {
+            "kind": "openai",
+            "model": "deepseek-v4-flash",
+            "base_url": "https://api.deepseek.com/v1",
+            "env": "DEEPSEEK_API_KEY",
+        }
+    }
+
+    runtime = config.resolve_runtime_profile(profile, catalog, environ={})
+
+    assert runtime["prices"] == {"input": 0.14, "output": 0.28, "cache_hit": 0.0028}
+    # Utan priser ska nyckeln vara tom, inte ärva någon annan profils siffror.
+    utan = config.resolve_runtime_profile(
+        {"backend_name": "DeepSeek"}, catalog, environ={}
+    )
+    assert utan["prices"] == {}
+
+
 def test_profile_cache_key_changes_with_selected_profile() -> None:
     profile_a = {"backend_name": "Claude", "model": "claude-a", "base_url": ""}
     profile_b = {"backend_name": "Claude", "model": "claude-b", "base_url": ""}
@@ -129,6 +157,62 @@ def test_provider_switch_with_model_keeps_it(tmp_path, monkeypatch) -> None:
     stored = _stored_profile(tmp_path)
     assert stored["model"] == "deepseek-chat"
     assert stored["base_url"] == "https://api.deepseek.com/v1"
+
+
+def test_set_model_keeps_profile_prices(tmp_path, monkeypatch, capsys) -> None:
+    """CLI:ns meny skriver om profilen — priserna får inte tappas på vägen."""
+    _patch_cfg(tmp_path, monkeypatch)
+    config.CONFIG_FILE.write_text(
+        json.dumps(
+            {
+                "profiles": {
+                    "Standard": {
+                        "backend_name": "Claude",
+                        "provider": "claude",
+                        "model": "claude-opus-4-8",
+                        "base_url": "",
+                        "input_price_usd": 5.0,
+                        "output_price_usd": 25.0,
+                    }
+                },
+                "default": "Standard",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert llm_config_cli.main(["--model", "claude-haiku-4-5-20251001"]) == 0
+
+    stored = _stored_profile(tmp_path)
+    assert stored["model"] == "claude-haiku-4-5-20251001"
+    assert stored["input_price_usd"] == 5.0
+    assert stored["output_price_usd"] == 25.0
+
+
+def test_provider_switch_drops_prices_for_old_service(tmp_path, monkeypatch, capsys) -> None:
+    """Priserna hör till tjänsten: ett tjänstebyte får inte ärva dem."""
+    _patch_cfg(tmp_path, monkeypatch)
+    config.CONFIG_FILE.write_text(
+        json.dumps(
+            {
+                "profiles": {
+                    "Standard": {
+                        "backend_name": "Claude",
+                        "provider": "claude",
+                        "model": "claude-opus-4-8",
+                        "base_url": "",
+                        "input_price_usd": 5.0,
+                    }
+                },
+                "default": "Standard",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert llm_config_cli.main(["--provider", "openai"]) == 0
+
+    assert "input_price_usd" not in _stored_profile(tmp_path)
 
 
 def test_invalid_provider_exits_2(tmp_path, monkeypatch, capsys) -> None:

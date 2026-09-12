@@ -7,11 +7,13 @@ import pytest
 
 from db import (
     SCHEMA_VERSION,
+    add_llm_usage,
     approve_map_observation_candidate,
     clear_ocr_failures,
     clear_tesseract_blacklisted,
     connect,
     delete_casebook_entry,
+    delete_llm_usage,
     delete_map_observation,
     delete_map_place,
     delete_source_annotation,
@@ -22,6 +24,7 @@ from db import (
     find_download_by_sha1,
     get_bad_pages,
     get_ingested_mtime,
+    get_llm_usage,
     get_pages_for_stem,
     get_pdf_file,
     init_schema,
@@ -59,6 +62,7 @@ from db import (
     record_source_bookmark,
     redaction_checked,
     reject_map_observation_candidate,
+    rename_llm_usage,
     retry_tesseract_blacklisted,
     schema_version,
     seed_map_data_if_empty,
@@ -211,7 +215,7 @@ def test_init_schema_migrates_legacy_v4_fixture(tmp_path):
                 "SELECT version FROM schema_version ORDER BY version"
             )
         ]
-        assert versions == [4, 6, 7, 8, SCHEMA_VERSION]
+        assert versions == [4, 6, 7, 8, 9, SCHEMA_VERSION]
     finally:
         conn.close()
 
@@ -1231,6 +1235,56 @@ def test_create_admin_job_duplicate_id_is_not_active_job_error(tmp_path):
     with pytest.raises(ActiveAdminJobError, match="job-2"):
         create_admin_job(conn, job_id="job-3", operation="ingest",
                          params_json="{}", log_path="job-3.log")
+
+
+def test_llm_usage_accumulates_per_profile(tmp_path):
+    conn = _fresh(tmp_path)
+    assert get_llm_usage(conn, "Deepseek flash")["calls"] == 0
+
+    add_llm_usage(
+        conn, profile="Deepseek flash", model="deepseek-v4-flash",
+        input_tokens=1000, output_tokens=100, cache_hit_tokens=800, cost=0.0002,
+    )
+    add_llm_usage(
+        conn, profile="Deepseek flash", model="deepseek-v4-flash",
+        input_tokens=500, output_tokens=50, cache_hit_tokens=0, cost=0.0001,
+    )
+    add_llm_usage(
+        conn, profile="Lokal", model="gemma3:12b",
+        input_tokens=10, output_tokens=1, cache_hit_tokens=0, cost=None,
+    )
+
+    flash = get_llm_usage(conn, "Deepseek flash")
+    assert flash["calls"] == 2
+    assert flash["input_tokens"] == 1500
+    assert flash["output_tokens"] == 150
+    assert flash["cache_hit_tokens"] == 800
+    assert flash["cost_usd"] == pytest.approx(0.0003)
+    assert flash["cost_partial"] == 0
+    assert flash["last_model"] == "deepseek-v4-flash"
+    assert flash["updated_at"]
+
+    # Ett anrop utan pris gör summan till en undre gräns.
+    lokal = get_llm_usage(conn, "Lokal")
+    assert (lokal["calls"], lokal["cost_usd"], lokal["cost_partial"]) == (1, 0.0, 1)
+    assert get_llm_usage(conn, "Okänd profil")["calls"] == 0
+
+
+def test_llm_usage_follows_rename_and_delete(tmp_path):
+    conn = _fresh(tmp_path)
+    add_llm_usage(
+        conn, profile="Gammalt namn", model="gpt-5",
+        input_tokens=10, output_tokens=2, cache_hit_tokens=0, cost=0.5,
+    )
+
+    rename_llm_usage(conn, "Gammalt namn", "Nytt namn")
+
+    assert get_llm_usage(conn, "Gammalt namn")["calls"] == 0
+    assert get_llm_usage(conn, "Nytt namn")["calls"] == 1
+
+    delete_llm_usage(conn, "Nytt namn")
+
+    assert get_llm_usage(conn, "Nytt namn")["calls"] == 0
 
 
 def test_list_page_stems_returns_documents_with_pages(tmp_path):

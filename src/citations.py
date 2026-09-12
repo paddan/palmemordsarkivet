@@ -13,9 +13,30 @@ from pathlib import Path
 
 # Nr kan vara digitalt med valfritt antal led av "." eller "," (t.ex. 281,10
 # eller 1322.7), men WPU-referenser skrivs ibland som dokumentprefix utan
-# "Nr" (t.ex. Pol-1996-12-19). Valfria hakparenteser runt varje träff
+# "Nr" (t.ex. Pol-1996-12-19). Valfria hakparenteser runt en träff
 # konsumeras av regexen så Markdown-parsern inte manglar [<a>...</a>].
-CITE_RE = re.compile(r"\[?(?:Nr\s+)?([\w\-]+(?:[.,_][\w\-]+)*),\s*sida (\d+)\]?")
+CITE_RE = re.compile(
+    # [Nr X, sida Y] — flera sidnummer i samma citat ("sida 103, 112")
+    # hör också till träffen så inget sidnummer lämnas utanför länken.
+    r"\[?(?:Nr\s+)?(?P<nr>[\w\-]+(?:[.,_][\w\-]+)*),\s*sida\s*(?P<page>\d+(?:\s*,\s*\d+)*)\]?"
+    # [Nr X] och [Nr X, "titel"] — referens till hela filen, utan sida.
+    # Kräver hakparentes så löst tal i prosan inte blir en länk.
+    r"|\[Nr\s+(?P<ref>[\w\-]+(?:[.,_][\w\-]+)*)(?:,[^\[\]]*)?\]"
+)
+
+
+def _cite_nr(m: re.Match) -> str:
+    """Citerat Nr (sida-lösa träffar hamnar i gruppen ``ref``)."""
+    return str(m.group("nr") or m.group("ref"))
+
+
+def _cite_page(m: re.Match) -> int | None:
+    """Första sidnumret i citatet, eller None för en sida-lös referens.
+
+    Citat kan lista flera sidor ("sida 103, 112"); länken öppnar den första."""
+    raw = m.group("page")
+    return int(raw.split(",")[0]) if raw else None
+
 
 # generated/ocr/ skriver över downloaded/-katalogerna → föredras (har OCR-textlager)
 PDF_DIRS = ("downloaded/files", "downloaded/wpu_files", "generated/ocr")
@@ -80,8 +101,8 @@ def extract_cited_sources(answer: str, mapping: dict[str, Path]) -> list[dict]:
     """Bygg källlista ur ett MCP-svar genom att parsa unika Nr-citat."""
     seen: dict[str, dict] = {}
     for m in CITE_RE.finditer(answer):
-        nr = m.group(1)
-        page = int(m.group(2))
+        nr = _cite_nr(m)
+        page = _cite_page(m)
         for pdf in resolve_nr_all(nr, mapping):
             stem = pdf.stem
             if stem in seen:
@@ -127,12 +148,12 @@ def linkify_citations(
     Återstår fler än en kandidat renderas en länk per fil så användaren kan välja.
     """
 
-    def _anchor(pdf: Path, label: str, title: str, page: int) -> str:
+    def _anchor(pdf: Path, label: str, title: str, page: int | None) -> str:
         return pdf_anchor(pdf, label, title, page=page)
 
     def repl(m: re.Match) -> str:
-        nr = m.group(1)
-        page = int(m.group(2))
+        nr = _cite_nr(m)
+        page = _cite_page(m)
         cands = resolve_nr_all(nr, mapping)
         # Smalna av tvetydiga träffar till de källor som faktiskt hämtades.
         if known_sources and len(cands) > 1:

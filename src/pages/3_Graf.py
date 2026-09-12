@@ -20,7 +20,7 @@ import citations as _citations  # noqa: E402
 from graph import viz  # noqa: E402
 
 st.set_page_config(page_title="Palmemordsarkivet — Graf", layout="wide")
-st.title("Kunskapsgraf")
+_casebook_ui.render_page_header("Kunskapsgraf")
 mode = st.radio("Vad vill du göra?", ["Utforska", "Granska och uppdatera"], horizontal=True)
 if mode == "Granska och uppdatera":
     st.caption("Analysera materialet, granska ett förslag i taget och uppdatera sedan grafen.")

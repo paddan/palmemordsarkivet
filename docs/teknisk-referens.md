@@ -25,6 +25,7 @@ Inspektera med t.ex. `sqlite3 generated/db/state.db`. Tabellerna:
 - `map_observations` — källhänvisade observationer med person, koordinat, tid (`HH:MM`), osäkerhet, `nr`, `sida` och notering; `src/karta.py` tolkar tiden mot basdatum `1986-02-28` när `TimestampedGeoJson` byggs
 - `map_observation_candidates` — granskningskö för LLM-extraherade kartförslag. Raderna har `status` (`pending`, `approved`, `rejected`) och blir inte publicerade kartobservationer förrän `approve_map_observation_candidate` skapar en rad i `map_observations`
 - `map_observation_extractions` — per-sida-markör för kartobservations-extraktionen. Även sidor där LLM:en hittar noll kandidater markeras här så omkörningar inte skickar samma tomma sida igen
+- `llm_usage` — ackumulerade token och kostnader per LLM-profil (en rad per profil, `calls`/`input_tokens`/`output_tokens`/`cache_hit_tokens`/`cost_usd`/`cost_partial`/`last_model`). Räknas upp av Utredningssidans anrop och visas både i sidofältet och i Admin → Inställningar
 
 Schemat är versionsstyrt i `src/db.py`. `init_schema(conn)` skapar en färsk
 databas direkt, migrerar äldre databaser via pending migrations och skriver
@@ -324,14 +325,17 @@ Enkla faktafrågor  → RAG-läge (snabbt, deterministiskt)
 Komplexa utredningsfrågor  → MCP-läge (--mcp, autonomt, bättre täckning)
 ```
 
-Fliken **Utredning** (Claude-backend) har en "Utredningsläge (MCP)"-toggle i sidebaren.
-I MCP-läget får du en chatt där Claude minns tidigare frågor i konversationen
+Fliken **Utredning** har två flikar: **Fråga arkivet (RAG)** med den fasta
+pipelinen och **Utredningsläge (MCP)** med chatten. Båda flikarnas innehåll
+renderas vid varje körning (Streamlit), så ett misslyckat RAG-svar lämnar
+chatten orörd.
+I MCP-fliken får du en chatt där Claude minns tidigare frågor i konversationen
 (implementerat via Claude Agent SDK:s `resume`-fält — `session_id` från senaste
-svaret skickas med nästa fråga). Sidebar-knappen "Ny konversation" nollställer
-historiken och startar en ny session. När MCP-läget är aktivt döljs
-RAG-specifika sidofältskontroller (reranker, top-K/top-N, facetter och fuzzy);
-kunskapsgrafens toggle ligger kvar eftersom grafen kan byggas även för
-MCP-svar.
+svaret skickas med nästa fråga). Knappen "Ny konversation" överst i MCP-fliken
+nollställer historiken och startar en ny session. RAG-lägets sökinställningar
+(reranker, top-K/top-N, facetter och fuzzy) ligger i den hopfällbara sektionen
+**Sökinställningar** i RAG-fliken; sidofältet har LLM-profilen och
+kunskapsgrafens toggle, som gäller båda flikarna.
 
 #### Utredning-fliken
 
@@ -369,7 +373,19 @@ iframe så huvudsidan inte laddas om. Openern validerar PDF-token och sidnummer,
 bygger en `file://...#page=N`-URL när sida finns och öppnar PDF:en i en ny
 webbläsarflik. Om samma dokument-ID delas av flera
 filer (t.ex. en palme- och en wpu-version) och svaret inte entydigt pekar ut
-vilken, visas en knapp per fil märkt med titeldelen.
+vilken, visas en knapp per fil märkt med titeldelen. Referenser utan sida
+(`[Nr X]`) länkar till hela filen, och en referens som listar flera sidor
+(`[Nr X, sida 3, 7]`) öppnar den första.
+
+Leverantören kan avsluta mitt i en mening och ändå svara HTTP 200: DeepSeek
+skickar `finish_reason: length` (token-/kontextgränsen) eller
+`insufficient_system_resource` (resursbrist hos dem), och Claude
+`max_tokens`/`error_max_turns`. Alla svarsvägar kontrollerar slutorsaken
+(`stop_notice` i `src/rag/ask.py`) och skriver då en rad i svaret —
+`*[Svar avklippt — …]*` — i stället för att visa halva meningen som ett
+färdigt svar. Avvikelsen loggas samtidigt i `generated/errors.log`
+(komponenterna `ask.openai`, `ask.openai-mcp` och `ask.claude`), så i
+efterhand går det att se hur ofta och varför svar klipptes av.
 
 #### Utredningspärm och bokmärken
 
@@ -737,6 +753,42 @@ OpenAI-kompatibel endpoint anger profilen endast miljövariabelns namn i
 | `base_url` | Tomt för molntjänster; URL för lokal endpoint (`http://localhost:11434/v1` för Ollama) |
 | `backend_name` | Visningsnamn i gränssnittet (valfritt) |
 | `api_key_env` | Namnet på miljövariabeln som innehåller API-nyckeln; aldrig nyckelvärdet |
+| `input_price_usd` / `output_price_usd` / `cache_hit_price_usd` | Valfria priser i USD per 1M token för kostnadsräkningen. `cache_hit_price_usd` gäller cachade indata-token (DeepSeek cachar automatiskt); tomt = samma pris som `input_price_usd`. Utelämnade fält betyder "kostnad okänd" |
+
+### Token och kostnad per profil
+
+Varje avslutat LLM-anrop i Utredning bokförs i `llm_usage` (state.db) under
+profilens namn: antal anrop, indata-/utdata-token, cachade indata-token och
+kostnad. Summeringen **ärvs mellan sessioner** — den nollställs inte när
+webbläsaren laddas om — och visas både överst i Utrednings sidofält ("Profilen totalt" och "Denna
+session") och i Admin → Inställningar vid varje profil
+(`Ackumulerat: … · senast <modell>`). Ett namnbyte flyttar räknaren med
+profilen; **Ta bort** raderar den, så ett återanvänt namn inte ärver gamla
+siffror.
+
+Kostnaden hämtas i första hand från leverantören: Claude Agent SDK rapporterar
+`total_cost_usd`. OpenAI-kompatibla backends rapporterar bara token, och då
+räknas kostnaden ur profilens priser. Saknas priserna visas `kostnad okänd` i
+stället för en gissning, och summan märks som ofullständig när något anrop
+saknade pris. Priserna slås upp när anropet görs — ändrar du dem i efterhand
+ändras inte redan bokförd kostnad.
+
+Två saker att känna till innan siffran läses som en faktura:
+
+- **Bara Utredning-sidans svar räknas.** Kunskapsgrafens entitetsextraktion,
+  Vittnesjämförelsen och bakgrundsjobbens LLM-anrop (entitetsextraktion,
+  LLM-korrigering, kartextraktion) bokförs inte, så summan är en undre gräns för
+  vad materialet kostat.
+- **Claudes siffra är en uppskattning.** `total_cost_usd` beräknas lokalt av
+  SDK:n utifrån en prislista som följer med verktyget. Med
+  `CLAUDE_CODE_OAUTH_TOKEN` (Pro/Max) debiteras du per prenumeration, så talet
+  visar vad anropen skulle ha kostat via API — inte en faktisk kostnad.
+
+Token kommer alltid från leverantörens svar: `stream_options={"include_usage":
+true}` för OpenAI-kompatibel streaming, `usage` per tur i MCP-läget och
+`ResultMessage.usage` för Claude. Modul `src/llm_usage.py` är Streamlit-fri och
+innehåller hela räkningen (parsning, prissättning av cache-träffar,
+formatering).
 
 ### Visa/ändra konfigen utan webgränssnitt (`scripts/llm_config.py`)
 
@@ -912,15 +964,16 @@ per-dokumentresultat behålls; ett avbrutet jobb markeras aldrig `succeeded`.
 | `scripts/llm_correct.py` → `src/llm_correct.py` | LLM-korrektion av dåliga OCR-sidor via Claude Haiku |
 | `scripts/detect_redactions.py` → `src/operations/detect_redactions.py` | Kör redaktionsdetektering på befintliga text/OCR-par |
 | `scripts/ingest.py` → `src/rag/ingest.py` | Bygg vektorindex (LanceDB + BM25 FTS) |
-| `src/rag/ask.py` | Frågefunktioner — RAG-läge och MCP-läge (importeras av Utredning-sidan och mcp_server) |
+| `src/rag/ask.py` | Frågefunktioner — RAG-läge och MCP-läge (importeras av Utredning-sidan och mcp_server) samt `stop_notice` som flaggar avklippta modellsvar |
 | `src/rag/mcp_server.py` | MCP-server med `search_archive` och `get_page` (startas av ask.py/Utredning.py) |
 | `generated/llm_config.json` | Sparad LLM-konfiguration (backend, modell, URL) — se ovan |
 | `src/config.py` | Läser/skriver `generated/llm_config.json` (delas av Utredning-sidan och llm_correct) |
 | `src/backends.py` | Delad backend-katalog (Claude/OpenAI/DeepSeek/Ollama/custom) + `fetch_models`/`available_models` — delas av Utredning-sidan och `scripts/llm_config.py` |
 | `scripts/llm_config.py` → `src/llm_config_cli.py` | Visa/ändra `generated/llm_config.json` utan webgränssnittet (interaktiv meny i terminal) |
-| `src/citations.py` | Slår upp `[Nr X, sida Y]` och WPU-prefix som `[Pol-..., sida Y]` mot PDF:er och renderar citatlänkar; hanterar även WPU-stammar där dokument-ID och titel sitter ihop utan avskiljare |
-| `src/Utredning.py` | Streamlit-flik för frågor (RAG + MCP-toggle), svarsgraf, sparknapp, källbokmärken samt facett-/fuzzy-sökfilter |
-| `src/casebook_ui.py` | Delade Streamlit-komponenter för utredningspärm, källbokmärken och anteckningar |
+| `src/citations.py` | Slår upp `[Nr X, sida Y]` (även `[Nr X, sida Y, Z]` och sida-lösa `[Nr X]`) och WPU-prefix som `[Pol-..., sida Y]` mot PDF:er och renderar citatlänkar; hanterar även WPU-stammar där dokument-ID och titel sitter ihop utan avskiljare |
+| `src/Utredning.py` | Streamlit-sida för frågor (RAG- och MCP-flik), token-/kostnadsräknare, svarsgraf, sparknapp, källbokmärken samt facett-/fuzzy-sökfilter |
+| `src/llm_usage.py` | Token- och kostnadsräkning för LLM-anrop (Streamlit-fri): parsning av leverantörernas usage, prissättning inkl. cache-träffar och formatering av räknaren |
+| `src/casebook_ui.py` | Delade Streamlit-komponenter: kompakt sidhuvud (`render_page_header`), utredningspärm, källbokmärken och anteckningar |
 | `src/pages/2_Utredningspärm.py` | Streamlit-sida för sparade fråga/svar-spår, bokmärkta källor och anteckningar |
 | `src/facets.py` | Facetterad sökning: entiteter ur `doc_entities` → filtrera sökträffar |
 | `src/search_fuzzy.py` | OCR-tolerant fuzzy-sökning (difflib token-index över chunk-korpusen) |

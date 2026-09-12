@@ -71,6 +71,43 @@ Regler:
 
 SELECT_COLS = ["text", "source", "page", "chunk_idx", "nr", "titel", "anmarkning"]
 
+# Termineringsorsaker som betyder att modellen skrev klart. Allt annat betyder
+# att texten kan vara avklippt mitt i en mening — utan att det syns i texten.
+# "stop"/"tool_calls" kommer från OpenAI-kompatibla svar,
+# "end_turn"/"tool_use"/"stop_sequence"/"pause_turn"/"refusal" från Claude.
+_COMPLETE_REASONS = frozenset({
+    "stop",
+    "end_turn",
+    "tool_calls",
+    "tool_use",
+    "stop_sequence",
+    "pause_turn",
+    "refusal",
+})
+
+_STOP_REASONS = {
+    "length": "modellens gräns för svarslängd eller kontext nåddes",
+    "insufficient_system_resource": (
+        "leverantören avbröt på grund av resursbrist hos dem"
+    ),
+    "content_filter": "leverantörens innehållsfilter stoppade texten",
+}
+
+
+def stop_notice(reason: str | None) -> str | None:
+    """Varningsrad när modellen inte fick skriva klart, annars ``None``.
+
+    Leverantörerna kan stoppa mitt i en mening och ändå svara HTTP 200 —
+    DeepSeek skickar ``length`` när token-/kontextgränsen nås och
+    ``insufficient_system_resource`` när deras server får slut på resurser.
+    Utan den här kontrollen visas den avklippta texten som ett färdigt svar.
+    ``None`` betyder att leverantören inte uppgav någon orsak — då är tystnad
+    rätt, vi kan inte avgöra något."""
+    if reason is None or reason in _COMPLETE_REASONS:
+        return None
+    why = _STOP_REASONS.get(reason) or f"leverantören stoppade svaret ({reason})"
+    return f"*[Svar avklippt — {why}. Ställ en följdfråga för resten.]*"
+
 
 def search(table, model, q: str, top_k: int, where: str | None = None) -> list[dict]:
     qv = model.encode(

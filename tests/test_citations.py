@@ -32,6 +32,12 @@ def test_cite_re_matches_simple_and_dotted_nr() -> None:
     assert CITE_RE.search("[Nr 281,10, sida 1]").group(1) == "281,10"
 
 
+def test_cite_re_matches_reference_without_page() -> None:
+    """Modellen citerar ibland hela filen, utan sida."""
+    assert CITE_RE.search("[Nr 582.1]").group("ref") == "582.1"
+    assert CITE_RE.search('[Nr 582.1, "Samtliga erkännanden"]').group("ref") == "582.1"
+
+
 # ---------------------------------------------------------------------------
 # build_nr_to_pdf / resolve_nr_all
 # ---------------------------------------------------------------------------
@@ -181,6 +187,46 @@ def test_linkify_wpu_reference_with_joined_title_suffix(tmp_path: Path) -> None:
     assert "Pol-YYYY-MM-DD_B1952-89_HRdomen, sida 28" in out
 
 
+def test_linkify_reference_without_page_links_the_file(tmp_path: Path) -> None:
+    """"[Nr 582.1]" (hela filen, ingen sida) ska bli en länk utan #page."""
+    mapping = _mapping(tmp_path, ["582.1 — Samtliga erkännanden"])
+
+    out = linkify_citations(
+        'I filen "Samtliga erkännanden" [Nr 582.1] finns allt.', mapping
+    )
+
+    assert out.count("<a href=") == 1
+    assert "[Nr 582.1]</a>" in out
+    assert "&page=" not in out
+
+
+def test_linkify_reference_without_page_but_with_title(tmp_path: Path) -> None:
+    mapping = _mapping(tmp_path, ["582.1 — Samtliga erkännanden"])
+
+    out = linkify_citations('[Nr 582.1, "Samtliga erkännanden"]', mapping)
+
+    assert out.count("<a href=") == 1
+    assert "&page=" not in out
+
+
+def test_linkify_bare_number_outside_brackets_left_untouched(tmp_path: Path) -> None:
+    """Sida-lösa länkar kräver hakparentes så löst tal i prosan inte länkas."""
+    mapping = _mapping(tmp_path, ["281 — Titel"])
+    text = "Klockan 281 på natten."
+    assert linkify_citations(text, mapping) == text
+
+
+def test_linkify_page_list_stays_inside_one_anchor(tmp_path: Path) -> None:
+    """"sida 103, 112" ska inte lämna ", 112]" utanför länken."""
+    mapping = _mapping(tmp_path, ["1322.26 — Förhör ", "112 — x"])
+
+    out = linkify_citations("[Nr 1322.26, sida 103, 112]", mapping)
+
+    assert out.count("<a href=") == 1
+    assert "[Nr 1322.26, sida 103, 112]</a>" in out
+    assert "&page=103" in out
+
+
 def test_linkify_multiple_references_inside_same_brackets(tmp_path: Path) -> None:
     mapping = _mapping(tmp_path, [
         "282.1 — Förhör med advokat Pelle Svensson",
@@ -230,6 +276,16 @@ def test_extract_cited_sources_handles_pol_reference_without_nr(tmp_path: Path) 
     assert len(srcs) == 1
     assert srcs[0]["source"] == "Pol-1996-12-19_KK17882-00-B_Förhör-advokat-Per-Svensson.txt"
     assert srcs[0]["page"] == 40
+
+
+def test_extract_cited_sources_without_page(tmp_path: Path) -> None:
+    mapping = _mapping(tmp_path, ["582.1 — Samtliga erkännanden"])
+
+    srcs = extract_cited_sources("[Nr 582.1]", mapping)
+
+    assert len(srcs) == 1
+    assert srcs[0]["source"] == "582.1 — Samtliga erkännanden.txt"
+    assert srcs[0]["page"] is None
 
 
 def test_extract_cited_sources_empty_for_no_citations(tmp_path: Path) -> None:

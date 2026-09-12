@@ -13,6 +13,8 @@ import os
 from collections.abc import Mapping
 from pathlib import Path
 
+import llm_usage
+
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG_FILE = ROOT / "generated" / "llm_config.json"
 
@@ -58,6 +60,8 @@ def resolve_runtime_profile(
         "base_url": str(profile.get("base_url") or backend.get("base_url") or ""),
         "api_key_env": api_key_env,
         "api_key": env.get(api_key_env, "") if api_key_env else "",
+        # Priser hör till profilen (USD per 1M token); tomt = kostnaden okänd.
+        "prices": llm_usage.prices_from_profile(profile),
     }
 
 

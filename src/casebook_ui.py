@@ -195,6 +195,36 @@ def render_pdf_opener(root: Path) -> None:
     st.query_params.clear()
 
 
+# Kompakt sidhuvud: Streamlits standard är 6 rem toppmarginal över en h1-rubrik,
+# och hjälp-?-ikonen trycks till högerkanten av en flex-wrapper (flex:1,
+# justify-content:flex-end) runt etiketten — den ska sitta direkt efter texten.
+_LAYOUT_CSS = """
+<style>
+[data-testid="stMainBlockContainer"] { padding-top: 1.5rem !important; }
+[data-testid="stWidgetLabel"] > div { flex: 0 1 auto; justify-content: flex-start; }
+.palme-header { font-size: 0.95rem; line-height: 1.4; margin: 0 0 0.9rem 0; }
+.palme-header .palme-titel { font-weight: 600; }
+.palme-header .palme-meta { color: rgba(128, 128, 128, 0.95); }
+</style>
+"""
+
+
+def render_page_header(titel: str, meta: str = "") -> None:
+    """Kompakt sidhuvud i stället för ``st.title`` + ``st.caption``.
+
+    Rubriken är en rad (namn + valfri förklaring) i stället för en h1:a med
+    underrader, och toppmarginalen krymps från 6 rem. Installerar samtidigt
+    CSS:en som flyttar hjälp-? intill etiketten i alla formulär. Alla sidor
+    anropar den här så att rubriknivå och avstånd blir identiska."""
+    st.markdown(_LAYOUT_CSS, unsafe_allow_html=True)
+    beskrivning = f" <span class='palme-meta'>— {meta}</span>" if meta else ""
+    st.markdown(
+        f"<div class='palme-header'><span class='palme-titel'>{titel}</span>"
+        f"{beskrivning}</div>",
+        unsafe_allow_html=True,
+    )
+
+
 def render_annotation_widget(conn, source: dict, key: str) -> None:
     """Hopfällbar ruta för att läsa/lägga till fritextanteckningar på en källa."""
     payload = source_bookmark_payload(source)
@@ -319,8 +349,10 @@ def render_casebook_save(
 def render_casebook_page(root: Path, conn) -> None:
     """Rendera den fristående utredningspärmsidan."""
     st.set_page_config(page_title="Palmemordsarkivet — Utredningspärm", layout="wide")
-    st.title("Utredningspärm")
-    st.caption("Sparade svar och bokmärkta källor från utredningsarbetet.")
+    render_page_header(
+        "Utredningspärm",
+        "sparade svar och bokmärkta källor från utredningsarbetet",
+    )
     render_pdf_opener(root)
 
     entries = _state_db.list_casebook_entries(conn, limit=100)

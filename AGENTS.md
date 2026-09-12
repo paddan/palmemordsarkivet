@@ -207,7 +207,29 @@ jämfördes, vilken fil som hoppades över och varför — inte bara att det hä
 
 ## Non-obvious Design Decisions
 
-**MCP-läge (Utredning.py)**: Konversationskontinuitet uppnås genom att fånga `session_id` från `ResultMessage` och skicka tillbaka det som `ClaudeAgentOptions(resume=...)` på nästa fråga. "Ny konversation" nollställer `chat_history` + `mcp_session_id`. När `mcp_mode` är aktivt ska sidofältet dölja RAG-specifika kontroller (reranker, top-K/top-N, facetter, fuzzy) men behålla kunskapsgrafens toggle eftersom grafen kan byggas för MCP-svar.
+**MCP-läge (Utredning.py)**: Lägena är **flikar** på Utredning-sidan
+(`st.tabs(["Fråga arkivet (RAG)", "Utredningsläge (MCP)"])`, kropparna i
+`_render_rag_tab`/`_render_mcp_tab` — samma upplägg som adminsidan), inte en
+toggle. Streamlit kör båda flikarnas kod varje rerun, så flikkropparna får
+avbryta med `return` — aldrig `st.stop()`, som hade tömt även den andra fliken.
+RAG-flikens sökinställningar (reranker, top-K/top-N, facetter, fuzzy) ligger i
+en hopfällbar `Sökinställningar`-sektion i RAG-fliken; sidofältet har bara
+LLM-profil och kunskapsgrafens toggle (grafen kan byggas för båda lägena).
+Konversationskontinuitet uppnås genom att fånga `session_id` från `ResultMessage`
+och skicka tillbaka det som `ClaudeAgentOptions(resume=...)` på nästa fråga.
+"Ny konversation" (överst i MCP-fliken) nollställer `chat_history` +
+`mcp_session_id`.
+
+**Sidhuvud och hjälp-ikoner (alla sidor)**: Rubriken ritas med
+`casebook_ui.render_page_header(titel, meta)` i stället för `st.title` +
+`st.caption` — en kompakt rad i `.palme-header` (namn + förklaring) och
+huvudytans `padding-top` neddragen till 1,5 rem (Streamlits standard är 6 rem).
+Anropet installerar också CSS:en som sätter hjälp-? direkt efter etiketten:
+`[data-testid="stWidgetLabel"] > div { flex: 0 1 auto; justify-content:
+flex-start; }` — Streamlits egen wrapper runt ikonen har `flex: 1;
+justify-content: flex-end` och trycker den annars till högerkanten. Nya sidor ska
+använda samma hjälpare (och samma CSS) i stället för `st.title`; lägg inte
+tillbaka h1-rubriken, 6 rem-marginalen eller ta bort label-regeln.
 
 **LLM-konfiguration i Admin**: `render_llm_settings` visar profilval och profilens
 namn, standardstatus, tjänst, modell, endpoint och miljövariabel som en
@@ -224,7 +246,32 @@ första backend, och anroparen gör om det till ett begripligt fel. En tom
 `api_key_env` för en känd molnbackend använder dess
 katalogdefinierade standardvariabel.
 
-**PDF-opener för citat/källor**: inline-citat och källkort använder `casebook_ui.render_pdf_opener` + `citations.pdf_anchor`. När sidnummer finns ska länken bära `page=N`; openern validerar både PDF-token och sida, bygger `file://...#page=N` och öppnar PDF:en med `webbrowser.open(..., new=2)` så den hamnar i en ny webbläsarflik i stället för macOS Preview. WPU-uppslag måste även acceptera stammar där ett `Pol-..._...`-dokument-ID följs direkt av titeltext. Utredning, Jämförelse, Utredningspärm och grafens dokumentöppningar ska använda samma opener.
+**Token- och kostnadsräknare (`llm_usage`)**: Varje avslutat LLM-anrop bokförs i
+tabellen `llm_usage` i state.db med **profilnamnet som nyckel** (ackumuleras
+alltså mellan sessioner, till skillnad från `st.session_state`), och visas både
+överst i Utrednings sidofält och i Admin → Inställningar vid profilen. Kostnaden
+tas från leverantören när den finns (Claude Agent SDK:s `total_cost_usd`, en
+klientberäkning — inte en faktura),
+annars ur profilens `input_price_usd`/`output_price_usd`/`cache_hit_price_usd`
+(USD per 1M token). Saknas priserna visas `kostnad okänd` och summan märks
+ofullständig — aldrig en påhittad nolla. Ett anrop där leverantören inte
+rapporterar någon usage alls bokförs ändå (annars visar räknaren "0 anrop" mot
+en endpoint som struntar i `stream_options`). Räknaren omfattar bara
+Utredning-sidans fyra svarsvägar: kunskapsgrafens entitetsextraktion,
+Vittnesjämförelsen och bakgrundsjobbens LLM-anrop bokförs inte, så summan är en
+undre gräns. Cachade indata-token måste prissättas
+med cache-priset: DeepSeek cachar automatiskt och cache-träffen är ~50×
+billigare, så annars överskattas kostnaden kraftigt. Ett namnbyte flyttar
+räknaren (`rename_llm_usage`), **Ta bort** raderar den, och `llm_config_cli`
+behåller priserna när tjänsten är oförändrad men rensar dem vid tjänstebyte.
+Sidofältets panel är en enda markdown-klump i ett `st.empty()` som skrivs om
+*efter* bokföringen, eftersom sidofältet ritas innan frågan körs; `$` escapas
+vid rendering, eftersom två dollartecken i samma markdown-block blir
+LaTeX-matte hos Streamlit.
+
+**PDF-opener för citat/källor**: inline-citat och källkort använder `casebook_ui.render_pdf_opener` + `citations.pdf_anchor`. När sidnummer finns ska länken bära `page=N`; openern validerar både PDF-token och sida, bygger `file://...#page=N` och öppnar PDF:en med `webbrowser.open(..., new=2)` så den hamnar i en ny webbläsarflik i stället för macOS Preview. WPU-uppslag måste även acceptera stammar där ett `Pol-..._...`-dokument-ID följs direkt av titeltext. Referenser utan sida (`[Nr X]`) länkar till hela filen utan `page=`, och flera sidnummer i samma citat hör till samma länk. Utredning, Jämförelse, Utredningspärm och grafens dokumentöppningar ska använda samma opener.
+
+**Avklippta modellsvar (`stop_notice` i `src/rag/ask.py`)**: leverantörerna kan avsluta mitt i en mening och ändå svara HTTP 200 — DeepSeek `length`/`insufficient_system_resource`, Claude `max_tokens`/`error_max_turns`. Varje svarsväg i Utredning (`ask.openai`, `ask.openai-mcp`, `ask.claude`) ska därför gå via `ask.stop_notice` och visa `*[Svar avklippt — …]*` i svaret plus logga i `errors.log`; bara `stop`/`end_turn` (och motsvarande kompletta orsaker) får vara tysta. Lägg inte till en ny svarsväg utan slutorsakskontroll, och återinför inte den gamla ensidiga `finish_reason == "length"`-kontrollen.
 
 **Kunskapsgraf byggs lazy (Utredning.py)**: `_render_answer_graph` tar svaret, inte färdiga centers. Den dyra entitetsextraktionen (`_compute_answer_centers` → vald backend i `generated/llm_config.json`) och Neo4j-frågorna körs **först när användaren öppnar graf-toggeln** — inte automatiskt efter varje svar. DeepSeek/OpenAI använder vald modell; Claude använder Haiku för den lilla extraktionsuppgiften. Resultatet cachas per svar i session state och returneras så utredningspärmen kan spara det.
 

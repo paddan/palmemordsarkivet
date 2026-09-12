@@ -23,7 +23,9 @@ import backends as _backends  # noqa: E402
 import casebook_ui as _casebook_ui  # noqa: E402
 import citations as _citations  # noqa: E402
 import config as _llm_config  # noqa: E402
+import db as _state_db  # noqa: E402
 import facets as _facets  # noqa: E402
+import llm_usage as _llm_usage  # noqa: E402
 import search_fuzzy as _search_fuzzy  # noqa: E402
 from errors_log import log_error  # noqa: E402
 from graph import answer_entities as _answer_entities  # noqa: E402
@@ -46,6 +48,7 @@ from ask import (  # noqa: E402
     format_context,
     rerank,
     search,
+    stop_notice,
 )
 from claude_agent_sdk import (  # noqa: E402
     AssistantMessage,
@@ -60,8 +63,6 @@ from claude_agent_sdk import (  # noqa: E402
 ROOT = Path(__file__).resolve().parents[1]
 
 st.set_page_config(page_title="Palmemordsarkivet", layout="wide")
-st.title("Palmemordsarkivet")
-st.caption("Fråga arkivet — sökning + AI med källhänvisningar.")
 
 
 @st.cache_resource(show_spinner="Laddar embedding-modell…")
@@ -160,7 +161,12 @@ def linkify_citations(text: str, known_sources: set[str] | None = None) -> str:
 
 
 table, embed_model = load()
-st.caption(f"Index: {table.count_rows():,} chunks")
+# Kompakt sidhuvud (delas med övriga sidor via casebook_ui); indexstorleken
+# står i metadelen i stället för på en egen rad.
+_casebook_ui.render_page_header(
+    "Palmemordsarkivet",
+    f"fråga arkivet med källhänvisningar · index: {table.count_rows():,} chunks",
+)
 
 _casebook_ui.render_pdf_opener(ROOT)
 
@@ -238,21 +244,76 @@ OPENAI_TOOLS: list[Any] = [
     },
 ]
 
-st.session_state.setdefault("mcp_mode", False)
+
+def _record_usage(cfg: dict, usage: dict | None, cost: float | None = None) -> None:
+    """Bokför ett avslutat LLM-anrop i sessionens räknare och i state.db.
+
+    Kostnaden används som leverantören rapporterar den när den finns (Claude
+    Agent SDK:s ``total_cost_usd``), annars räknas den ur profilens priser.
+    Saknas båda bokförs token ändå, och raden märks då som ofullständig."""
+    # Även ett anrop helt utan rapporterad usage bokförs: en endpoint som inte
+    # skickar usage ska räknas som ett anrop, inte döljas som "0 anrop". Utan
+    # token blir kostnaden okänd i stället för noll.
+    if cost is None and usage:
+        cost = _llm_usage.cost_usd(usage, cfg.get("prices") or {})
+    # st.session_state nås direkt: sidofältets panel (och därmed den här
+    # funktionens anrop) körs innan modulens ``ss``-alias finns.
+    _llm_usage.add_usage(
+        st.session_state.setdefault("llm_usage_session", {}), usage, cost
+    )
+    profile = str(st.session_state.get("llm_profile") or "")
+    if not profile:
+        # Utan profilnamn finns ingen räknare att spara mot.
+        return
+    try:
+        _state_db.add_llm_usage(
+            _casebook_ui.state_conn(),
+            profile=profile,
+            model=str(cfg.get("model") or ""),
+            input_tokens=int((usage or {}).get("input", 0)),
+            output_tokens=int((usage or {}).get("output", 0)),
+            cache_hit_tokens=int((usage or {}).get("cache_hit", 0)),
+            cost=cost,
+        )
+    except Exception as exc:  # pragma: no cover - räknaren får aldrig fälla svaret
+        log_error("llm_usage", profile, f"kunde inte spara räknaren: {exc}")
+    # Ritas efter bokföringen så även profiltotalen (state.db) är färsk.
+    _render_usage_panel(cfg)
+
+
+def _render_usage_panel(cfg: dict) -> None:
+    """Rita token- och kostnadsräknaren i sidofältets platshållare.
+
+    Anropas både när sidan ritas och när ett anrop bokförts — då skrivs samma
+    yta (``st.empty()``) om, så siffrorna tickar utan omladdning. Totalen
+    kommer ur state.db (ackumulerat över sessioner, per profil), sessionens
+    andel ur ``st.session_state``."""
+    if _usage_slot is None:  # sidofältet har inte ritats än
+        return
+    profile = str(st.session_state.get("llm_profile") or "")
+    totals = _state_db.get_llm_usage(_casebook_ui.state_conn(), profile)
+    rader = [
+        "**Token & kostnad**",
+        f"Profilen totalt: {_llm_usage.format_summary(_llm_usage.totals_from_row(totals))}",
+        "Denna session: "
+        f"{_llm_usage.format_summary(st.session_state.get('llm_usage_session') or {})}",
+    ]
+    if cfg.get("kind") != "claude" and not (cfg.get("prices") or {}):
+        rader.append("_Priser saknas — sätt dem i Admin → Inställningar._")
+    # Streamlit tolkar två $ i samma markdown-block som LaTeX-matte; escapade
+    # visas kostnadssiffrorna som text.
+    _usage_slot.markdown("  \n".join(rader).replace("$", "\\$"))
+
+
 st.session_state.setdefault("do_rerank", True)
 
-
-def _on_mcp_change() -> None:
-    st.session_state.do_rerank = not st.session_state.get("mcp_mode")
-
-
-def _on_rerank_change() -> None:
-    if st.session_state.get("mcp_mode"):
-        st.session_state.mcp_mode = False
-        st.session_state.do_rerank = True
-
+# Räknarens plats överst i sidofältet. Ett st.empty() (inte container) så att
+# samma yta kan skrivas om när ett anrop bokförts — sidofältet ritas före
+# frågan och skulle annars visa förra anropets siffror.
+_usage_slot = None
 
 with st.sidebar:
+    _usage_slot = st.empty()
     st.header("Inställningar")
     _all_llm = _llm_config.load_all()
     _profile_names = list(_all_llm["profiles"].keys())
@@ -268,23 +329,6 @@ with st.sidebar:
     backend_name = backend["backend_name"]
     _profile_runtime_key = _llm_config.profile_cache_key(_profile_name, _profile)
     st.caption("Hantera profiler i **Admin → Inställningar → LLM-inställningar**.")
-    mcp_mode = st.toggle(
-        "Utredningsläge (MCP)",
-        key="mcp_mode",
-        help="Modellen söker autonomt med egna verktyg — bättre på komplexa frågor, men långsammare. "
-        "I detta läge får du en chatt där modellen minns tidigare frågor.",
-        disabled=backend["kind"] not in ("claude", "openai"),
-        on_change=_on_mcp_change,
-    )
-    if mcp_mode and st.button("Ny konversation", use_container_width=True):
-        st.session_state.chat_history = []
-        st.session_state.mcp_session_id = None
-        st.session_state.openai_chat_messages = []
-        # Rensa graf-state per tur så en ny konversations tur N inte ärver
-        # utfällda noder från den gamla.
-        for k in [k for k in st.session_state if k.startswith("turn_")]:
-            del st.session_state[k]
-        st.rerun()
     show_graph = st.toggle(
         "Visa kunskapsgraf",
         value=True,
@@ -295,71 +339,8 @@ with st.sidebar:
         "Kräver att Neo4j är igång (.venv/bin/python scripts/neo4j.py).",
     )
 
-    do_rerank = st.session_state.get("do_rerank", True)
-    top_k = 20
-    top_n = 6
-    selected_facets: list[str] = []
-    _facet_to_name: dict[str, str] = {}
-    fuzzy_on = False
-    fuzzy_threshold = 0.70
+_render_usage_panel(backend)
 
-    if not mcp_mode:
-        do_rerank = st.toggle(
-            "Använd cross-encoder reranker",
-            key="do_rerank",
-            help="Långsammare första gången (laddar ~568 MB) men bättre precision.",
-            on_change=_on_rerank_change,
-        )
-        top_k = st.slider(
-            "Hämta top-K kandidater",
-            5,
-            50,
-            20,
-            help="Antal chunks som vektorsökningen plockar fram ur indexet i första "
-            "steget. Högre K → fler alternativ för rerankern att välja bland "
-            "(bättre täckning) men långsammare. Utan reranker används bara de "
-            "första top-N av dessa.",
-        )
-        top_n = st.slider(
-            "Skicka top-N till AI",
-            1,
-            15,
-            6,
-            help="Antal chunks (efter ev. reranking) som faktiskt skickas som "
-            "kontext till språkmodellen. Högre N → mer underlag men längre "
-            "prompt, högre kostnad och risk att modellen tappar fokus.",
-        )
-
-        # Sökfilter (RAG-läget): facetter ur kunskapsgrafen + OCR-tolerant fuzzy.
-        st.subheader("Sökfilter")
-        _facet_data = _load_facets()
-        _facet_options: list[str] = []
-        for _typ in _facets.FACET_TYPES:
-            for _namn, _cnt in _facet_data.get(_typ, [])[:50]:
-                _label = f"{_typ}: {_namn} ({_cnt})"
-                _facet_options.append(_label)
-                _facet_to_name[_label] = _namn
-        selected_facets = st.multiselect(
-            "Begränsa till entiteter",
-            _facet_options,
-            help="Visa bara träffar ur dokument som nämner valda personer/platser/"
-            "organisationer (ur kunskapsgrafen). Tomt = ingen begränsning.",
-        )
-        fuzzy_on = st.toggle(
-            "OCR-tolerant fuzzy-sökning",
-            value=False,
-            help="Lägg till träffar där söktermer förekommer felstavade av OCR "
-            "(t.ex. 'Engstrcm' för 'Engström'). Första körningen bygger ett index "
-            "(~30 s, ~100 MB minne).",
-        )
-        fuzzy_threshold = st.slider(
-            "Fuzzy-likhet (tröskel)",
-            0.50, 0.95, 0.70, step=0.05,
-            help="Lägre = fångar fler felstavningar men mer brus. Korta namn med "
-            "ett OCR-fel (t.ex. 'Palme'→'Paine') kräver ~0.6; längre ord klarar "
-            "högre tröskel. Påverkar bara när fuzzy-sökning är på.",
-            disabled=not fuzzy_on,
-        )
 
 if backend["kind"] == "claude":
     if not (
@@ -392,6 +373,18 @@ def _mcp_tool_label(name: str, inp: dict) -> str:
     if short == "get_page":
         return f'📄 Läser: {inp.get("source", "")}, sida {inp.get("page", "")}'
     return f"🔧 {short}"
+
+
+def _truncated_notice(reason: str | None, component: str, model: str) -> str | None:
+    """Avklippt-svar-varning + fellogg när leverantören stoppat mitt i texten.
+
+    Loggas som fel (inte debug) eftersom ett avklippt svar är en avvikelse som
+    ska gå att hitta i errors.log i efterhand — annars syns den bara som en
+    oförklarlig halv mening i gränssnittet."""
+    notice: str | None = stop_notice(reason)
+    if notice:
+        log_error(component, f"finish_reason={reason}", f"avklippt svar från {model}")
+    return notice
 
 
 async def stream_mcp(
@@ -446,6 +439,14 @@ async def stream_mcp(
                     status_box.write(_mcp_tool_label(block.name, block.input or {}))
         elif isinstance(message, ResultMessage):
             new_session_id = message.session_id
+            _record_usage(cfg, _llm_usage.usage_from_claude(message.usage), message.total_cost_usd)
+            # Claude Code kan avsluta mitt i en mening: dels vid max_tokens
+            # (stop_reason), dels vid max_turns/andra fel (is_error + subtype).
+            reason = message.subtype if message.is_error else message.stop_reason
+            notice = _truncated_notice(reason, "ask.claude", cfg["model"])
+            if notice:
+                parts.append(f"\n\n{notice}")
+                text_placeholder.markdown("".join(parts))
     return new_session_id, tool_count
 
 
@@ -465,6 +466,13 @@ async def stream_claude(user_msg: str, placeholder, parts: list[str], cfg: dict)
                 if isinstance(block, TextBlock):
                     parts.append(block.text)
                     placeholder.markdown("".join(parts))
+        elif isinstance(message, ResultMessage):
+            _record_usage(cfg, _llm_usage.usage_from_claude(message.usage), message.total_cost_usd)
+            reason = message.subtype if message.is_error else message.stop_reason
+            notice = _truncated_notice(reason, "ask.claude", cfg["model"])
+            if notice:
+                parts.append(f"\n\n{notice}")
+                placeholder.markdown("".join(parts))
 
 
 async def stream_openai(user_msg: str, placeholder, parts: list[str], cfg) -> None:
@@ -474,6 +482,8 @@ async def stream_openai(user_msg: str, placeholder, parts: list[str], cfg) -> No
     api_key = cfg.get("api_key") or "ollama"
     base_url = cfg["base_url"]
     model = cfg["model"]
+    reason: str | None = None
+    usage = None
     async with AsyncOpenAI(api_key=api_key or "ollama", base_url=base_url) as client:
         try:
             stream = await client.chat.completions.create(
@@ -483,6 +493,9 @@ async def stream_openai(user_msg: str, placeholder, parts: list[str], cfg) -> No
                     {"role": "user", "content": user_msg},
                 ],
                 stream=True,
+                # Be om tokenräkningen i ett eget slut-chunk (stöds av OpenAI,
+                # DeepSeek och Ollama).
+                stream_options={"include_usage": True},
             )
         except NotFoundError as exc:
             hint = ""
@@ -493,16 +506,25 @@ async def stream_openai(user_msg: str, placeholder, parts: list[str], cfg) -> No
             st.error(f"404 från {base_url}: {exc}{hint}")
             return
         async for chunk in stream:
+            # Usage kommer i ett sista chunk som saknar choices — läs den innan
+            # vi hoppar över tomma val.
+            if chunk.usage is not None:
+                usage = chunk.usage
             if not chunk.choices:
                 continue
             delta = chunk.choices[0].delta.content
-            if delta is None:
-                continue
-            parts.append(delta)
-            placeholder.markdown("".join(parts))
-            if chunk.choices[0].finish_reason == "length":
-                parts.append("\n\n*[svar avklippt — öka kontextgränsen]*")
+            if delta is not None:
+                parts.append(delta)
                 placeholder.markdown("".join(parts))
+            # finish_reason kommer ofta i en chunk utan innehåll — spara den
+            # och bedöm efter strömmen så även andra stopporsaker än "length"
+            # (t.ex. DeepSeek-resursbrist) syns i svaret.
+            reason = chunk.choices[0].finish_reason or reason
+        _record_usage(cfg, _llm_usage.usage_from_openai(usage))
+        notice = _truncated_notice(reason, "ask.openai", model)
+        if notice:
+            parts.append(f"\n\n{notice}")
+            placeholder.markdown("".join(parts))
 
 
 async def stream_to_string(hits, q, cfg, placeholder=None) -> str:
@@ -593,6 +615,7 @@ async def stream_openai_mcp(
 
     api_key = cfg.get("api_key") or "ollama"
     tool_count = 0
+    turns_usage: dict = {}
     try:
         async with AsyncOpenAI(api_key=api_key or "ollama", base_url=cfg["base_url"]) as client:
             for _turn in range(10):
@@ -600,6 +623,10 @@ async def stream_openai_mcp(
                     model=cfg["model"],
                     messages=messages,
                     tools=OPENAI_TOOLS,
+                )
+                # Icke-strömmande svar: usage per tur, summeras över turerna.
+                _llm_usage.add_usage(
+                    turns_usage, _llm_usage.usage_from_openai(response.usage), None
                 )
                 choice = response.choices[0]
                 msg = choice.message
@@ -634,6 +661,14 @@ async def stream_openai_mcp(
                         )
                 else:
                     final = msg.content or ""
+                    # Endast finish_reason "stop" betyder ett färdigt svar.
+                    # "length" och DeepSeeks "insufficient_system_resource"
+                    # ger en halv mening som annars visas som komplett.
+                    notice = _truncated_notice(
+                        choice.finish_reason, "ask.openai-mcp", cfg["model"]
+                    )
+                    if notice:
+                        final = f"{final}\n\n{notice}" if final else notice
                     parts.append(final)
                     text_placeholder.markdown(final)
                     messages.append({"role": "assistant", "content": final})
@@ -655,6 +690,14 @@ async def stream_openai_mcp(
         label=f"{n} sökning{suffix} gjord{done}",
         state="complete",
         expanded=False,
+    )
+    # Kostnaden räknas en gång för hela frågan (alla turer) ur profilens priser.
+    _record_usage(
+        cfg,
+        turns_usage,
+        _llm_usage.cost_usd(turns_usage, cfg.get("prices") or {})
+        if turns_usage
+        else None,
     )
 
 
@@ -983,7 +1026,27 @@ def _render_chat_turn(turn: dict, turn_idx: int) -> None:
             _render_chat_sources(srcs, f"chat_pdf_{turn_idx}")
 
 
-if mcp_mode:
+def _render_mcp_tab() -> None:
+    """Utredningsläget: modellen söker autonomt med MCP-verktygen och minns
+    tidigare frågor i konversationen (Claude via ``resume``, OpenAI-kompatibla
+    via meddelandehistoriken)."""
+    _info, _new = st.columns([4, 1])
+    with _info:
+        st.caption(
+            "Modellen söker själv i arkivet och minns tidigare frågor i "
+            "konversationen."
+        )
+    with _new:
+        if st.button("Ny konversation", use_container_width=True):
+            st.session_state.chat_history = []
+            st.session_state.mcp_session_id = None
+            st.session_state.openai_chat_messages = []
+            # Rensa graf-state per tur så en ny konversations tur N inte ärver
+            # utfällda noder från den gamla.
+            for k in [k for k in st.session_state if k.startswith("turn_")]:
+                del st.session_state[k]
+            st.rerun()
+
     if backend["kind"] == "claude":
         # Chatt-läge: rendera historiken först, sedan st.chat_input nederst.
         for turn_idx, turn in enumerate(ss.chat_history):
@@ -1049,7 +1112,70 @@ if mcp_mode:
                 }
             )
             st.rerun()
-else:
+
+
+def _render_rag_tab() -> None:
+    """RAG-läget: en fråga, fast pipeline, ett svar. Sökinställningarna nedan
+    påverkar bara den här fliken."""
+    with st.expander("Sökinställningar", expanded=False):
+        _facet_to_name: dict[str, str] = {}
+
+        do_rerank = st.toggle(
+            "Använd cross-encoder reranker",
+            key="do_rerank",
+            help="Långsammare första gången (laddar ~568 MB) men bättre precision.",
+        )
+        top_k = st.slider(
+            "Hämta top-K kandidater",
+            5,
+            50,
+            20,
+            help="Antal chunks som vektorsökningen plockar fram ur indexet i första "
+            "steget. Högre K → fler alternativ för rerankern att välja bland "
+            "(bättre täckning) men långsammare. Utan reranker används bara de "
+            "första top-N av dessa.",
+        )
+        top_n = st.slider(
+            "Skicka top-N till AI",
+            1,
+            15,
+            6,
+            help="Antal chunks (efter ev. reranking) som faktiskt skickas som "
+            "kontext till språkmodellen. Högre N → mer underlag men längre "
+            "prompt, högre kostnad och risk att modellen tappar fokus.",
+        )
+
+        # Sökfilter (RAG-läget): facetter ur kunskapsgrafen + OCR-tolerant fuzzy.
+        st.subheader("Sökfilter")
+        _facet_data = _load_facets()
+        _facet_options: list[str] = []
+        for _typ in _facets.FACET_TYPES:
+            for _namn, _cnt in _facet_data.get(_typ, [])[:50]:
+                _label = f"{_typ}: {_namn} ({_cnt})"
+                _facet_options.append(_label)
+                _facet_to_name[_label] = _namn
+        selected_facets = st.multiselect(
+            "Begränsa till entiteter",
+            _facet_options,
+            help="Visa bara träffar ur dokument som nämner valda personer/platser/"
+            "organisationer (ur kunskapsgrafen). Tomt = ingen begränsning.",
+        )
+        fuzzy_on = st.toggle(
+            "OCR-tolerant fuzzy-sökning",
+            value=False,
+            help="Lägg till träffar där söktermer förekommer felstavade av OCR "
+            "(t.ex. 'Engstrcm' för 'Engström'). Första körningen bygger ett index "
+            "(~30 s, ~100 MB minne).",
+        )
+        fuzzy_threshold = st.slider(
+            "Fuzzy-likhet (tröskel)",
+            0.50, 0.95, 0.70, step=0.05,
+            help="Lägre = fångar fler felstavningar men mer brus. Korta namn med "
+            "ett OCR-fel (t.ex. 'Palme'→'Paine') kräver ~0.6; längre ord klarar "
+            "högre tröskel. Påverkar bara när fuzzy-sökning är på.",
+            disabled=not fuzzy_on,
+        )
+
     with st.form("ask"):
         q = st.text_input("Din fråga", placeholder="Vem är Stig Engström?")
         submitted = st.form_submit_button("Fråga", type="primary")
@@ -1088,7 +1214,7 @@ else:
                 else:
                     status.update(label="Inga träffar", state="error")
                 ss.hits, ss.answer = None, ""
-                st.stop()
+                return  # avbryt bara den här fliken, inte chatten
             if do_rerank:
                 status.update(label="Omrankar med cross-encoder…")
                 hits = rerank(q, hits, top_n)
@@ -1127,22 +1253,29 @@ else:
             key="rag_current",
         )
 
-# Rendera resultat från session_state vid rerun från PDF-knappar (ej ny sökning).
-# Bara i RAG-läget — MCP-chatten renderar sina källor inline per tur.
-if ss.hits and not mcp_mode and not (submitted and q.strip()):
-    st.subheader("Svar")
-    st.markdown(ss.answer, unsafe_allow_html=True)
-    if show_graph:
-        ss.answer_centers = _render_answer_graph(ss.answer, "rag")
-    _casebook_ui.render_casebook_save(
-        casebook_conn,
-        question=ss.question,
-        answer=ss.answer,
-        mode="rag",
-        backend_name=backend_name,
-        model=backend["model"],
-        sources=ss.hits,
-        centers=ss.answer_centers,
-        key="rag_cached",
-    )
-    _render_rag_sources(ss.hits, "cached")
+    # Rendera resultat från session_state vid rerun från PDF-knappar (ej ny sökning).
+    # Bara i RAG-läget — MCP-chatten renderar sina källor inline per tur.
+    if ss.hits and not (submitted and q.strip()):
+        st.subheader("Svar")
+        st.markdown(ss.answer, unsafe_allow_html=True)
+        if show_graph:
+            ss.answer_centers = _render_answer_graph(ss.answer, "rag")
+        _casebook_ui.render_casebook_save(
+            casebook_conn,
+            question=ss.question,
+            answer=ss.answer,
+            mode="rag",
+            backend_name=backend_name,
+            model=backend["model"],
+            sources=ss.hits,
+            centers=ss.answer_centers,
+            key="rag_cached",
+        )
+        _render_rag_sources(ss.hits, "cached")
+
+
+_tab_rag, _tab_mcp = st.tabs(["Fråga arkivet (RAG)", "Utredningsläge (MCP)"])
+with _tab_rag:
+    _render_rag_tab()
+with _tab_mcp:
+    _render_mcp_tab()

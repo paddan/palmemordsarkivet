@@ -190,6 +190,22 @@ def test_utredning_installs_shared_pdf_opener_for_citation_links() -> None:
     assert "urlsafe_b64decode" not in text
 
 
+def test_utredning_surfaces_provider_truncation_in_every_answer_path() -> None:
+    """Regression: leverantören kan avsluta mitt i en mening (DeepSeek
+    ``length``/``insufficient_system_resource``, Claude ``max_tokens`` eller
+    ``max_turns``). Den halva meningen visades förut som ett färdigt svar —
+    ingen av svarsvägarna fick glömma bort att kontrollera slutorsaken."""
+    project_root = Path(__file__).resolve().parents[1]
+    text = (project_root / "src" / "Utredning.py").read_text(encoding="utf-8")
+
+    for component in ("ask.claude", "ask.openai-mcp", "ask.openai"):
+        assert f'"{component}"' in text, f"{component} saknar avklippt-kontroll"
+    # Den gamla ensidiga kontrollen (bara "length", bara i RAG-strömmen) ska
+    # vara borta — alla vägar går via stop_notice.
+    assert 'finish_reason == "length"' not in text
+    assert text.count("_truncated_notice(") >= 4
+
+
 def test_casebook_page_installs_shared_pdf_opener_for_saved_answers() -> None:
     project_root = Path(__file__).resolve().parents[1]
     text = (project_root / "src" / "casebook_ui.py").read_text(encoding="utf-8")
@@ -199,18 +215,91 @@ def test_casebook_page_installs_shared_pdf_opener_for_saved_answers() -> None:
     assert "render_pdf_opener(root)" in page_block
 
 
-def test_utredning_sidebar_hides_rag_only_controls_in_mcp_mode() -> None:
+def test_utredning_reports_token_usage_for_every_llm_path() -> None:
+    """Räknaren ska fyllas oavsett väg: RAG/MCP × Claude/OpenAI."""
     project_root = Path(__file__).resolve().parents[1]
     text = (project_root / "src" / "Utredning.py").read_text(encoding="utf-8")
 
-    marker = (
-        'if not mcp_mode:\n'
-        '        do_rerank = st.toggle(\n'
-        '            "Använd cross-encoder reranker"'
-    )
-    assert marker in text
-    rag_block = text.split(marker, 1)[1].split('if backend["kind"] == "claude":', 1)[0]
+    # 1 definition + fyra anrop (stream_mcp, stream_claude, stream_openai,
+    # stream_openai_mcp).
+    assert text.count("_record_usage(") == 5
+    assert 'stream_options={"include_usage": True}' in text
+    assert "_llm_usage.usage_from_openai(response.usage)" in text
+    assert "message.total_cost_usd" in text
+    # Även ett anrop utan rapporterad usage ska bokföras, annars visar räknaren
+    # "0 anrop" mot en endpoint som inte skickar usage.
+    assert "if usage is None and cost is None" not in text
+    assert "if cost is None and usage:" in text
+    assert "_render_usage_panel(cfg)" in text
+    assert "Profilen totalt:" in text
+    assert "Denna session:" in text
 
+    # Panelen ligger överst i sidofältet: platshållaren skapas före
+    # "Inställningar" och skrivs om både vid rendering och när ett anrop
+    # bokförts (annars visar sidofältet förra anropets siffror).
+    sidebar = text.split("with st.sidebar:", 1)[1].split("_render_usage_panel(backend)", 1)[0]
+    assert "_usage_slot = st.empty()" in sidebar
+    assert sidebar.index("_usage_slot = st.empty()") < sidebar.index('st.header("Inställningar")')
+    assert text.count("_render_usage_panel(") == 3  # def + sidofältet + efter anrop
+    # Två "$" i samma markdown-block blir LaTeX-matte hos Streamlit.
+    assert '.replace("$", "\\\\$")' in text
+
+
+def test_every_page_uses_the_shared_compact_header() -> None:
+    """Sidhuvudet var en h1:a + två captions per sida, och hjälp-? trycktes till
+    högerkanten av Streamlits flex-wrapper runt etiketten (flex:1). CSS:en och
+    rubriken delas nu av alla sidor via casebook_ui."""
+    project_root = Path(__file__).resolve().parents[1]
+    src = project_root / "src"
+    shared = (src / "casebook_ui.py").read_text(encoding="utf-8")
+
+    assert "class='palme-header'" in shared
+    assert "padding-top: 1.5rem !important" in shared
+    assert (
+        '[data-testid="stWidgetLabel"] > div '
+        "{ flex: 0 1 auto; justify-content: flex-start; }" in shared
+    )
+
+    for sida in [src / "Utredning.py", *sorted((src / "pages").glob("*.py"))]:
+        text = sida.read_text(encoding="utf-8")
+        assert "st.title(" not in text, f"{sida.name} har kvar st.title"
+        assert "palme-header" not in text, f"{sida.name} duplicerar CSS:en"
+        # 2_Utredningspärm renderas inifrån casebook_ui (render_casebook_page).
+        if sida.name != "2_Utredningspärm.py":
+            assert "render_page_header(" in text, f"{sida.name} saknar sidhuvud"
+
+
+def test_utredning_header_shows_the_index_size() -> None:
+    project_root = Path(__file__).resolve().parents[1]
+    text = (project_root / "src" / "Utredning.py").read_text(encoding="utf-8")
+
+    assert '"Palmemordsarkivet",' in text
+    assert "index: {table.count_rows():,} chunks" in text
+
+
+def test_utredning_puts_rag_and_mcp_in_their_own_tabs() -> None:
+    """Lägena är flikar (som på adminsidan), inte en sidofälts-toggle."""
+    project_root = Path(__file__).resolve().parents[1]
+    text = (project_root / "src" / "Utredning.py").read_text(encoding="utf-8")
+
+    assert (
+        '_tab_rag, _tab_mcp = st.tabs(["Fråga arkivet (RAG)", "Utredningsläge (MCP)"])'
+        in text
+    )
+    assert "    _render_rag_tab()" in text
+    assert "    _render_mcp_tab()" in text
+    # Toggeln och dess synk mot RAG-kontrollerna ska vara borta.
+    assert "mcp_mode" not in text
+    assert "_on_mcp_change" not in text
+
+
+def test_utredning_rag_controls_live_inside_the_rag_tab() -> None:
+    """Sökinställningarna hör till RAG-fliken — de ska inte synas i chatten."""
+    project_root = Path(__file__).resolve().parents[1]
+    text = (project_root / "src" / "Utredning.py").read_text(encoding="utf-8")
+
+    rag_block = text.split("def _render_rag_tab()", 1)[1]
+    assert 'st.expander("Sökinställningar", expanded=False)' in rag_block
     for label in (
         "Hämta top-K kandidater",
         "Skicka top-N till AI",
@@ -218,10 +307,18 @@ def test_utredning_sidebar_hides_rag_only_controls_in_mcp_mode() -> None:
         "Begränsa till entiteter",
         "OCR-tolerant fuzzy-sökning",
     ):
-        assert label in rag_block
+        assert label in rag_block, f"{label} ligger utanför RAG-fliken"
 
-    mcp_sidebar_block = text.split('mcp_mode = st.toggle(', 1)[1].split(marker, 1)[0]
-    assert "Visa kunskapsgraf" in mcp_sidebar_block
+    sidebar = text.split("with st.sidebar:", 1)[1].split("def _render_mcp_tab()", 1)[0]
+    assert "Visa kunskapsgraf" in sidebar
+    assert "Hämta top-K kandidater" not in sidebar
+
+
+def test_utredning_raises_instead_of_stopping_the_whole_page_in_a_tab() -> None:
+    """``st.stop()`` i en flik hade tömt även den andra fliken (båda körs)."""
+    project_root = Path(__file__).resolve().parents[1]
+    text = (project_root / "src" / "Utredning.py").read_text(encoding="utf-8")
+    assert "st.stop()" not in text.split("def _render_rag_tab()", 1)[1]
 
 
 # ---------------------------------------------------------------------------

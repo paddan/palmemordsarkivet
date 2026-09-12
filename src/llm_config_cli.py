@@ -20,6 +20,7 @@ from pathlib import Path
 
 import backends
 import config
+from llm_usage import PROFILE_PRICE_KEYS
 
 # Default-modeller per provider när man byter provider utan att ange --model.
 # Matchar DEFAULT_CLAUDE_MODEL/OPENAI_DEFAULT_MODEL i graph/extract_entities.py.
@@ -126,6 +127,10 @@ def _run_menu(read, out) -> int:
         "model": model,
         "base_url": base_url,
     }
+    if backend_name == cfg.get("backend_name"):
+        # Menyn skriver om hela profilen; priserna hör till tjänsten och får
+        # inte tappas när samma tjänst behålls.
+        new_cfg.update({key: cfg[key] for key in PROFILE_PRICE_KEYS if key in cfg})
     config.save(new_cfg)
     out("")
     out("Sparad konfiguration:")
@@ -178,6 +183,11 @@ def run_llm_config(
     cfg = config.load()
 
     if provider is not None:
+        if cfg.get("provider") != provider:
+            # Priserna gäller den gamla tjänstens modeller; att ärva dem för en
+            # ny tjänst skulle ge en felaktig kostnadsräkning.
+            for key in PROFILE_PRICE_KEYS:
+                cfg.pop(key, None)
         cfg["provider"] = provider
         cfg["backend_name"] = PROVIDER_BACKEND_NAMES[provider]
         if model is None:

@@ -14,7 +14,7 @@ try:
     from streamlit_folium import st_folium
 except ImportError:  # pragma: no cover - optional web extra
     st.set_page_config(page_title="Palmemordsarkivet — Karta", layout="wide")
-    st.title("Karta")
+    st.markdown("**Palmemordsarkivet — Karta**")
     st.warning("Installera kartstödet med `pip install -e .[web]`.")
     st.stop()
 
@@ -216,8 +216,10 @@ def _sync_form_state(selected: dict | None, default_place_choice: str) -> None:
 
 
 st.set_page_config(page_title="Palmemordsarkivet — Karta", layout="wide")
-st.title("Karta")
-st.caption("Källhänvisade observationer och rörelser runt mordkvällen 28 februari 1986.")
+_casebook_ui.render_page_header(
+    "Karta",
+    "källhänvisade observationer och rörelser runt mordkvällen 28 februari 1986",
+)
 
 conn = _casebook_ui.state_conn()
 seeded = _seed_if_needed(conn)

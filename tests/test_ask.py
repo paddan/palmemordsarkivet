@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
-from ask import _hit_key, format_context, search_hybrid
+from ask import _hit_key, format_context, search_hybrid, stop_notice
 
 
 class _FakeQuery:
@@ -118,3 +118,39 @@ def test_fts_failure_falls_back_to_vector_hits() -> None:
     table = _FakeTable(vec_rows=vec, fts_error=RuntimeError("tantivy saknas"))
     hits = search_hybrid(table, _FakeModel(), "fråga", top_k=2)
     assert [h["source"] for h in hits] == ["a.txt", "b.txt"]
+
+
+# ---------------------------------------------------------------------------
+# stop_notice — avklippta svar (leverantören stoppade mitt i en mening)
+# ---------------------------------------------------------------------------
+
+def test_stop_notice_silent_for_complete_answers() -> None:
+    """Både OpenAI- och Claude-termineringar räknas som färdiga svar."""
+    complete = (
+        # OpenAI-kompatibla
+        "stop", "tool_calls",
+        # Claude
+        "end_turn", "tool_use", "stop_sequence", "pause_turn", "refusal",
+        # ingen orsak uppgiven → kan inte bedömas, varna inte i onödan
+        None,
+    )
+    for reason in complete:
+        assert stop_notice(reason) is None
+
+
+def test_stop_notice_flags_claude_max_tokens() -> None:
+    assert stop_notice("max_tokens") is not None
+
+
+def test_stop_notice_explains_length_insufficient_resources_and_filter() -> None:
+    assert "svarslängd" in stop_notice("length")
+    assert "resursbrist" in stop_notice("insufficient_system_resource")
+    assert "innehållsfilter" in stop_notice("content_filter")
+    for reason in ("length", "insufficient_system_resource", "content_filter"):
+        assert stop_notice(reason).startswith("*[Svar avklippt")
+
+
+def test_stop_notice_reports_unknown_reason_instead_of_hiding_it() -> None:
+    notice = stop_notice("något_nytt")
+    assert notice is not None
+    assert "något_nytt" in notice

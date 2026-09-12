@@ -36,8 +36,10 @@ import compare as _compare  # noqa: E402
 import config as _llm_config  # noqa: E402
 
 st.set_page_config(page_title="Palmemordsarkivet — Jämförelse", layout="wide")
-st.title("Vittnesjämförelse")
-st.caption("Ställ källorna mot varandra och se var de säger emot varandra.")
+_casebook_ui.render_page_header(
+    "Vittnesjämförelse",
+    "ställ källorna mot varandra och se var de säger emot varandra",
+)
 _casebook_ui.render_pdf_opener(ROOT)
 
 conn = _casebook_ui.state_conn()

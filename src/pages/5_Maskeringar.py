@@ -18,9 +18,11 @@ import casebook_ui as _casebook_ui  # noqa: E402
 import redactions as _redactions  # noqa: E402
 
 st.set_page_config(page_title="Palmemordsarkivet — Maskeringar", layout="wide")
-st.title("Maskeringar")
-st.caption("Var har arkivet svärtat över text? Det som dolts är ofta lika "
-           "intressant som innehållet.")
+_casebook_ui.render_page_header(
+    "Maskeringar",
+    "var har arkivet svärtat över text? Det som dolts är ofta lika intressant "
+    "som innehållet",
+)
 
 conn = _casebook_ui.state_conn()
 

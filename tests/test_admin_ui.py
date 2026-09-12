@@ -27,9 +27,12 @@ from operations.models import OperationDefinition, ParameterDefinition
 from operations.registry import OperationRegistry
 
 
-def _llm_settings_app(tmp_path) -> object:
+def _llm_settings_app(tmp_path, monkeypatch) -> object:
     from streamlit.testing.v1 import AppTest
 
+    # Panelen läser räknaren ur state.db — peka den på en testdatabas så testet
+    # aldrig rör utvecklarens riktiga state.db.
+    monkeypatch.setenv("STATE_DB", str(tmp_path / "state.db"))
     config_file = tmp_path / "llm_config.json"
     config_file.write_text(
         json.dumps(
@@ -211,6 +214,108 @@ def test_llm_profile_payload_persists_secret_env_name_but_not_secret() -> None:
     assert "api_key" not in payload
 
 
+def test_llm_settings_shows_accumulated_usage_and_saves_prices(tmp_path, monkeypatch) -> None:
+    """Räknaren visas vid profilen och priserna sparas från formuläret."""
+    import db
+
+    app = _llm_settings_app(tmp_path, monkeypatch)
+    conn = db.connect()
+    db.init_schema(conn)
+    db.add_llm_usage(
+        conn, profile="Standard", model="claude-opus-4-8",
+        input_tokens=1200, output_tokens=300, cost=0.02,
+    )
+    conn.close()
+    app.run(timeout=20)
+
+    assert not app.exception
+    assert any(
+        caption.value == "Ackumulerat: 1 anrop · in 1 200 · ut 300 · ≈ $0.0200"
+        " · senast claude-opus-4-8"
+        for caption in app.caption
+    )
+
+    next(item for item in app.number_input if item.label == "Input ($/1M)").set_value(5.0)
+    next(item for item in app.number_input if item.label == "Output ($/1M)").set_value(25.0)
+    next(button for button in app.button if button.label == "Spara ändringar").click()
+    app.run(timeout=20)
+
+    assert not app.exception
+    stored = json.loads(
+        (tmp_path / "llm_config.json").read_text(encoding="utf-8")
+    )["profiles"]["Standard"]
+    assert stored["input_price_usd"] == 5.0
+    assert stored["output_price_usd"] == 25.0
+    assert "cache_hit_price_usd" not in stored
+
+
+def test_llm_settings_rename_moves_the_profile_usage(tmp_path, monkeypatch) -> None:
+    """Namnbytet i formuläret ska flytta räknaren, inte lämna den kvar."""
+    import db
+
+    app = _llm_settings_app(tmp_path, monkeypatch)
+    conn = db.connect()
+    db.init_schema(conn)
+    db.add_llm_usage(
+        conn, profile="Standard", model="claude-opus-4-8",
+        input_tokens=10, output_tokens=2, cost=0.5,
+    )
+    conn.close()
+    app.run(timeout=20)
+
+    next(item for item in app.text_input if item.label == "Namn").set_value("Snabb")
+    next(button for button in app.button if button.label == "Spara ändringar").click()
+    app.run(timeout=20)
+
+    assert not app.exception
+    stored = json.loads((tmp_path / "llm_config.json").read_text(encoding="utf-8"))
+    assert "Snabb" in stored["profiles"]
+    conn = db.connect()
+    assert db.get_llm_usage(conn, "Snabb")["calls"] == 1
+    assert db.get_llm_usage(conn, "Standard")["calls"] == 0
+    conn.close()
+
+
+def test_llm_settings_cannot_delete_the_last_profile(tmp_path, monkeypatch) -> None:
+    """Skyddet låg bara i widgetens disabled — next(iter(())) kraschade annars."""
+    app = _llm_settings_app(tmp_path, monkeypatch)
+
+    next(button for button in app.button if button.label == "Ta bort").click()
+    app.run(timeout=20)
+
+    assert not app.exception
+    assert any("sista konfigurationen" in item.value for item in app.error)
+    stored = json.loads((tmp_path / "llm_config.json").read_text(encoding="utf-8"))
+    assert "Standard" in stored["profiles"]
+
+
+def test_llm_profile_payload_stores_prices_and_drops_unset_ones() -> None:
+    payload = admin_ui.llm_profile_payload(
+        backend_name="DeepSeek",
+        provider="openai",
+        model="deepseek-v4-flash",
+        base_url="https://api.deepseek.com/v1",
+        api_key_env="DEEPSEEK_API_KEY",
+        input_price_usd=0.14,
+        output_price_usd=0.28,
+        cache_hit_price_usd=0.0028,
+    )
+    assert (payload["input_price_usd"], payload["output_price_usd"]) == (0.14, 0.28)
+    assert payload["cache_hit_price_usd"] == 0.0028
+
+    utan_priser = admin_ui.llm_profile_payload(
+        backend_name="Claude",
+        provider="claude",
+        model="claude-opus-4-8",
+        base_url="",
+        api_key_env="",
+        input_price_usd=0.0,
+        output_price_usd=None,
+        cache_hit_price_usd=0.0,
+    )
+    assert not [k for k in utan_priser if k.endswith("_price_usd")]
+
+
 def test_apply_llm_profile_form_renames_and_sets_default_atomically() -> None:
     profiles = {
         "Standard": {"model": "claude-opus-4-8"},
@@ -312,8 +417,8 @@ def test_llm_form_defaults_reset_dependent_fields_when_service_changes() -> None
     }
 
 
-def test_llm_settings_status_uses_current_environment_field(tmp_path) -> None:
-    app = _llm_settings_app(tmp_path)
+def test_llm_settings_status_uses_current_environment_field(tmp_path, monkeypatch) -> None:
+    app = _llm_settings_app(tmp_path, monkeypatch)
     next(item for item in app.selectbox if item.label == "Tjänst").set_value("OpenAI")
     app.run(timeout=20)
     env_input = next(
@@ -331,7 +436,7 @@ def test_llm_settings_status_uses_current_environment_field(tmp_path) -> None:
 def test_llm_settings_status_uses_backend_key_when_override_is_empty(tmp_path, monkeypatch) -> None:
     """En känd molntjänst får inte felaktigt presenteras som nyckelfri."""
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
-    app = _llm_settings_app(tmp_path)
+    app = _llm_settings_app(tmp_path, monkeypatch)
     next(item for item in app.selectbox if item.label == "Tjänst").set_value("DeepSeek")
     app.run(timeout=20)
     env_input = next(
@@ -346,8 +451,8 @@ def test_llm_settings_status_uses_backend_key_when_override_is_empty(tmp_path, m
     assert statuses == ["⚠ API-nyckeln `DEEPSEEK_API_KEY` saknas i processmiljön."]
 
 
-def test_llm_settings_cancelled_new_profile_starts_clean_next_time(tmp_path) -> None:
-    app = _llm_settings_app(tmp_path)
+def test_llm_settings_cancelled_new_profile_starts_clean_next_time(tmp_path, monkeypatch) -> None:
+    app = _llm_settings_app(tmp_path, monkeypatch)
     next(item for item in app.button if item.label == "Ny").click()
     app.run(timeout=20)
     next(item for item in app.text_input if item.label == "Namn").set_value("Utkast")

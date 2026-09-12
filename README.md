@@ -102,15 +102,17 @@ fast pipeline får Claude tillgång till verktyg (`search_archive`, `get_page`)
 som den anropar hur många gånger den vill — provar olika söktermer, följer
 upp intressanta träffar och läser hela sidor för mer kontext. Bättre täckning
 på komplexa flerstegs-frågor, men långsammare (~1–3 min).
-När utredningsläget är aktivt döljs RAG-specifika sidofältsval som reranker,
-top-K/top-N, facetter och fuzzy-sökning; kvar finns MCP-relevanta val som ny
-konversation och kunskapsgraf.
+Läget väljs som flik: **Fråga arkivet (RAG)** och **Utredningsläge (MCP)**. I
+RAG-fliken ligger sökvalen (reranker, top-K/top-N, facetter och fuzzy-sökning)
+i den hopfällbara sektionen *Sökinställningar*; MCP-fliken har i stället chatten
+och **Ny konversation**. Sidofältet visar LLM-profilen, kunskapsgrafens toggle
+och en räknare över token och ackumulerad kostnad för profilen.
 
 LLM-profiler skapas och redigeras i ett sammanhållet formulär under **Admin →
 Inställningar → LLM-inställningar** och väljs i Utredningssidans sidofält. I
-samma panel anger du profilnamn, standardstatus, tjänst och modell; endpoint och
-miljövariabel ligger under avancerade inställningar. Själva API-nyckeln sparas
-aldrig.
+samma panel anger du profilnamn, standardstatus, tjänst och modell; endpoint,
+miljövariabel och priser (USD per 1M token, för kostnadsräkningen) ligger under
+avancerade inställningar. Själva API-nyckeln sparas aldrig.
 
 ![Web-gränssnitt — MCP-läge](utredningsläge.png)
 

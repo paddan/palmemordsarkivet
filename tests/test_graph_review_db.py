@@ -30,8 +30,8 @@ def test_migrate_v7_preserves_original_extraction(tmp_path):
         INSERT INTO doc_entities VALUES('original',1,'{"entiteter":[]}','model','then');''')
     db.init_schema(conn)
     db.init_schema(conn)
-    assert db.schema_version(conn) == 9
-    assert conn.execute('PRAGMA user_version').fetchone()[0] == 9
+    assert db.schema_version(conn) == db.SCHEMA_VERSION
+    assert conn.execute('PRAGMA user_version').fetchone()[0] == db.SCHEMA_VERSION
     assert db.iter_doc_entities(conn)[0]['payload'] == {'entiteter': []}
     save(conn)
     assert db.list_graph_review_decisions(conn)[0]['target']['namn'] == 'Åke'

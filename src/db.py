@@ -24,7 +24,21 @@ ROOT = Path(__file__).resolve().parents[1]
 
 DEFAULT_DB: Path = Path(os.environ.get("STATE_DB", str(ROOT / "generated" / "db" / "state.db")))
 
-SCHEMA_VERSION: int = 9
+SCHEMA_VERSION: int = 10
+
+LLM_USAGE_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS llm_usage (
+    profile          TEXT PRIMARY KEY,
+    calls            INTEGER NOT NULL DEFAULT 0,
+    input_tokens     INTEGER NOT NULL DEFAULT 0,
+    output_tokens    INTEGER NOT NULL DEFAULT 0,
+    cache_hit_tokens INTEGER NOT NULL DEFAULT 0,
+    cost_usd         REAL    NOT NULL DEFAULT 0,
+    cost_partial     INTEGER NOT NULL DEFAULT 0,
+    last_model       TEXT    NOT NULL DEFAULT '',
+    updated_at       TEXT    NOT NULL
+);
+"""
 
 GRAPH_REVIEW_SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS graph_review_decisions (
@@ -73,7 +87,7 @@ CREATE TABLE IF NOT EXISTS graph_name_rules (
 );
 """
 
-SCHEMA_SQL = GRAPH_REVIEW_SCHEMA_SQL + """
+SCHEMA_SQL = GRAPH_REVIEW_SCHEMA_SQL + LLM_USAGE_SCHEMA_SQL + """
 CREATE TABLE IF NOT EXISTS schema_version (
     version    INTEGER PRIMARY KEY,
     applied_at TEXT NOT NULL
@@ -507,11 +521,19 @@ def _migration_009_graph_name_rules(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migration_010_llm_usage(conn: sqlite3.Connection) -> None:
+    """Skapa räknartabellen för token och kostnad per LLM-profil."""
+    for statement in LLM_USAGE_SCHEMA_SQL.split(";"):
+        if statement.strip():
+            conn.execute(statement)
+
+
 MIGRATIONS: tuple[_Migration, ...] = (
     _Migration(6, "pdf_files OCR-felstatus", _migration_006_pdf_file_ocr_status),
     _Migration(7, "admin_jobs jobbmodell", _migration_007_admin_jobs),
     _Migration(8, "grafgranskning", _migration_008_graph_review),
     _Migration(9, "globala grafnamnregler", _migration_009_graph_name_rules),
+    _Migration(10, "LLM-räknare per profil", _migration_010_llm_usage),
 )
 
 
@@ -2664,3 +2686,100 @@ def set_graph_review_suggestion_status(
         )
         if cursor.rowcount != 1:
             raise ValueError("Granskningsförslaget finns inte")
+
+
+# --- LLM-räknare (token och kostnad per profil) ------------------------
+
+_LLM_USAGE_COLUMNS = (
+    "profile", "calls", "input_tokens", "output_tokens",
+    "cache_hit_tokens", "cost_usd", "cost_partial", "last_model", "updated_at",
+)
+
+
+def get_llm_usage(conn: sqlite3.Connection, profile: str) -> dict:
+    """Ackumulerade token och kostnader för en LLM-profil.
+
+    Saknad rad ger nollställda värden, så anroparen slipper skilja på "aldrig
+    använd" och "inga anrop än"."""
+    row = conn.execute(
+        f"SELECT {', '.join(_LLM_USAGE_COLUMNS)} FROM llm_usage WHERE profile=?",
+        (profile,),
+    ).fetchone()
+    if row is None:
+        return {
+            "profile": profile, "calls": 0, "input_tokens": 0, "output_tokens": 0,
+            "cache_hit_tokens": 0, "cost_usd": 0.0, "cost_partial": 0,
+            "last_model": "", "updated_at": "",
+        }
+    return dict(row)
+
+
+def add_llm_usage(
+    conn: sqlite3.Connection,
+    *,
+    profile: str,
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    cache_hit_tokens: int = 0,
+    cost: float | None = None,
+) -> None:
+    """Lägg ett avslutat LLM-anrop till profilens räknare.
+
+    ``cost=None`` betyder att priset saknades för anropet: token räknas ändå,
+    och raden märks som ofullständig (``cost_partial``) eftersom summan då bara
+    är en undre gräns."""
+    name = profile.strip()
+    if not name:
+        raise ValueError("profile får inte vara tom")
+    conn.execute(
+        """
+        INSERT INTO llm_usage(
+            profile, calls, input_tokens, output_tokens, cache_hit_tokens,
+            cost_usd, cost_partial, last_model, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(profile) DO UPDATE SET
+            calls            = calls + excluded.calls,
+            input_tokens     = input_tokens + excluded.input_tokens,
+            output_tokens    = output_tokens + excluded.output_tokens,
+            cache_hit_tokens = cache_hit_tokens + excluded.cache_hit_tokens,
+            cost_usd         = cost_usd + excluded.cost_usd,
+            cost_partial     = MAX(cost_partial, excluded.cost_partial),
+            last_model       = excluded.last_model,
+            updated_at       = excluded.updated_at
+        """,
+        (
+            name,
+            1,
+            int(input_tokens),
+            int(output_tokens),
+            int(cache_hit_tokens),
+            float(cost or 0.0),
+            0 if cost is not None else 1,
+            model,
+            now(),
+        ),
+    )
+    conn.commit()
+
+
+def rename_llm_usage(conn: sqlite3.Connection, old: str, new: str) -> None:
+    """Flytta räknaren när en profil byter namn.
+
+    En eventuell rad för det nya namnet tas bort först, så att ett återanvänt
+    namn inte blandar ihop två profilers historik."""
+    if old == new or not new.strip():
+        return
+    conn.execute("DELETE FROM llm_usage WHERE profile=?", (new.strip(),))
+    conn.execute(
+        "UPDATE llm_usage SET profile=?, updated_at=? WHERE profile=?",
+        (new.strip(), now(), old),
+    )
+    conn.commit()
+
+
+def delete_llm_usage(conn: sqlite3.Connection, profile: str) -> bool:
+    """Radera räknaren för en borttagen profil. True om något togs bort."""
+    cur = conn.execute("DELETE FROM llm_usage WHERE profile=?", (profile,))
+    conn.commit()
+    return cur.rowcount > 0
