@@ -2,11 +2,32 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import ask
 import mcp_server
 import pytest
+
+
+@pytest.mark.parametrize("rerank", [True, False])
+def test_search_result_can_open_exact_source(text_dir, monkeypatch, rerank) -> None:
+    """Ett långt filnamn med citattecken ska gå från sökträff till sidläsning."""
+    source = 'Pol-1986-03-01_A123-4_' + 'Lång titel ' * 8 + '"Åke".txt'
+    (text_dir / source).write_text("första sidan\fverifierad andra sida", encoding="utf-8")
+    hits = [{"nr": "Pol-1986-03-01_A123-4", "page": 2, "titel": "Lång titel " * 8,
+             "source": source, "text": "utdrag"}]
+    monkeypatch.setattr(mcp_server, "_table", object())
+    monkeypatch.setattr(mcp_server, "_model", object())
+    monkeypatch.setattr(ask, "search_hybrid", lambda *args: hits)
+    monkeypatch.setattr(ask, "rerank", lambda q, found, n: found[:n])
+    result = mcp_server.search_archive("fråga", rerank=rerank)
+    source_line = next(line for line in result.splitlines() if line.startswith("source: "))
+    exact_source = json.loads(source_line.removeprefix("source: "))
+    assert exact_source == source
+    assert "[Nr Pol-1986-03-01_A123-4, sida 2," in result
+    assert "verifierad andra sida" in mcp_server.get_page(exact_source, 2)
+    assert "source: " not in ask.format_context(hits)
 
 
 @pytest.fixture()
@@ -73,7 +94,8 @@ def test_search_archive_clamps_large_result_limits(monkeypatch) -> None:
         seen["top_n"] = top_n
         return found[:top_n]
 
-    def fake_format_context(found: list[dict]) -> str:
+    def fake_format_context(found: list[dict], *, include_source: bool = False) -> str:
+        assert include_source
         seen["formatted"] = len(found)
         return "kontext"
 

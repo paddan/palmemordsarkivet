@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import os
 import sys
 from pathlib import Path
@@ -162,10 +163,13 @@ def rerank(q: str, hits: list[dict], top_n: int) -> list[dict]:
     return [h for _, h in ranked[:top_n]]
 
 
-def format_context(hits: list[dict]) -> str:
+def format_context(hits: list[dict], *, include_source: bool = False) -> str:
+    """Formatera källutdrag, med exakt filnamn för MCP:s efterföljande sidläsning."""
     blocks = []
     for h in hits:
         header = f"[Nr {h['nr']}, sida {h['page']}, \"{h['titel'][:60]}\"]"
+        if include_source and h.get("source"):
+            header += "\nsource: " + json.dumps(h["source"], ensure_ascii=False)
         blocks.append(f"{header}\n{h['text']}")
     return "\n\n---\n\n".join(blocks)
 

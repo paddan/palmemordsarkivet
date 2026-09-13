@@ -113,7 +113,7 @@ def search_archive(
         hits = hits[:top_n]
 
     header = f"Sökning: {query!r} → {len(hits)} träffar\n\n"
-    context: str = format_context(hits)
+    context: str = format_context(hits, include_source=True)
     return header + context
 
 

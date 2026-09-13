@@ -170,6 +170,24 @@ def test_prompts_form_reset_ger_tomma_overrides(tmp_path, monkeypatch) -> None:
     assert admin_ui.load_prompts_form() == {}
 
 
+def test_prompt_hjalpen_tacker_varje_lage_och_verktygets_granser() -> None:
+    """Skrivhjälpen ska finnas för varje promptkort och visa MCP-verktygets
+    faktiska gränser — annars glider hjälp och prompt isär från mcp_server.py."""
+    import mcp_server
+
+    # Samma nycklar i rubrik-mappningen och hjälptexterna, annars KeyError vid rendering.
+    assert set(admin_ui.PROMPT_MODE_LABELS) == set(admin_ui.PROMPT_MODE_HELP) == {"rag", "mcp"}
+
+    intervall = (
+        f"{mcp_server.TOP_K_MIN}\u2013{mcp_server.TOP_K_MAX}",
+        f"{mcp_server.TOP_N_MIN}\u2013{mcp_server.TOP_N_MAX}",
+    )
+    for text in (admin_ui.PROMPT_MODE_HELP["mcp"], prompts.MCP_SYSTEM_PROMPT):
+        for grans in intervall:
+            assert grans in text
+    assert f"top_k={mcp_server.TOP_K_DEFAULT}" in admin_ui.PROMPT_MODE_HELP["mcp"]
+
+
 def test_promptar_sektionen_sparar_och_aterstaller(tmp_path) -> None:
     """Sektionen visar båda promptarna med egen Spara- och Återställ-knapp."""
     app = _settings_app(tmp_path)

@@ -476,6 +476,79 @@ def apply_debug_logging(settings: Mapping[str, str]) -> bool:
     return enabled
 
 
+PROMPT_WRITING_HELP = """**Så skriver du en systemprompt**
+
+Systemprompten är modellens återkommande arbetsinstruktion. Skriv själva
+utredningsfrågan i Utredning-fliken. Utgå gärna från standardtexten och ändra
+en sak i taget: exempelvis svarslängd, disposition eller hur jämförelser görs.
+
+- Skriv tydliga uppmaningar: ”Börja med ett kort svar” eller ”Skilj källuppgifter
+  från egna tolkningar”. Undvik motstridiga krav som både ”var mycket kort” och
+  ”redovisa alla detaljer”.
+- Behåll kravet på källhänvisningar nära sakuppgifterna: `[Nr X, sida Y]`, med
+  dokument-ID och sida från underlaget. Be modellen redovisa luckor och
+  motsägelser, markera OCR-osäkerhet och aldrig fylla i maskeringar.
+- Beskriv hur modellen ska arbeta, inte vilken slutsats den ska komma fram till.
+  Skriv hellre ”Pröva uppgifter både för och emot hypotesen” än ”Visa att X är skyldig”.
+- En egen sparad prompt **ersätter hela standardprompten**; den läggs inte till
+  efteråt. Behåll därför de grundregler du vill använda. Prompttext kan inte
+  lägga till verktyg eller ge åtkomst till nya datakällor.
+
+**Prova ändringen:** ställ samma fråga före och efter och jämför källstöd,
+osäkerheter och läsbarhet. För en pågående OpenAI/DeepSeek-chatt i MCP-läget,
+välj **Ny konversation**. **Spara** gäller bara detta fält; **Återställ till
+standard** tar bort din egen text för detta läge.
+"""
+
+# Kort lägesnamn i expander-rubriken; samma nycklar som PROMPT_MODE_HELP.
+PROMPT_MODE_LABELS = {"rag": "RAG", "mcp": "MCP"}
+
+PROMPT_MODE_HELP = {
+    "rag": """**RAG: svara utifrån utdragen**
+
+Modellen får sökutdrag tillsammans med frågan. Den kan inte själv söka vidare
+eller anropa `search_archive` eller `get_page` i detta läge. Skriv därför regler
+för hur utdragen ska användas och hur otillräckligt underlag ska redovisas.
+Antalet träffar och sökmetoden väljer du i RAG-flikens **Sökinställningar**.
+
+**Exempel på en regel att lägga till i standardtexten:**
+
+> Vid jämförelser, beskriv vad källorna är överens om och var de skiljer sig.
+> Ange källa för varje uppgift och avsluta med vad utdragen inte kan avgöra.
+""",
+    "mcp": """**MCP: sök och läs med verktyg**
+
+Du kan hänvisa till följande två verktyg i instruktionerna. Du behöver inte
+skriva programkod eller ange alla parametrar; modellen får verktygens schema.
+
+- `search_archive`: söker textutdrag i arkivet. `query` är sökfrågan på svenska.
+  `top_k=20` anger antal kandidater (5–50), `top_n=6` antal träffar (1–15).
+  `hybrid=true` kombinerar vektor- och ordsökning när det stöds;
+  `rerank=true` omrankar träffarna för relevans. Börja med standardvärdena.
+- `get_page`: läser texten på en sida. `source` ska vara det exakta filnamnet
+  från sökträffens `source`-rad, och `page` sidnumret räknat från 1. Raden visar
+  filnamnet som en JSON-sträng; verktyget ska få strängens värde. Be modellen
+  använda detta filnamn, inte gissa utifrån dokumentets titel.
+
+Claude kan visa namnen `mcp__arkiv__search_archive` och
+`mcp__arkiv__get_page`. Det är samma två verktyg. De läser arkivtext, inte
+PDF-bilder, och ger inte webbsökning, grafslagningar eller möjlighet att ändra
+arkivet. Att nämna ett annat verktyg i prompten gör det inte tillgängligt.
+
+**Exempel på en regel att lägga till i standardtexten:**
+
+> Sök med search_archive och variera söktermerna om underlaget är svagt.
+> Läs sidkontext med get_page innan du drar slutsatser av ett oklart citat.
+> Sök även efter motsägande uppgifter. Avsluta med ett källbelagt svar och
+> kvarstående osäkerheter när fortsatta sökningar inte ger nytt underlag.
+
+Undvik krav på att ”söka igenom hela arkivet”: sökträffarna är ett urval och
+antalet verktygsomgångar är begränsat. Ett uteblivet fynd bevisar inte att
+uppgiften saknas i arkivet.
+""",
+}
+
+
 def load_prompts_form() -> dict[str, str]:
     """Sparade prompt-overrides (tom dict om inget sparats)."""
     # Mypy löser syskonmodulen prompts som Any under `--explicit-package-bases src`
@@ -565,6 +638,9 @@ def render_settings_tab() -> None:
     )
     for nyckel, etikett, hjalp, standard in falt:
         with st.container(border=True):
+            with st.expander(f"Skrivhjälp för {PROMPT_MODE_LABELS[nyckel]}"):
+                st.markdown(PROMPT_WRITING_HELP)
+                st.markdown(PROMPT_MODE_HELP[nyckel])
             text = st.text_area(
                 etikett,
                 value=sparade.get(nyckel, standard),

@@ -114,7 +114,9 @@ avancerade inställningar. Själva API-nyckeln sparas aldrig.
 
 Samma flik har en sektion **Promptar** där systempromptarna för RAG-läget och
 Utredningsläget kan skrivas om, var för sig, och återställas till standard.
-Ändringarna sparas i `generated/prompts.json` och gäller vid nästa fråga.
+Varje promptkort har en hopfällbar **Skrivhjälp** med riktlinjer och MCP-verktygens
+parametrar — en egen sparad prompt ersätter hela standardtexten, inte bara det du
+ändrat. Ändringarna sparas i `generated/prompts.json` och gäller vid nästa fråga.
 
 ### Utredningspärm
 

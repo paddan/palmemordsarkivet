@@ -411,6 +411,35 @@ konversation**). Varje prompt har en egen **Spara**- och **Återställ till
 standard**-knapp, så de kan ändras oberoende av varandra. Tomt fält eller
 **Återställ till standard** tar bort overriden för den prompten.
 
+Varje promptkort har hopfällbar **Skrivhjälp för RAG/MCP** med riktlinjer,
+formuleringsexempel och MCP-verktygens parametrar. Utgå från standardtexten,
+ändra en sak i taget och jämför svar på samma fråga. Skriv arbetsinstruktioner
+i systemprompten och själva utredningsfrågan i Utredning-fliken. Behåll regler
+om källhänvisningar, osäkerhet och motsägelser: en sparad egen prompt ersätter
+hela standardtexten, inte bara de delar som ändrats. RAG kan inte anropa
+verktyg; sökinställningar görs i RAG-fliken. MCP kan använda verktygen nedan,
+men att nämna andra verktyg i prompten gör dem inte tillgängliga.
+
+Standardpromptarna kräver källhänvisningar nära sakuppgifterna, skiljer
+vittnesuppgifter från tolkningar och hanterar motsägelser, OCR-fel och maskeringar.
+RAG-svaret begränsas till de bifogade utdragen. MCP-prompten beskriver ett
+fokuserat sökflöde och dessa två verktyg:
+
+| Verktyg | Parametrar och användning |
+| --- | --- |
+| `search_archive` | `query` på svenska; `top_k=20` (5–50), `top_n=6` (1–15), `hybrid=true`, `rerank=true`. Returnerar ett urval av textutdrag med dokument-ID, sida, titel och exakt `source`-filnamn. |
+| `get_page` | `source`: exakt textfilnamn eller filstam, med valfri `.txt`; `page`: sidnummer från 1. Läser sidtext, inte PDF-bilden. |
+
+Claude använder namnen `mcp__arkiv__search_archive` och
+`mcp__arkiv__get_page`; OpenAI-kompatibla modeller använder kortnamnen.
+Varje MCP-sökträff innehåller en `source:`-rad med det exakta filnamnet som
+JSON-sträng. Modellen använder strängens värde som `source` till `get_page`,
+även när titeln är avkortad. Filnamnet finns redan i indexet, så ändringen
+kräver ingen omindexering. RAG-utdragens format är oförändrat. Verktygen kan inte
+söka på webben, läsa kunskapsgrafen eller ändra arkivet.
+Uppdaterade standardtexter ersätter inte egna sparade overrides; använd
+**Återställ till standard** för att börja använda dem där en override finns.
+
 #### Utredningspärm och bokmärken
 
 Webgränssnittet har en egen flik, **Utredningspärm**, för återupptagbart

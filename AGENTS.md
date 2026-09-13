@@ -265,6 +265,17 @@ MCP-läget kan ändras i Admin → Inställningar och lagras i
 frågetillfället (aldrig cachat vid import), så ändringar gäller direkt.
 `SYSTEM_PROMPT`/`MCP_SYSTEM_PROMPT` i `prompts.py` är default och fallback;
 modulen får inte importera `rag.ask` (tung import för adminsidan).
+Standardpromptarna skiljer källuppgifter från tolkningar och kräver belägg,
+hantering av motsägelser och OCR-osäkerhet. MCP-promptens verktygsreferens ska
+stämma med `rag/mcp_server.py` och `Utredning.OPENAI_TOOLS` (namn, parametrar,
+gränser och returdata). `search_archive` inkluderar
+exakt `source` som JSON-sträng per träff via `format_context(include_source=True)`.
+`get_page` ska använda detta värde, aldrig ett filnamn gissat från titeln.
+RAG använder samma formatterare utan `source`-raden.
+Promptkorten har hopfällbar skrivhjälp i `admin_ui.PROMPT_WRITING_HELP`,
+`PROMPT_MODE_HELP` och etiketterna i `PROMPT_MODE_LABELS`; håll även den synkad
+med verktygskontrakten. Hjälpen ska
+förklara att egna promptar ersätter standardtexten och att RAG saknar verktyg.
 
 **Token- och kostnadsräknare (`llm_usage`)**: Varje avslutat LLM-anrop bokförs i
 tabellen `llm_usage` i state.db med **profilnamnet som nyckel** (ackumuleras
