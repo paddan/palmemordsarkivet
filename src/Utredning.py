@@ -30,6 +30,7 @@ import search_fuzzy as _search_fuzzy  # noqa: E402
 from errors_log import log_error  # noqa: E402
 from graph import answer_entities as _answer_entities  # noqa: E402
 from graph import viz as _viz  # noqa: E402
+from prompts import mcp_prompt, rag_prompt  # noqa: E402
 
 try:
     from st_link_analysis import EdgeStyle, NodeStyle, st_link_analysis
@@ -42,8 +43,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "rag"))
 from ask import (  # noqa: E402
     CLAUDE_MODEL,
     EMBED_MODEL,
-    MCP_SYSTEM_PROMPT,
-    SYSTEM_PROMPT,
     TABLE,
     format_context,
     rerank,
@@ -420,7 +419,7 @@ async def stream_mcp(
         },
     }
     options = ClaudeAgentOptions(
-        system_prompt=MCP_SYSTEM_PROMPT,
+        system_prompt=mcp_prompt(),
         model=cfg["model"],
         mcp_servers={
             "arkiv": {"command": sys.executable, "args": [str(MCP_SERVER)], "env": env}
@@ -458,7 +457,7 @@ async def stream_mcp(
 
 async def stream_claude(user_msg: str, placeholder, parts: list[str], cfg: dict) -> None:
     options = ClaudeAgentOptions(
-        system_prompt=SYSTEM_PROMPT,
+        system_prompt=rag_prompt(),
         model=cfg["model"],
         allowed_tools=[],
         thinking=ThinkingConfigAdaptive(type="adaptive"),
@@ -495,7 +494,7 @@ async def stream_openai(user_msg: str, placeholder, parts: list[str], cfg) -> No
             stream = await client.chat.completions.create(
                 model=model,
                 messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "system", "content": rag_prompt()},
                     {"role": "user", "content": user_msg},
                 ],
                 stream=True,
@@ -1092,7 +1091,7 @@ def _render_mcp_tab() -> None:
         if chat_q and chat_q.strip():
             if not ss.openai_chat_messages:
                 ss.openai_chat_messages.append(
-                    {"role": "system", "content": MCP_SYSTEM_PROMPT}
+                    {"role": "system", "content": mcp_prompt()}
                 )
             ss.openai_chat_messages.append({"role": "user", "content": chat_q})
             ss.chat_history.append({"role": "user", "text": chat_q, "sources": []})

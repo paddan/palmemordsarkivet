@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
+import prompts
 from operations.context import debug_value_enabled
 from operations.exceptions import OperationFailed
 from operations.registry import OperationRegistry
@@ -475,6 +476,26 @@ def apply_debug_logging(settings: Mapping[str, str]) -> bool:
     return enabled
 
 
+def load_prompts_form() -> dict[str, str]:
+    """Sparade prompt-overrides (tom dict om inget sparats)."""
+    # Mypy löser syskonmodulen prompts som Any under `--explicit-package-bases src`
+    # (samma gäller db/config), så returtypen måste hävdas uttryckligen.
+    return cast(dict[str, str], prompts.load_prompts())
+
+
+def save_prompts_form(varden: Mapping[str, str]) -> None:
+    """Spara prompt-overrides från Inställningar-formuläret."""
+    prompts.save_prompts(varden)
+
+
+def reset_prompts_form(nyckel: str | None = None) -> None:
+    """Återställ en prompt (eller båda om nyckel utelämnas) till standard."""
+    if nyckel is None:
+        prompts.save_prompts({})
+        return
+    prompts.save_prompts({k: v for k, v in prompts.load_prompts().items() if k != nyckel})
+
+
 def resolve_path_default(default: object, settings: Mapping[str, str]) -> object:
     """Om-rotar en standardväg under ROOT till base-path.
 
@@ -502,7 +523,7 @@ def get_settings() -> dict[str, str]:
 
 
 def render_settings_tab() -> None:
-    """Rendera Inställningar-fliken: endast base-path (underkataloger är hårdkodade)."""
+    """Rendera Inställningar-fliken: sökvägar och de redigerbara promptarna."""
     import streamlit as st
 
     settings = get_settings()
@@ -526,6 +547,41 @@ def render_settings_tab() -> None:
             st.session_state.get("_admin_settings_version", 0) + 1
         )
         st.success("Inställningar sparade.")
+
+    st.divider()
+    st.subheader("Promptar")
+    st.caption(
+        "Systempromptar för Utredning-sidans två lägen. Lämnas ett fält tomt "
+        "används standardtexten. Ändringar gäller vid nästa fråga — i en pågående "
+        "OpenAI/DeepSeek-chatt i MCP-fliken först efter Ny konversation."
+    )
+    sparade = load_prompts_form()
+    falt = (
+        ("rag", "Fråga arkivet (RAG)", "Systemprompten som styr svaren i RAG-fliken.",
+         prompts.SYSTEM_PROMPT),
+        ("mcp", "Utredningsläge (MCP)",
+         "Systemprompten som styr utredningsassistenten i MCP-fliken.",
+         prompts.MCP_SYSTEM_PROMPT),
+    )
+    for nyckel, etikett, hjalp, standard in falt:
+        with st.container(border=True):
+            text = st.text_area(
+                etikett,
+                value=sparade.get(nyckel, standard),
+                height=200,
+                key=f"prompt_{nyckel}",
+                help=hjalp,
+            )
+            col_save, col_reset = st.columns(2)
+            if col_save.button("Spara", key=f"prompt_{nyckel}_save"):
+                # Behåll den andra promptens override; tomt fält rensar bara den egna.
+                save_prompts_form({**load_prompts_form(), nyckel: text})
+                st.success(f"{etikett}: sparad.")
+            if col_reset.button("Återställ till standard", key=f"prompt_{nyckel}_reset"):
+                reset_prompts_form(nyckel)
+                # Widget-state överlever rerun — rensa den så fältet ritas med standardtexten.
+                st.session_state.pop(f"prompt_{nyckel}", None)
+                st.rerun()
 
 
 def render_llm_settings() -> None:

@@ -398,6 +398,19 @@ färdigt svar. Avvikelsen loggas samtidigt i `generated/errors.log`
 (komponenterna `ask.openai`, `ask.openai-mcp` och `ask.claude`), så i
 efterhand går det att se hur ofta och varför svar klipptes av.
 
+#### Redigerbara promptar
+
+Systempromptarna för Utredning-sidans båda lägen (RAG och Utredningsläge/MCP)
+kan ändras under **Admin → Inställningar → Promptar**. Overrides sparas i
+`generated/prompts.json` (nycklarna `rag` och `mcp`); saknas filen eller en
+nyckel används standardtexterna i `src/prompts.py` (`SYSTEM_PROMPT` /
+`MCP_SYSTEM_PROMPT`). Prompten läses vid frågetillfället och inte vid import,
+så ändringar gäller direkt vid nästa fråga — ingen omstart krävs (i en pågående
+chatt med OpenAI/DeepSeek i MCP-fliken slår ändringen igenom först efter **Ny
+konversation**). Varje prompt har en egen **Spara**- och **Återställ till
+standard**-knapp, så de kan ändras oberoende av varandra. Tomt fält eller
+**Återställ till standard** tar bort overriden för den prompten.
+
 #### Utredningspärm och bokmärken
 
 Webgränssnittet har en egen flik, **Utredningspärm**, för återupptagbart
@@ -978,7 +991,9 @@ per-dokumentresultat behålls; ett avbrutet jobb markeras aldrig `succeeded`.
 | `scripts/ingest.py` → `src/rag/ingest.py` | Bygg vektorindex (LanceDB + BM25 FTS) |
 | `src/rag/ask.py` | Frågefunktioner — RAG-läge och MCP-läge (importeras av Utredning-sidan och mcp_server) samt `stop_notice` som flaggar avklippta modellsvar |
 | `src/rag/mcp_server.py` | MCP-server med `search_archive` och `get_page` (startas av ask.py/Utredning.py) |
+| `src/prompts.py` | Redigerbara systempromptar (RAG/MCP): default-texter samt läsning/skrivning av overrides |
 | `generated/llm_config.json` | Sparad LLM-konfiguration (backend, modell, URL) — se ovan |
+| `generated/prompts.json` | Sparade prompt-overrides (nycklarna `rag` och `mcp`) — se *Redigerbara promptar* ovan |
 | `src/config.py` | Läser/skriver `generated/llm_config.json` (delas av Utredning-sidan och llm_correct) |
 | `src/backends.py` | Delad backend-katalog (Claude/OpenAI/DeepSeek/OpenRouter/Ollama/custom) + `fetch_models`/`available_models` — delas av Utredning-sidan och `scripts/llm_config.py` |
 | `scripts/llm_config.py` → `src/llm_config_cli.py` | Visa/ändra `generated/llm_config.json` utan webgränssnittet (interaktiv meny i terminal) |
@@ -1042,7 +1057,8 @@ LLM-korrektionslogiken (llm_correct), re-ingest-flödet (ingest), state-database
 schema-migrationer, delta-urval och `text_mtime`-stämpling (db, ocr_db_helper, normalize, quality),
 citatuppslag/-länkning (citations), RRF-hybridsökningen (ask) och `get_page` (mcp_server),
 entitetsextraktion (extract_entities), graf-laddning (load_neo4j) och
-nyckelentiteter ur svar (answer_entities).
+nyckelentiteter ur svar (answer_entities) samt de sparade promptändringarna och
+Admin-formuläret för dem (prompts, admin_ui).
 Fixturen som genererar en mini-PDF med pymupdf skipas gracefully om pymupdf inte är installerat.
 
 ## Loggning

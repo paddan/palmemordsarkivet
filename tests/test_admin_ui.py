@@ -6,6 +6,7 @@ import json
 from dataclasses import replace
 
 import admin_ui
+import prompts
 from admin_ui import (
     CUSTOM_MODEL_LABEL,
     ROOT,
@@ -138,6 +139,102 @@ def test_resolve_path_default_joins_base_and_relative() -> None:
     assert resolve_path_default(files_default, {"base": "/tmp/base"}) == "/tmp/base/downloaded/files"
     # Icke-systemväg lämnas orörd.
     assert resolve_path_default("/annan/väg", {"base": "/tmp"}) == "/annan/väg"
+
+
+def _settings_app(tmp_path):
+    """Rendera Inställningar-fliken mot tillfälliga inställningsfiler."""
+    from streamlit.testing.v1 import AppTest
+
+    app = AppTest.from_string(
+        "from pathlib import Path\n"
+        "import admin_ui, prompts\n"
+        f"admin_ui.SETTINGS_FILE = Path({str(tmp_path / 'admin_settings.json')!r})\n"
+        f"prompts.PROMPTS_FILE = Path({str(tmp_path / 'prompts.json')!r})\n"
+        "admin_ui.render_settings_tab()\n"
+    )
+    app.run(timeout=20)
+    return app
+
+
+def test_prompts_roundtrip_via_helpers(tmp_path, monkeypatch) -> None:
+    """Admin sparar/läser via samma helpers som Utredning använder."""
+    monkeypatch.setattr(prompts, "PROMPTS_FILE", tmp_path / "prompts.json")
+    admin_ui.save_prompts_form({"rag": "Ny RAG", "mcp": "Ny MCP"})
+    assert admin_ui.load_prompts_form() == {"rag": "Ny RAG", "mcp": "Ny MCP"}
+
+
+def test_prompts_form_reset_ger_tomma_overrides(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(prompts, "PROMPTS_FILE", tmp_path / "prompts.json")
+    admin_ui.save_prompts_form({"rag": "Ny RAG", "mcp": "Ny MCP"})
+    admin_ui.reset_prompts_form()
+    assert admin_ui.load_prompts_form() == {}
+
+
+def test_promptar_sektionen_sparar_och_aterstaller(tmp_path) -> None:
+    """Sektionen visar båda promptarna med egen Spara- och Återställ-knapp."""
+    app = _settings_app(tmp_path)
+    prompts_file = tmp_path / "prompts.json"
+
+    assert not app.exception
+    assert {item.label for item in app.text_area} == {
+        "Fråga arkivet (RAG)",
+        "Utredningsläge (MCP)",
+    }
+    assert {item.key for item in app.button} >= {
+        "prompt_rag_save",
+        "prompt_mcp_save",
+        "prompt_rag_reset",
+        "prompt_mcp_reset",
+    }
+    rag = next(item for item in app.text_area if item.label == "Fråga arkivet (RAG)")
+    mcp = next(item for item in app.text_area if item.label == "Utredningsläge (MCP)")
+    assert rag.value == prompts.SYSTEM_PROMPT
+    assert mcp.value == prompts.MCP_SYSTEM_PROMPT
+
+    # Bara RAG-fältet sparas — MCP-prompten ska inte ärva sin standardtext som override.
+    rag.set_value("Egen RAG-prompt")
+    next(item for item in app.button if item.key == "prompt_rag_save").click()
+    app.run(timeout=20)
+
+    assert not app.exception
+    assert json.loads(prompts_file.read_text(encoding="utf-8")) == {
+        "rag": "Egen RAG-prompt"
+    }
+
+    # MCP sparas för sig, utan att röra RAG-overriden. Widgetarna hämtas om efter
+    # varje körning — AppTest-referenser från före en rerun är inte pålitliga.
+    mcp = next(item for item in app.text_area if item.label == "Utredningsläge (MCP)")
+    mcp.set_value("Egen MCP-prompt")
+    next(item for item in app.button if item.key == "prompt_mcp_save").click()
+    app.run(timeout=20)
+
+    assert json.loads(prompts_file.read_text(encoding="utf-8")) == {
+        "rag": "Egen RAG-prompt",
+        "mcp": "Egen MCP-prompt",
+    }
+
+    # Återställningen gäller bara den egna prompten; widget-state måste rensas.
+    next(item for item in app.button if item.key == "prompt_rag_reset").click()
+    app.run(timeout=20)
+
+    assert not app.exception
+    assert json.loads(prompts_file.read_text(encoding="utf-8")) == {
+        "mcp": "Egen MCP-prompt"
+    }
+    assert next(
+        item for item in app.text_area if item.label == "Fråga arkivet (RAG)"
+    ).value == prompts.SYSTEM_PROMPT
+    assert next(
+        item for item in app.text_area if item.label == "Utredningsläge (MCP)"
+    ).value == "Egen MCP-prompt"
+
+
+def test_reset_prompts_form_med_nyckel_behaller_den_andra(tmp_path, monkeypatch) -> None:
+    """Återställning av en prompt får inte röra den andra."""
+    monkeypatch.setattr(prompts, "PROMPTS_FILE", tmp_path / "prompts.json")
+    admin_ui.save_prompts_form({"rag": "Ny RAG", "mcp": "Ny MCP"})
+    admin_ui.reset_prompts_form("rag")
+    assert admin_ui.load_prompts_form() == {"mcp": "Ny MCP"}
 
 
 def _path_param(name: str = "inp", *, required: bool = False, default=None) -> ParameterDefinition:

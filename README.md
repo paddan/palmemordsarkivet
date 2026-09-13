@@ -112,6 +112,10 @@ samma panel anger du profilnamn, standardstatus, tjänst och modell; endpoint,
 miljövariabel och priser (USD per 1M token, för kostnadsräkningen) ligger under
 avancerade inställningar. Själva API-nyckeln sparas aldrig.
 
+Samma flik har en sektion **Promptar** där systempromptarna för RAG-läget och
+Utredningsläget kan skrivas om, var för sig, och återställas till standard.
+Ändringarna sparas i `generated/prompts.json` och gäller vid nästa fråga.
+
 ### Utredningspärm
 
 I fliken **Utredningspärm** visas fråga/svar-spår som sparats från både RAG- och

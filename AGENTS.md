@@ -46,6 +46,7 @@ src/
   merge_pages.py       # Slå ihop per-sida-text från state.db → text/<stem>.txt
   build_user_words.py  # Generera Tesseract user-words från OCR-text
   errors_log.py        # Centraliserad felloggning (tab-separerad)
+  prompts.py           # Redigerbara systempromptar (RAG/MCP) med overrides i generated/prompts.json
   Utredning.py         # Streamlit-frågesida (RAG/MCP, svarsgraf, sparknapp, bokmärken, facett-/fuzzy-filter)
   casebook_ui.py       # Delade Streamlit-komponenter för utredningspärm + bokmärken + anteckningar
   redactions.py        # Maskeringsutforskaren: aggregera [MASKAD]-markörer ur pdf_pages
@@ -257,6 +258,13 @@ till Claude. Samma gäller ett okänt `backend_name` i profilen:
 första backend, och anroparen gör om det till ett begripligt fel. En tom
 `api_key_env` för en känd molnbackend använder dess
 katalogdefinierade standardvariabel.
+
+**Redigerbara promptar (`src/prompts.py`)**: Systempromptarna för RAG- och
+MCP-läget kan ändras i Admin → Inställningar och lagras i
+`generated/prompts.json`. `rag_prompt()`/`mcp_prompt()` anropas vid
+frågetillfället (aldrig cachat vid import), så ändringar gäller direkt.
+`SYSTEM_PROMPT`/`MCP_SYSTEM_PROMPT` i `prompts.py` är default och fallback;
+modulen får inte importera `rag.ask` (tung import för adminsidan).
 
 **Token- och kostnadsräknare (`llm_usage`)**: Varje avslutat LLM-anrop bokförs i
 tabellen `llm_usage` i state.db med **profilnamnet som nyckel** (ackumuleras

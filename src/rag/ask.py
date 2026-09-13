@@ -40,6 +40,8 @@ from claude_agent_sdk import (  # noqa: E402
 from ingest import _table_exists  # noqa: E402
 from sentence_transformers import SentenceTransformer
 
+from prompts import mcp_prompt, rag_prompt  # noqa: E402
+
 MCP_SERVER = Path(__file__).resolve().parent / "mcp_server.py"
 
 DB_DIR = Path(__file__).resolve().parents[2] / "generated" / "lancedb"
@@ -47,27 +49,6 @@ TABLE = "chunks"
 EMBED_MODEL = "intfloat/multilingual-e5-large"
 RERANK_MODEL = "BAAI/bge-reranker-v2-m3"
 CLAUDE_MODEL = "claude-opus-4-8"
-
-SYSTEM_PROMPT = """Du svarar på frågor om Palmemordsarkivet baserat på de utdrag användaren ger dig.
-
-Regler:
-- Svara på svenska.
-- Stötta varje påstående med en källhänvisning på formen [Nr X, sida Y].
-- Om svaret inte framgår av utdragen, säg "framgår inte av materialet" — gissa aldrig.
-- Citera ordagrant när det är klargörande, men håll citaten korta.
-- OCR-fel kan förekomma. Säg till om en passage verkar vara skadad eller obegriplig."""
-
-MCP_SYSTEM_PROMPT = """Du är en utredningsassistent med tillgång till Palmemordsarkivet via verktyg.
-
-Regler:
-- Svara på svenska.
-- Anropa verktygen direkt — beskriv inte bara att du *tänker* söka och avsluta sedan. Säger du att du ska söka eller kolla något, gör det i samma svar.
-- Använd search_archive för att hitta relevant material. Sök gärna flera gånger med olika termer.
-- Använd get_page för att läsa mer kontext kring ett intressant stycke.
-- Stötta varje påstående med [Nr X, sida Y].
-- Om du inte hittar svar efter rimliga sökningar, säg det — gissa aldrig.
-- OCR-fel kan förekomma i materialet."""
-
 
 SELECT_COLS = ["text", "source", "page", "chunk_idx", "nr", "titel", "anmarkning"]
 
@@ -192,7 +173,7 @@ def format_context(hits: list[dict]) -> str:
 async def ask_claude(q: str, context: str) -> None:
     user_msg = f"Utdrag ur arkivet:\n\n{context}\n\n---\n\nFråga: {q}"
     options = ClaudeAgentOptions(
-        system_prompt=SYSTEM_PROMPT,
+        system_prompt=rag_prompt(),
         model=CLAUDE_MODEL,
         allowed_tools=[],          # ren Q&A — inga verktyg
         thinking=ThinkingConfigAdaptive(type="adaptive"),
@@ -246,7 +227,7 @@ async def run_mcp(q: str, db_dir: Path, model_name: str) -> None:
                     "PATH", "HOME", "VIRTUAL_ENV")},
     }
     options = ClaudeAgentOptions(
-        system_prompt=MCP_SYSTEM_PROMPT,
+        system_prompt=mcp_prompt(),
         model=CLAUDE_MODEL,
         mcp_servers={"arkiv": {"command": python, "args": [str(MCP_SERVER)], "env": env}},
         allowed_tools=["mcp__arkiv__search_archive", "mcp__arkiv__get_page"],
