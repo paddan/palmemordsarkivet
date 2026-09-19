@@ -67,8 +67,8 @@ embedas och matchas mot vektorindexet, de bästa utdragen rerankas, och de
 källhänvisningar. Snabbt och förutsägbart — passar enkla faktafrågor där ett
 söksteg räcker.
 
-Vilken reranker som används väljs i **Sökinställningar → Reranker** i RAG-lägets
-sidofält: **BGE –
+Vilken reranker som används väljs i **Sökinställningar → Reranker** i
+sidofältet: **BGE –
 lokal** (standard) eller **Ingen**. Där finns också **Jev – OpenRouter,
 experimentell**, som gav bättre källurval i den inledande pilotstudien
 ([docs/jev-reranker-pilot.md](docs/jev-reranker-pilot.md)) men kräver
@@ -76,6 +76,9 @@ experimentell**, som gav bättre källurval i den inledande pilotstudien
 sökning visar en rad vilken reranker som användes och hur lång tid den tog (**BGE**
 och **Jev**); för Jev även antal indatatoken och leverantörens rapporterade
 kostnad. **Ingen** hoppar över omrankningen helt.
+Båda lärna har samma meny, men
+den är separat för varje läge: rattarna i utredningsläget gäller varje sökning
+modellen gör, och de går före de sökparametrar modellen själv anger.
 
 #### MCP (utredningsläge)
 
@@ -85,11 +88,20 @@ fast pipeline får AI:n tillgång till verktyg (`search_archive`, `get_page`)
 som den anropar hur många gånger den vill — provar olika söktermer, följer
 upp intressanta träffar och läser hela sidor för mer kontext. Bättre täckning
 på komplexa flerstegs-frågor, men långsammare (~1–3 min).
+Räcker inte arkivet, eller är modellen osäker — ett namn, en plats, en förkortning,
+en firma, en adress, eller frågan "hur är det i dag" — kan du slå på **Tillåt
+webbsök** under *Sökinställningar*. Sökningar görs också för att kontrollera
+samtida företeelser när arkivet svarar, och modellen ska märka varje uppgift
+därifrån som `[webbkälla: domän, titel](url)` och säga att den kommer från
+internet, aldrig citera den som arkivmaterial. Avstängt som standard: det kräver
+`OPENROUTER_API_KEY` och debiterar en sökavgift per anrop.
+
 Läget väljs med en segmenterad kontroll högst upp: **Fråga arkivet (RAG)** och
-**Utredningsläge (MCP)**. I RAG-läget ligger sökvalen (reranker, top-K/top-N,
-facetter och fuzzy-sökning) i den hopfällbara sektionen *Sökinställningar* i
-sidofältet (minimerad som standard) och syns bara där; MCP-läget har i stället chatten
-och **Ny konversation**. Sidofältet visar dessutom LLM-profilen, kunskapsgrafens
+**Utredningsläge (MCP)**. Båda lärna har en hopfällbar sektion *Sökinställningar* i
+sidofältet (minimerad som standard) med reranker, top-K och top-N. I RAG-läget
+finns dessutom facetter och OCR-tolerant fuzzy-sökning, och rattarna gäller den
+enda sökningen; i utredningsläget gäller de varje sökning modellen gör. Chatten
+och **Ny konversation** finns bara i utredningsläget. Sidofältet visar dessutom LLM-profilen, kunskapsgrafens
 toggle och en räknare över token och ackumulerad kostnad för profilen, som alltid
 ligger allra sist.
 

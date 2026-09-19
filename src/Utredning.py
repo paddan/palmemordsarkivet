@@ -27,13 +27,14 @@ _RERANKERS = {
     "Ingen": "none",
 }
 
-# Startvärden för RAG-lägets sökval. Widgetnycklarna (reranker_choice, rag_*)
-# försvinner när sektionen avmonteras i MCP-läget — Streamlit raderar state för
+# Startvärden för sökvalen i båda lärna. Widgetnycklarna (reranker_choice, rag_*,
+# mcp_*) försvinner när sektionen avmonteras — Streamlit raderar state för
 # widgets som inte ritas i körningen — så varje val speglas i "<key>_sparad" via
 # on_change och läses tillbaka innan widgeten skapas. Utan speglingen hade
 # reranker, top-K/top-N, facetter och fuzzy tyst återställts varje gång man
-# växlade tillbaka till RAG.
-_RAG_SETTINGS_DEFAULTS: dict[str, Any] = {
+# växlade läge.
+_SOKVAL_DEFAULT: dict[str, Any] = {
+    # RAG-läget: en sökning per fråga.
     "reranker_choice": "BGE – lokal",
     # 50 och inte 20: mätningen i docs/jev-reranker-pilot.md visade att topp 6
     # rymde 38 av 60 belägg med 20 kandidater och 44 med 50. top_n styr vad som
@@ -43,18 +44,28 @@ _RAG_SETTINGS_DEFAULTS: dict[str, Any] = {
     "rag_facets": [],
     "rag_fuzzy_on": False,
     "rag_fuzzy_threshold": 0.70,
+    # MCP-läget: samma tre rattar, men de gäller per verktygsanrop eftersom
+    # modellen söker själv och kan göra flera sökningar i samma fråga. 50 och
+    # inte 20 — samma mätning gav 37/60 belägg i topp 6 med 20 kandidater mot
+    # 47/60 med 50 när första steget är hybridsökning (MCP:s standard).
+    "mcp_reranker_choice": "BGE – lokal",
+    "mcp_top_k": 50,
+    "mcp_top_n": 6,
+    # Webbsök är avstängt som standard: det kostar en avgift per anrop hos
+    # OpenRouter (~$0,007) och får bara användas när arkivet inte räcker.
+    "mcp_web_search": False,
 }
 
 
-def _spara_rag_val(key: str) -> None:
+def _spara_sokval(key: str) -> None:
     """``on_change``: spegla widgetens värde så det överlever avmontering."""
     st.session_state[f"{key}_sparad"] = st.session_state[key]
 
 
-def _aterstall_rag_val(key: str) -> None:
+def _aterstall_sokval(key: str) -> None:
     """Sätt widgetens startvärde ur speglingen innan widgeten skapas."""
     st.session_state.setdefault(
-        key, st.session_state.setdefault(f"{key}_sparad", _RAG_SETTINGS_DEFAULTS[key])
+        key, st.session_state.setdefault(f"{key}_sparad", _SOKVAL_DEFAULT[key])
     )
 
 # Utredning-sidans två lägen, valda med en segmenterad kontroll i stället för
@@ -250,12 +261,12 @@ def _render_rag_settings() -> dict[str, Any]:
     # läget väljs: utan nycklar hade top-K/top-N, facetter och fuzzy tyst
     # återställts till default varje gång man växlade tillbaka till RAG.
     with st.expander("Sökinställningar", expanded=False):
-        _aterstall_rag_val("reranker_choice")
+        _aterstall_sokval("reranker_choice")
         reranker_label = st.selectbox(
             "Reranker",
             list(_RERANKERS),
             key="reranker_choice",
-            on_change=_spara_rag_val,
+            on_change=_spara_sokval,
             args=("reranker_choice",),
             help=(
                 "En reranker bedömer och sorterar om de hämtade kandidatutdragen efter "
@@ -268,26 +279,26 @@ def _render_rag_settings() -> dict[str, Any]:
         reranker_mode = _RERANKERS[reranker_label]
         if reranker_mode == "jev" and not os.environ.get("OPENROUTER_API_KEY"):
             st.warning("Jev kräver att OPENROUTER_API_KEY är satt i miljön.")
-        _aterstall_rag_val("rag_top_k")
+        _aterstall_sokval("rag_top_k")
         top_k = st.slider(
             "Hämta top-K kandidater",
             5,
             100,
             key="rag_top_k",
-            on_change=_spara_rag_val,
+            on_change=_spara_sokval,
             args=("rag_top_k",),
             help="Antal chunks som vektorsökningen plockar fram ur indexet i första "
             "steget. Högre K → fler alternativ för vald reranker att välja bland "
             "(bättre täckning) men långsammare. Utan reranker används bara de "
             "första top-N av dessa.",
         )
-        _aterstall_rag_val("rag_top_n")
+        _aterstall_sokval("rag_top_n")
         top_n = st.slider(
             "Skicka top-N till AI",
             1,
             30,
             key="rag_top_n",
-            on_change=_spara_rag_val,
+            on_change=_spara_sokval,
             args=("rag_top_n",),
             help="Antal chunks (efter ev. reranking) som faktiskt skickas som "
             "kontext till språkmodellen. Högre N → mer underlag men längre "
@@ -303,32 +314,32 @@ def _render_rag_settings() -> dict[str, Any]:
                 _label = f"{_typ}: {_namn} ({_cnt})"
                 _facet_options.append(_label)
                 _facet_to_name[_label] = _namn
-        _aterstall_rag_val("rag_facets")
+        _aterstall_sokval("rag_facets")
         selected_facets = st.multiselect(
             "Begränsa till entiteter",
             _facet_options,
             key="rag_facets",
-            on_change=_spara_rag_val,
+            on_change=_spara_sokval,
             args=("rag_facets",),
             help="Visa bara träffar ur dokument som nämner valda personer/platser/"
             "organisationer (ur kunskapsgrafen). Tomt = ingen begränsning.",
         )
-        _aterstall_rag_val("rag_fuzzy_on")
+        _aterstall_sokval("rag_fuzzy_on")
         fuzzy_on = st.toggle(
             "OCR-tolerant fuzzy-sökning",
             key="rag_fuzzy_on",
-            on_change=_spara_rag_val,
+            on_change=_spara_sokval,
             args=("rag_fuzzy_on",),
             help="Lägg till träffar där söktermer förekommer felstavade av OCR "
             "(t.ex. 'Engstrcm' för 'Engström'). Första körningen bygger ett index "
             "(~30 s, ~100 MB minne).",
         )
-        _aterstall_rag_val("rag_fuzzy_threshold")
+        _aterstall_sokval("rag_fuzzy_threshold")
         fuzzy_threshold = st.slider(
             "Fuzzy-likhet (tröskel)",
             0.50, 0.95, step=0.05,
             key="rag_fuzzy_threshold",
-            on_change=_spara_rag_val,
+            on_change=_spara_sokval,
             args=("rag_fuzzy_threshold",),
             help="Lägre = fångar fler felstavningar men mer brus. Korta namn med "
             "ett OCR-fel (t.ex. 'Palme'→'Paine') kräver ~0.6; längre ord klarar "
@@ -344,6 +355,92 @@ def _render_rag_settings() -> dict[str, Any]:
         "facet_to_name": _facet_to_name,
         "fuzzy_on": fuzzy_on,
         "fuzzy_threshold": fuzzy_threshold,
+    }
+
+
+def _render_mcp_settings() -> dict[str, Any]:
+    """Utredningslägets sökval (reranker, top-K/N, webbsök) i sidofältet.
+
+    Samma tre rattar som RAG-läget, men de gäller **per verktygsanrop**:
+    modellen söker själv och kan göra flera sökningar i samma fråga.
+    Inställningarna går före modellens egna argument — se
+    :func:`mcp_server.resolve_search_policy`.
+    """
+    with st.expander("Sökinställningar", expanded=False):
+        _aterstall_sokval("mcp_reranker_choice")
+        reranker_label = st.selectbox(
+            "Reranker",
+            list(_RERANKERS),
+            key="mcp_reranker_choice",
+            on_change=_spara_sokval,
+            args=("mcp_reranker_choice",),
+            help=(
+                "En reranker sorterar om kandidaterna i **varje** sökning modellen gör. "
+                "BGE körs lokalt och är standard. Jev är ett experimentellt "
+                "OpenRouter-läge som kräver nätverk och OPENROUTER_API_KEY, debiterar "
+                "per anrop och tar ~5 s per sökning vid 50 kandidater. Ingen behåller "
+                "sökordningen. Modellens egna argument för reranker, top-K och top-N "
+                "ignoreras när du väljer här."
+            ),
+        )
+        reranker_mode = _RERANKERS[reranker_label]
+        if reranker_mode == "jev" and not os.environ.get("OPENROUTER_API_KEY"):
+            st.warning("Jev kräver att OPENROUTER_API_KEY är satt i miljön.")
+        _aterstall_sokval("mcp_top_k")
+        top_k = st.slider(
+            "Hämta top-K kandidater",
+            5,
+            50,
+            key="mcp_top_k",
+            on_change=_spara_sokval,
+            args=("mcp_top_k",),
+            help="Antal kandidater per sökning som vald reranker får välja bland. "
+            "Taket är 50 eftersom verktyget search_archive annonserar 5–50 för "
+            "modellen.",
+        )
+        _aterstall_sokval("mcp_top_n")
+        top_n = st.slider(
+            "Skicka top-N till AI",
+            1,
+            15,
+            key="mcp_top_n",
+            on_change=_spara_sokval,
+            args=("mcp_top_n",),
+            help="Antal utdrag per sökning som går till modellen. Modellen kan göra "
+            "flera sökningar i samma fråga, så håll N lågt — varje sökning lägger "
+            "sina utdrag till modellens kontext.",
+        )
+        _aterstall_sokval("mcp_web_search")
+        web_search = st.toggle(
+            "Tillåt webbsök",
+            key="mcp_web_search",
+            on_change=_spara_sokval,
+            args=("mcp_web_search",),
+            help=(
+                "Ger modellen verktyget **web_search**, som söker utanför arkivet. "
+                "Avstängt som standard. Det används när modellen är osäker eller "
+                "materialet inte ger ett entydigt svar, för att kontrollera firmor, "
+                "adresser och samtida företeelser även när arkivet svarar, och för "
+                "nulägesfrågor (\"i dag\", \"numera\") som ligger efter materialets "
+                "tid. Modellen ska märka varje sådan uppgift som "
+                "**[webbkälla: domän, titel](url)** i stället för [Nr X, sida Y]. "
+                "Kräver `OPENROUTER_API_KEY` (oberoende av vald LLM-backend) och "
+                "debiterar en sökavgift hos OpenRouter per anrop (~$0,007, upp till "
+                "10 träffar); kostnaden bokförs i tokenräknaren."
+            ),
+        )
+        if web_search and not os.environ.get("OPENROUTER_API_KEY"):
+            # Annars blir ett påslaget webbsök tyst dött: verktyget svarar med en
+            # feltext som modellen kan välja att inte nämna.
+            st.warning(
+                "Webbsök kräver att OPENROUTER_API_KEY är satt i miljön. "
+                "Modellen får verktyget, men varje anrop svarar att nyckeln saknas."
+            )
+    return {
+        "reranker_mode": reranker_mode,
+        "top_k": top_k,
+        "top_n": top_n,
+        "web_search": web_search,
     }
 
 
@@ -416,7 +513,7 @@ OPENAI_TOOLS: list[Any] = [
                     "top_k": {
                         "type": "integer",
                         "description": "Antal kandidater att hämta (5–50)",
-                        "default": 20,
+                        "default": 50,
                     },
                     "top_n": {
                         "type": "integer",
@@ -459,7 +556,55 @@ OPENAI_TOOLS: list[Any] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": (
+                "Sök på nätet efter information utanför Palmemordsarkivet. Använd när "
+                "materialet innehåller något du inte kan tolka ur arkivet: en förkortning "
+                "eller ett begrepp du inte känner igen, ett namn eller en plats som är "
+                "tvetydig eller ser OCR-skadad ut, en samtida företeelse (ett företag, ett "
+                "vapenmärke, en tidningsannons, en adress) eller [MASKAD]-markeringar vars "
+                "sammanhang är otydligt. Gissa aldrig i stället. Använd det också för att "
+                "kontrollera sådant som går att belägga utanför arkivet — ett företag, en "
+                "adress, ett vapenmärke, en tidningsannons — även när arkivet svarar. "
+                "Osäkerhet är alltid ett skäl att söka: tvekar du, eller ger materialet "
+                "inget entydigt svar, sök innan du svarar. Gäller frågan nuläget — vad som "
+                "gäller i dag eller numera, allt efter det arkivet kan svara på i tid — "
+                "sök alltid, och datera webbuppgiften. "
+                "Uppgifterna kommer från internet, inte från arkivet, och ska märkas i svaret "
+                "som [webbkälla: domän, titel](url)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Sökfrågan på svenska"},
+                    "max_results": {
+                        "type": "integer",
+                        "description": "Antal webbsidor att hämta (3–10)",
+                        "default": 5,
+                    },
+                },
+                "required": ["query"],
+            },
+        },
+    },
 ]
+
+# Verktyget får bara annonseras när operatören slagit på webbsök: modellen ska
+# inte kunna be om ett verktyg som är avstängt, och listan modellen ser ska vara
+# densamma som den faktiskt får använda.
+WEB_SEARCH_TOOL = "web_search"
+
+
+def active_tools(web_search: bool) -> list[Any]:
+    """Verktygsscheman för ett anrop — web_search bara när den är påslagen."""
+    return [
+        verktyg
+        for verktyg in OPENAI_TOOLS
+        if web_search or verktyg["function"]["name"] != WEB_SEARCH_TOOL
+    ]
 
 
 def _record_usage(cfg: dict, usage: dict | None, cost: float | None = None) -> None:
@@ -516,7 +661,11 @@ def _render_usage_panel(cfg: dict) -> None:
         f"Totalt: {_llm_usage.format_summary(_llm_usage.totals_from_row(totals))}",
     ]
     if cfg.get("kind") != "claude" and not (cfg.get("prices") or {}):
-        rader.append("Priser saknas — sätt dem i Admin → Inställningar.")
+        # Bara när något faktiskt saknar kostnad: OpenRouter rapporterar hela
+        # anropets kostnad (inklusive sökavgiften), och då behövs inga priser.
+        summa = _llm_usage.totals_from_row(totals)
+        if not summa["calls"] or summa["cost_partial"]:
+            rader.append("Priser saknas — sätt dem i Admin → Inställningar.")
     # Två $ i samma markdown-block blir LaTeX-matte hos Streamlit. Här ritas
     # panelen som HTML (för den mindre stilen), och där gäller inte markdowns
     # backslash-escape — dollartecknet skrivs som HTML-entitet i stället.
@@ -562,10 +711,12 @@ with st.sidebar:
             "öppnar den — inte automatiskt efter varje svar. "
             "Kräver att Neo4j är igång (.venv/bin/python scripts/neo4j.py).",
         )
-        # RAG-lägets sökinställningar ritas bara när RAG-läget är valt — MCP-chatten
-        # har inga sökval. Valen returneras i stället för att ägas av kroppen,
-        # eftersom widgetsarna nu bor i sidofältet.
-        rag_settings = _render_rag_settings() if mode == MODE_RAG else None
+        # Sökvalen ritas bara för det valda läget, och den valda kroppen får
+        # tillbaka samma dict. `mode` är normaliserat till RAG (kontrollen kan
+        # avmarkeras), så det finns alltid ett komplett set att skicka in.
+        sokval: dict[str, Any] = (
+            _render_rag_settings() if mode == MODE_RAG else _render_mcp_settings()
+        )
     # Token & kostnad är ett syskon till den scrollbar innehållscontainern.
     # Den skapas sist, men CSS gör bottenplatsen fysisk i stället för bara
     # sista positionen i den växande sökinställningssektionen.
@@ -605,7 +756,15 @@ def _mcp_tool_label(name: str, inp: dict) -> str:
         return f'🔍 Söker: "{inp.get("query", "")}"'
     if short == "get_page":
         return f'📄 Läser: {inp.get("source", "")}, sida {inp.get("page", "")}'
+    if short == "web_search":
+        return f'🌐 Söker på nätet: "{inp.get("query", "")}"'
     return f"🔧 {short}"
+
+
+# Tak för antal verktygsomgångar i utredningsläget. 15 och inte 10: med webbsök
+# påslaget går tio turer lätt åt till att söka, och modellen hann aldrig svara.
+# Nås taket tvingas ändå ett svar fram (se _answer_without_tools).
+MAX_MCP_TURNS = 15
 
 
 def _truncated_notice(reason: str | None, component: str, model: str) -> str | None:
@@ -622,16 +781,25 @@ def _truncated_notice(reason: str | None, component: str, model: str) -> str | N
 
 async def stream_mcp(
     q: str, status_box, text_placeholder, parts: list[str], resume_id: str | None,
-    cfg: dict,
+    cfg: dict, search: dict,
 ) -> tuple[str | None, int]:
     """Utredningsläge: Claude anropar search_archive/get_page autonomt.
+
+    Verktygen körs i en subprocess, så sökvalen går dit via miljön (samma kanal
+    som DB_DIR och EMBED_MODEL redan använder). Jev kräver att
+    OPENROUTER_API_KEY följer med — annars faller rerankningen på saknad nyckel.
 
     Skriver varje verktygsanrop till ``status_box`` så användaren ser att
     sökningarna faktiskt körs (kan ta 1–3 min). Returnerar Claudes session_id
     (så nästa fråga kan resume:a samma konversation) och antalet verktygsanrop."""
+    import mcp_server  # noqa: PLC0415
+
     db_dir = ROOT / "generated" / "lancedb"
     env = {
         "DB_DIR": str(db_dir),
+        mcp_server.ENV_RERANKER: str(search["reranker_mode"]),
+        mcp_server.ENV_TOP_K: str(search["top_k"]),
+        mcp_server.ENV_TOP_N: str(search["top_n"]),
         **{
             k: v
             for k, v in os.environ.items()
@@ -646,13 +814,24 @@ async def stream_mcp(
             )
         },
     }
+    if search["reranker_mode"] == "jev" and os.environ.get("OPENROUTER_API_KEY"):
+        env["OPENROUTER_API_KEY"] = os.environ["OPENROUTER_API_KEY"]
+    # Webbsök går via OpenRouters web-plugin och behöver samma nyckel. Saknas den
+    # svarar verktyget med ett begripligt fel i stället för en tom sökning.
+    web_search_on = bool(search.get("web_search"))
+    if web_search_on and os.environ.get("OPENROUTER_API_KEY"):
+        env["OPENROUTER_API_KEY"] = os.environ["OPENROUTER_API_KEY"]
     options = ClaudeAgentOptions(
         system_prompt=mcp_prompt(),
         model=cfg["model"],
         mcp_servers={
             "arkiv": {"command": sys.executable, "args": [str(MCP_SERVER)], "env": env}
         },
-        allowed_tools=["mcp__arkiv__search_archive", "mcp__arkiv__get_page"],
+        allowed_tools=[
+            "mcp__arkiv__search_archive",
+            "mcp__arkiv__get_page",
+            *(["mcp__arkiv__web_search"] if web_search_on else []),
+        ],
         thinking=ThinkingConfigAdaptive(type="adaptive"),
         effort="high",
         max_turns=10,
@@ -753,7 +932,11 @@ async def stream_openai(user_msg: str, placeholder, parts: list[str], cfg) -> No
             # och bedöm efter strömmen så även andra stopporsaker än "length"
             # (t.ex. DeepSeek-resursbrist) syns i svaret.
             reason = chunk.choices[0].finish_reason or reason
-        _record_usage(cfg, _llm_usage.usage_from_openai(usage))
+        _record_usage(
+            cfg,
+            _llm_usage.usage_from_openai(usage),
+            _llm_usage.provider_cost(usage),
+        )
         notice = _truncated_notice(reason, "ask.openai", model)
         if notice:
             parts.append(f"\n\n{notice}")
@@ -776,14 +959,14 @@ async def stream_to_string(hits, q, cfg, placeholder=None) -> str:
 
 
 async def stream_mcp_to_string(
-    q: str, resume_id: str | None, cfg: dict
+    q: str, resume_id: str | None, cfg: dict, search: dict,
 ) -> tuple[str, str | None]:
     status_box = st.status("Söker i arkivet…", expanded=True)
     text_placeholder = st.empty()
     parts: list[str] = []
     try:
         new_id, tool_count = await stream_mcp(
-            q, status_box, text_placeholder, parts, resume_id, cfg
+            q, status_box, text_placeholder, parts, resume_id, cfg, search
         )
     except Exception as exc:
         err_str = str(exc)
@@ -810,23 +993,70 @@ async def stream_mcp_to_string(
     return final, new_id
 
 
-def _run_tool(name: str, arguments: dict) -> str:
+def _run_tool(name: str, arguments: dict, search: dict) -> tuple[str, float | None]:
+    """Kör ett MCP-verktygsanrop in-process (OpenAI-kompatibla backends).
+
+    Sökvalen från sidofältet skickas in direkt i stället för via miljön, och de
+    går före modellens argument för reranker, top-K och top-N.
+
+    Returnerar (text till modellen, verktygets egen kostnad i USD). Bara
+    webbsök kostar: sökavgiften hos OpenRouter syns inte i modellens tokenusage,
+    så den måste bokföras separat för att räknaren ska stämma."""
     import mcp_server  # noqa: PLC0415
 
     mcp_server._table = table
     mcp_server._model = embed_model
     if name == "search_archive":
         args = dict(arguments)
-        args["top_k"], args["top_n"] = mcp_server.clamp_result_limits(
-            args.get("top_k", mcp_server.TOP_K_DEFAULT),
-            args.get("top_n", mcp_server.TOP_N_DEFAULT),
+        top_k, top_n = mcp_server.clamp_result_limits(search["top_k"], search["top_n"])
+        svar: str = mcp_server.search_with_settings(
+            args.get("query", ""),
+            hybrid=bool(args.get("hybrid", True)),
+            reranker=str(search["reranker_mode"]),
+            top_k=top_k,
+            top_n=top_n,
         )
-        result: str = mcp_server.search_archive(**args)
-        return result
+        return svar, None
     if name == "get_page":
         page: str = mcp_server.get_page(**arguments)
-        return page
-    return f"Okänt verktyg: {name}"
+        return page, None
+    if name == WEB_SEARCH_TOOL:
+        if not search.get("web_search"):
+            # Schemat filtreras bort när valet är av, så hit når bara en modell
+            # som hittat verktygsnamnet på annat håll (t.ex. via injicerad text).
+            return "Webbsökning är avstängd i sökinställningarna.", None
+        web_svar: tuple[str, float | None] = mcp_server.search_web(
+            str(arguments.get("query", "")),
+            arguments.get("max_results", mcp_server.MAX_RESULTS_DEFAULT),
+        )
+        return web_svar
+    return f"Okänt verktyg: {name}", None
+
+
+async def _answer_without_tools(client: Any, cfg: dict, messages: list[Any]) -> str:
+    """Hämta ett svar när tursgränsen är nådd, utan att fler verktyg får anropas.
+
+    Utan detta blev resultatet av en lång sökrunda enbart notisen "Svar avklippt —
+    modellen nådde gränsen för antal verktygsanrop": allt arbete kastades bort i
+    stället för att sammanfattas. ``tool_choice="none"`` stöds av OpenAI,
+    DeepSeek och OpenRouter; svarar endpointen inte på det får felet gå tillbaka
+    till anroparen, som redan fångar undantag kring hela loopen."""
+    response = await client.chat.completions.create(
+        model=cfg["model"],
+        messages=[
+            *messages,
+            {
+                "role": "user",
+                "content": (
+                    "Svara nu på frågan med det underlag du redan har hämtat. "
+                    "Gör inga fler verktygsanrop. Redovisa vad som är arkivmaterial "
+                    "och vad som kommer från nätet, och vad som fortfarande är osäkert."
+                ),
+            },
+        ],
+        tool_choice="none",
+    )
+    return response.choices[0].message.content or ""
 
 
 async def stream_openai_mcp(
@@ -835,6 +1065,7 @@ async def stream_openai_mcp(
     parts: list[str],
     cfg: dict,
     messages: list[Any],
+    search: dict,
 ) -> None:
     """Utredningsläge för OpenAI-kompatibla backends.
 
@@ -849,18 +1080,26 @@ async def stream_openai_mcp(
     api_key = cfg.get("api_key") or "ollama"
     tool_count = 0
     turns_usage: dict = {}
+    # Leverantörens rapporterade kostnad (OpenRouter) summeras för sig: den
+    # innehåller webbsökningens avgift, som inte syns i några token.
+    verktygs_och_provider_kostnad: float | None = None
     try:
         async with AsyncOpenAI(api_key=api_key or "ollama", base_url=cfg["base_url"]) as client:
-            for _turn in range(10):
+            for _turn in range(MAX_MCP_TURNS):
                 response = await client.chat.completions.create(
                     model=cfg["model"],
                     messages=messages,
-                    tools=OPENAI_TOOLS,
+                    tools=active_tools(bool(search.get("web_search"))),
                 )
                 # Icke-strömmande svar: usage per tur, summeras över turerna.
                 _llm_usage.add_usage(
                     turns_usage, _llm_usage.usage_from_openai(response.usage), None
                 )
+                tur_kostnad = _llm_usage.provider_cost(response.usage)
+                if tur_kostnad is not None:
+                    verktygs_och_provider_kostnad = (
+                        verktygs_och_provider_kostnad or 0.0
+                    ) + tur_kostnad
                 choice = response.choices[0]
                 msg = choice.message
 
@@ -879,12 +1118,12 @@ async def stream_openai_mcp(
                             continue
                         args = json.loads(tc.function.arguments)
                         tool_count += 1
-                        if tc.function.name == "search_archive":
-                            label = f'search_archive: "{args.get("query", "")}"'
-                        else:
-                            label = f'get_page: {args.get("source", "")}, sida {args.get("page", "")}'
-                        status_box.write(label)
-                        result = _run_tool(tc.function.name, args)
+                        status_box.write(_mcp_tool_label(tc.function.name, args))
+                        result, verktygskostnad = _run_tool(tc.function.name, args, search)
+                        if verktygskostnad is not None:
+                            verktygs_och_provider_kostnad = (
+                                verktygs_och_provider_kostnad or 0.0
+                            ) + verktygskostnad
                         messages.append(
                             {
                                 "role": "tool",
@@ -907,10 +1146,19 @@ async def stream_openai_mcp(
                     messages.append({"role": "assistant", "content": final})
                     break
             else:
-                truncated = "*[Svar avklippt — modellen nådde gränsen för antal verktygsanrop.]*"
-                parts.append(truncated)
-                text_placeholder.markdown(truncated)
-                messages.append({"role": "assistant", "content": truncated})
+                # Tursgränsen är nådd. Med webbsök påslaget går tio turer lätt åt
+                # till att söka, och att då bara visa en avklippt-notis vore att
+                # kasta bort hela arbetet. En sista tur utan verktyg tvingar fram
+                # ett svar på det underlag som redan hämtats.
+                final = await _answer_without_tools(client, cfg, messages)
+                notice = (
+                    f"*[Svaret gavs efter {tool_count} verktygsanrop — gränsen för "
+                    "antal verktygsomgångar nåddes, så fler sökningar gjordes inte.]*"
+                )
+                final = f"{final}\n\n{notice}" if final else notice
+                parts.append(final)
+                text_placeholder.markdown(final)
+                messages.append({"role": "assistant", "content": final})
     except Exception as exc:
         error_msg = f"*Fel vid anrop till {cfg['model']}: {exc}*"
         parts.append(error_msg)
@@ -924,21 +1172,24 @@ async def stream_openai_mcp(
         state="complete",
         expanded=False,
     )
-    # Kostnaden räknas en gång för hela frågan (alla turer) ur profilens priser.
+    # Kostnaden kommer från leverantören när den finns (OpenRouter rapporterar
+    # hela anropets kostnad inklusive verktygsavgifter), annars ur profilens priser.
     _record_usage(
         cfg,
         turns_usage,
-        _llm_usage.cost_usd(turns_usage, cfg.get("prices") or {})
-        if turns_usage
-        else None,
+        verktygs_och_provider_kostnad
+        if verktygs_och_provider_kostnad is not None
+        else (_llm_usage.cost_usd(turns_usage, cfg.get("prices") or {}) if turns_usage else None),
     )
 
 
-async def stream_openai_mcp_to_string(cfg: dict, messages: list[Any]) -> str:
+async def stream_openai_mcp_to_string(
+    cfg: dict, messages: list[Any], search: dict
+) -> str:
     status_box = st.status("Söker i arkivet…", expanded=True)
     text_placeholder = st.empty()
     parts: list[str] = []
-    await stream_openai_mcp(status_box, text_placeholder, parts, cfg, messages)
+    await stream_openai_mcp(status_box, text_placeholder, parts, cfg, messages, search)
     final = linkify_citations("".join(parts))
     text_placeholder.markdown(final, unsafe_allow_html=True)
     return final
@@ -1259,10 +1510,10 @@ def _render_chat_turn(turn: dict, turn_idx: int) -> None:
             _render_chat_sources(srcs, f"chat_pdf_{turn_idx}")
 
 
-def _render_mcp_tab() -> None:
+def _render_mcp_tab(settings: dict[str, Any]) -> None:
     """Utredningsläget: modellen söker autonomt med MCP-verktygen och minns
     tidigare frågor i konversationen (Claude via ``resume``, OpenAI-kompatibla
-    via meddelandehistoriken)."""
+    via meddelandehistoriken). Sökvalen kommer från sidofältet."""
     _info, _new = st.columns([4, 1])
     with _info:
         st.caption(
@@ -1292,7 +1543,7 @@ def _render_mcp_tab() -> None:
                 st.markdown(chat_q)
             with st.chat_message("assistant"):
                 answer, new_id = asyncio.run(
-                    stream_mcp_to_string(chat_q, ss.mcp_session_id, backend)
+                    stream_mcp_to_string(chat_q, ss.mcp_session_id, backend, settings)
                 )
                 centers: list[dict] | None = []
                 if show_graph:
@@ -1327,7 +1578,7 @@ def _render_mcp_tab() -> None:
                 st.markdown(chat_q)
             with st.chat_message("assistant"):
                 answer = asyncio.run(
-                    stream_openai_mcp_to_string(backend, ss.openai_chat_messages)
+                    stream_openai_mcp_to_string(backend, ss.openai_chat_messages, settings)
                 )
                 centers = []
                 if show_graph:
@@ -1481,8 +1732,8 @@ def _render_rag_tab(settings: dict[str, Any]) -> None:
 
 
 # Bara den valda lägeskroppen ritas (lägesväljaren högst upp sparar valet).
-# Inställningarna finns bara i RAG-läget, så utan dem ritas MCP-chatten.
-if mode == MODE_MCP or rag_settings is None:
-    _render_mcp_tab()
+# Sökvalen följer med in i kroppen — de ägs av sidofältet.
+if mode == MODE_MCP:
+    _render_mcp_tab(sokval)
 else:
-    _render_rag_tab(rag_settings)
+    _render_rag_tab(sokval)

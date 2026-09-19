@@ -1,10 +1,11 @@
-"""Beteendetester för Utredning-sidans lägesval och RAG-sökval (headless AppTest).
+"""Beteendetester för Utredning-sidans lägesval och sökval (headless AppTest).
 
-Streamlit raderar widgetstate för widgets som inte ritas i en körning, så
-RAG-sökvalen (reranker, top-K/top-N, facetter, fuzzy) måste speglas för att
-överleva ett besök i MCP-läget — där ritas de inte alls. Testerna kör sidan
-headless med tunga beroenden utbytta (vektor-db, embedding-modell och state-db)
-och kontrollerar beteendet i stället för källkoden.
+Streamlit raderar widgetstate för widgets som inte ritas i en körning, så båda
+lärnas sökval måste speglas för att överleva ett lägesbyte: RAG:s reranker,
+top-K/N, facetter och fuzzy, och MCP:s reranker, top-K/N och webbsök — ingen av
+sektionerna ritas medan det andra läget är valt. Testerna kör sidan headless med
+tunga beroenden utbytta (vektor-db, embedding-modell och state-db) och
+kontrollerar beteendet i stället för källkoden.
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ TOP_N = "Skicka top-N till AI"
 FUZZY = "OCR-tolerant fuzzy-sökning"
 TRÖSKEL = "Fuzzy-likhet (tröskel)"
 RERANKER = "Reranker"
+WEBBSÖK = "Tillåt webbsök"
 
 
 class _FakeTable:
@@ -120,14 +122,43 @@ def test_top_k_startar_pa_50(sida: AppTest) -> None:
     assert _slider(sida, TOP_N).value == 6
 
 
-def test_mcp_laget_visar_inte_sokinställningarna(sida: AppTest) -> None:
+def test_mcp_laget_visar_sina_egna_sokinstallningar(sida: AppTest) -> None:
+    """MCP-läget har samma tre rattar som RAG (reranker, top-K, top-N), men
+    RAG-lägets sökfilter hör inte hit: MCP-verktyget har ingen facett- eller
+    fuzzy-väg."""
     _run(sida, MCP)
     assert sida.chat_input, "MCP-kroppen ritades inte (tidig st.stop()?)"
     labels = _sidebar_labels(sida)
     assert "LLM-profil" in labels
-    assert RERANKER not in labels
-    assert TOP_K not in labels
+    assert RERANKER in labels
+    assert TOP_K in labels
+    assert TOP_N in labels
+    assert "Begränsa till entiteter" not in labels
     assert FUZZY not in [t.label for t in sida.sidebar.toggle]
+
+
+def test_mcp_sokval_startar_pa_50_och_6(sida: AppTest) -> None:
+    _run(sida, MCP)
+    assert _slider(sida, TOP_K).value == 50
+    assert _slider(sida, TOP_N).value == 6
+    assert _selectbox(sida, RERANKER).value == "BGE – lokal"
+
+
+def test_mcp_sokvalen_overlever_ett_varv_i_rag(sida: AppTest) -> None:
+    """Samma spegling som RAG-läget behöver, men åt andra hållet: MCP-widgetarna
+    avmonteras när RAG-läget ritas, och utan speglingen hade valen nollställts."""
+    _run(sida, MCP)
+    _slider(sida, TOP_K).set_value(42)
+    _slider(sida, TOP_N).set_value(9)
+    _selectbox(sida, RERANKER).set_value("Ingen")
+    sida.run()
+
+    _run(sida, RAG)
+    _run(sida, MCP)
+
+    assert _slider(sida, TOP_K).value == 42
+    assert _slider(sida, TOP_N).value == 9
+    assert _selectbox(sida, RERANKER).value == "Ingen"
 
 
 def test_avmarkerad_lageskontroll_kor_rag(sida: AppTest) -> None:
@@ -149,7 +180,10 @@ def test_sokvalen_overlever_ett_varv_i_mcp(sida: AppTest) -> None:
     assert _slider(sida, TOP_K).value == 33
 
     _run(sida, MCP)
-    assert RERANKER not in _sidebar_labels(sida)
+    # MCP-läget har egna rattar med samma etiketter men andra nycklar (mcp_*),
+    # och de ritas med sina egna startvärden — RAG-valen ligger kvar i _sparad.
+    assert _slider(sida, TOP_K).value == 50
+    assert _selectbox(sida, RERANKER).value == "BGE – lokal"
 
     _run(sida, RAG)
     assert _slider(sida, TOP_K).value == 33
@@ -159,6 +193,29 @@ def test_sokvalen_overlever_ett_varv_i_mcp(sida: AppTest) -> None:
     assert _selectbox(sida, RERANKER).value == "Ingen"
 
 
+def test_mcp_laget_har_webbsok_avstangt_som_standard(sida: AppTest) -> None:
+    """Webbsök kostar en avgift per anrop och får bara användas när arkivet inte
+    räcker, så den är opt-in. RAG-läget har inga verktyg och ska inte visa valet."""
+    _run(sida, MCP)
+    assert _toggle(sida, WEBBSÖK).value is False
+
+    _run(sida, RAG)
+    assert WEBBSÖK not in [t.label for t in sida.sidebar.toggle]
+
+
+def test_webbsok_valet_overlever_ett_varv_i_rag(sida: AppTest) -> None:
+    """Samma spegling som de övriga sökvalen: widgeten avmonteras i RAG-läget och
+    hade annars tyst slagits av igen."""
+    _run(sida, MCP)
+    _toggle(sida, WEBBSÖK).set_value(True)
+    sida.run()
+
+    _run(sida, RAG)
+    _run(sida, MCP)
+
+    assert _toggle(sida, WEBBSÖK).value is True
+
+
 def test_tokenpanelen_ar_kvar_i_bada_lägena(sida: AppTest) -> None:
     def usage_panel(at: AppTest) -> bool:
         return any("palme-usage" in m.value for m in at.sidebar.markdown)
@@ -166,3 +223,132 @@ def test_tokenpanelen_ar_kvar_i_bada_lägena(sida: AppTest) -> None:
     assert usage_panel(sida)
     _run(sida, MCP)
     assert usage_panel(sida)
+
+
+def test_webbsok_utan_nyckel_varnar_i_sidofaltet(sida: AppTest, monkeypatch) -> None:
+    """En saknad OPENROUTER_API_KEY gjorde webbsöket tyst dött: verktyget svarade
+    bara med en feltext, inget hamnade i errors.log och gränssnittet sade inget.
+    Sidofältet ska säga till, som för Jev."""
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    _run(sida, MCP)
+    _toggle(sida, WEBBSÖK).set_value(True)
+    sida.run()
+
+    varningar = " ".join(w.value for w in sida.sidebar.warning)
+    assert "OPENROUTER_API_KEY" in varningar
+
+
+def test_webbsok_tipset_beskriver_nar_sokningar_sker(sida: AppTest) -> None:
+    """Tipset är operatörens enda förklaring av när sökningar sker (och därmed av
+    kostnaden). Det låg kvar på den gamla, snävare regeln "sådant arkivet inte kan
+    avgöra" långt efter att policyn blivit vidare."""
+    _run(sida, MCP)
+    help_text = _toggle(sida, WEBBSÖK).help or ""
+
+    assert "osäker" in help_text
+    assert "entydigt svar" in help_text
+    assert "numera" in help_text
+    assert "webbkälla" in help_text
+
+
+class _FakeToolCall:
+    """Stoppar in ett verktygsanrop i varje tur, så tursgränsen nås."""
+
+    def __init__(self) -> None:
+        self.id = "call_1"
+        self.type = "function"
+        self.function = _FakeFunction()
+        # Inte en riktig ChatCompletionMessageFunctionToolCall, så loopen hoppar
+        # över att köra verktyget — testet mäter tursgränsen, inte sökningen.
+        self.model_dump = _FakeCallDump(self)
+
+
+class _FakeFunction:
+    name = "search_archive"
+    arguments = '{"query": "ordförande"}'
+
+
+class _FakeCallDump:
+    """Loopen gör model_dump() på varje verktygsanrop innan den lägger tillbaka
+    det i meddelandehistoriken."""
+
+    def __init__(self, call: _FakeToolCall) -> None:
+        self._call = call
+
+    def __call__(self) -> dict:
+        return {
+            "id": self._call.id,
+            "type": "function",
+            "function": {"name": self._call.function.name,
+                         "arguments": self._call.function.arguments},
+        }
+
+
+class _FakeMessage:
+    def __init__(self, content: str | None, tool_calls: list | None) -> None:
+        self.content = content
+        self.tool_calls = tool_calls
+
+
+class _FakeChoice:
+    def __init__(self, message: _FakeMessage, finish_reason: str) -> None:
+        self.message = message
+        self.finish_reason = finish_reason
+
+
+class _FakeResponse:
+    def __init__(self, choice: _FakeChoice) -> None:
+        self.choices = [choice]
+        self.usage = None
+
+
+class _FakeCompletions:
+    """Svarar med verktygsanrop tills loopen ber om ett svar utan verktyg."""
+
+    def __init__(self) -> None:
+        self.utan_verktyg = 0
+        self.med_verktyg = 0
+
+    async def create(self, **kwargs):
+        if kwargs.get("tool_choice") == "none":
+            self.utan_verktyg += 1
+            assert "tools" not in kwargs
+            return _FakeResponse(
+                _FakeChoice(_FakeMessage("Sammanfattning av hämtat underlag.", None), "stop")
+            )
+        self.med_verktyg += 1
+        return _FakeResponse(
+            _FakeChoice(_FakeMessage(None, [_FakeToolCall()]), "tool_calls")
+        )
+
+
+def test_tursgransen_tvingar_fram_ett_svar(sida: AppTest, monkeypatch) -> None:
+    """När taket för verktygsomgångar nås ska det hämtade underlaget sammanfattas i
+    stället för att bara en avklippt-notis visas — med webbsök påslaget går tio
+    turer lätt åt till att söka."""
+    # Verktygsanropet får inte ladda arkivindex eller cross-encoder i testet.
+    monkeypatch.setattr("ask.search_hybrid", lambda *a, **k: [])
+    monkeypatch.setattr("ask.rerank", lambda q, found, n: found[:n])
+    fejk = _FakeCompletions()
+
+    class _FakeOpenAI:
+        def __init__(self, *a, **k) -> None:
+            self.chat = type("Chat", (), {"completions": fejk})()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a) -> None:
+            return None
+
+    monkeypatch.setattr("openai.AsyncOpenAI", _FakeOpenAI)
+    _run(sida, MCP)
+    sida.chat_input[0].set_value("Vem var ordförande i klubben?").run()
+    assert not sida.exception, sida.exception
+
+    svar = " ".join(m.value for m in sida.markdown if isinstance(m.value, str))
+    assert "Sammanfattning av hämtat underlag." in svar
+    assert "gränsen för antal verktygsomgångar" in svar
+    assert fejk.utan_verktyg == 1
+    # Loopen ska ha gått tills taket nåddes, inte stannat efter en eller två turer.
+    assert fejk.med_verktyg > 10

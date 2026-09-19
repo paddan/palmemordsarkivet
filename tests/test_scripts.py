@@ -336,8 +336,8 @@ def test_utredning_selects_mode_without_st_tabs() -> None:
     assert "_MODES = [MODE_RAG, MODE_MCP]" in text
     assert 'st.segmented_control(' in text
     assert 'key="main_mode"' in text
-    assert "    _render_mcp_tab()" in text
-    assert "    _render_rag_tab(rag_settings)" in text
+    assert "    _render_mcp_tab(sokval)" in text
+    assert "    _render_rag_tab(sokval)" in text
     # Toggeln och dess synk mot RAG-kontrollerna ska vara borta.
     assert "mcp_mode" not in text
     assert "_on_mcp_change" not in text
@@ -346,8 +346,44 @@ def test_utredning_selects_mode_without_st_tabs() -> None:
     assert text.index("st.segmented_control(") < text.index("with st.sidebar:")
 
 
+def test_utredning_mcp_controls_live_in_the_sidebar_only_in_mcp_mode() -> None:
+    """Utredningsläget har samma tre rattar som RAG, men inga sökfilter."""
+    project_root = Path(__file__).resolve().parents[1]
+    text = (project_root / "src" / "Utredning.py").read_text(encoding="utf-8")
+
+    settings = text.split("def _render_mcp_settings()", 1)[1].split("\ndef ", 1)[0]
+    assert 'st.expander("Sökinställningar", expanded=False)' in settings
+    for label in ("Reranker", "Hämta top-K kandidater", "Skicka top-N till AI"):
+        assert label in settings, f"{label} saknas i utredningslägets sökinställningar"
+    # MCP-verktyget har ingen facett- eller fuzzy-väg, så filtren hör inte hit.
+    for label in ("Begränsa till entiteter", "OCR-tolerant fuzzy-sökning"):
+        assert label not in settings
+
+    # Samma spegling som RAG behöver, men åt andra hållet: MCP-widgetarna
+    # avmonteras i RAG-läget, så utan stabila nycklar tappas valen vid varje byte.
+    for key in ("mcp_top_k", "mcp_top_n", "mcp_reranker_choice"):
+        assert f'key="{key}"' in settings, f"{key} saknas — valet tappas vid lägesbyte"
+
+    # Båda sektionerna ritas bara för sitt eget läge.
+    assert "_render_rag_settings() if mode == MODE_RAG else _render_mcp_settings()" in text
+    assert "if mode == MODE_MCP:" in text
+
+
+def test_utredning_mcp_settings_reach_both_agent_paths() -> None:
+    """Claude-vägen kör verktygen i en subprocess och måste få valen via miljön;
+    OpenAI-vägen kör dem in-process och skickar in dem direkt."""
+    project_root = Path(__file__).resolve().parents[1]
+    text = (project_root / "src" / "Utredning.py").read_text(encoding="utf-8")
+
+    for namn in ("ENV_RERANKER", "ENV_TOP_K", "ENV_TOP_N"):
+        assert f"mcp_server.{namn}" in text, f"{namn} sätts inte för subprocessen"
+    # Jev kräver nyckeln i subprocessen, annars faller rerankningen på saknad nyckel.
+    assert 'env["OPENROUTER_API_KEY"] = os.environ["OPENROUTER_API_KEY"]' in text
+    assert "mcp_server.search_with_settings(" in text
+
+
 def test_utredning_rag_controls_live_in_the_sidebar_only_in_rag_mode() -> None:
-    """Sökinställningarna ligger sist i sidofältet och bara i RAG-läget."""
+    """RAG-lägets sektion ligger i sidofältet och bara i RAG-läget."""
     project_root = Path(__file__).resolve().parents[1]
     text = (project_root / "src" / "Utredning.py").read_text(encoding="utf-8")
 
@@ -379,9 +415,9 @@ def test_utredning_rag_controls_live_in_the_sidebar_only_in_rag_mode() -> None:
     assert 'st.expander("Sökinställningar"' not in rag_tab
     assert 'settings["reranker_mode"]' in rag_tab
 
-    sidebar = text.split("with st.sidebar:", 1)[1].split("def _render_mcp_tab()", 1)[0]
+    sidebar = text.split("with st.sidebar:", 1)[1].split("def _render_mcp_tab(", 1)[0]
     assert "Visa kunskapsgraf" in sidebar
-    settings_call = "rag_settings = _render_rag_settings() if mode == MODE_RAG else None"
+    settings_call = "_render_rag_settings() if mode == MODE_RAG else _render_mcp_settings()"
     assert settings_call in sidebar
     # Token- och kostnadspanelen ska ligga absolut i sidofältets botten medan
     # den separata innehållscontainern scrollar och reserverar plats under sig.

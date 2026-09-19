@@ -118,6 +118,19 @@ def prices_from_profile(profile: Mapping[str, object]) -> dict:
     return prices
 
 
+def provider_cost(usage: object) -> float | None:
+    """Kostnaden som leverantören själv rapporterar, i USD — annars None.
+
+    OpenRouter skickar hela anropets kostnad i ``usage.cost``. Den är
+    auktoritativ: den innehåller även sådant som inte syns i något tokenfält,
+    framför allt webbsökningens avgift (``web_search``-verktyget). Saknar
+    leverantören fältet — OpenAI, DeepSeek och Ollama — gäller i stället
+    profilens priser.
+    """
+    value = _number(_value(usage, "cost"))
+    return value if value is not None and value > 0 else None
+
+
 def cost_usd(usage: Mapping[str, int], prices: Mapping[str, float]) -> float | None:
     """Beräkna kostnad i USD, eller None när priser saknas."""
     if not prices:

@@ -182,3 +182,19 @@ def test_format_summary_handles_empty_totals():
 
     assert "0 anrop" in line
     assert "$" not in line
+
+
+def test_provider_cost_reads_openrouters_reported_cost():
+    """OpenRouter rapporterar hela anropets kostnad i ``usage.cost`` — inklusive
+    webbsökningens avgift, som inte syns i något tokenfält."""
+    assert llm_usage.provider_cost(_Usage(cost=0.0088304)) == pytest.approx(0.0088304)
+    assert llm_usage.provider_cost({"cost": "0.001"}) == pytest.approx(0.001)
+
+
+def test_provider_cost_is_none_when_provider_does_not_report_one():
+    # OpenAI, DeepSeek och Ollama har inget kostnadsfält; då gäller profilens priser.
+    assert llm_usage.provider_cost(_Usage(prompt_tokens=10)) is None
+    assert llm_usage.provider_cost(None) is None
+    assert llm_usage.provider_cost({}) is None
+    assert llm_usage.provider_cost(_Usage(cost=0)) is None
+    assert llm_usage.provider_cost(_Usage(cost="okänt")) is None

@@ -131,6 +131,16 @@ tid den tog (gäller **BGE** och **Jev**) — för Jev även antal indatatoken o
 leverantörens rapporterade kostnad. Väljer du **Ingen** hoppas omrankningen
 över helt. Källkorten under svaret visar vilka utdrag som valdes.
 
+I utredningsläget har sektionen samma rattar plus **Tillåt webbsök**, som ger
+modellen verktyget `web_search` när den är osäker eller materialet inte ger ett
+entydigt svar — vad ett namn, en plats eller en förkortning avser — för att
+kontrollera firmor, adresser och andra samtida företeelser även när arkivet
+svarar, och för frågor om nuläget ("i dag", "numera") som ligger efter
+materialets tid. Det kräver `OPENROUTER_API_KEY`,
+kostar en sökavgift per anrop och är avstängt som standard. Modellen ska då märka
+varje uppgift från nätet som `[webbkälla: domän, titel](url)` och säga att den
+kommer från internet i stället för ur arkivet.
+
 När du hittar något intressant kan du spara svaret i fliken **Utredningspärm**.
 Sparade spår visas som kollapsade poster med kort rubrik; öppna posten för att
 se frågan, svaret, källkort med PDF/text-knappar, modellvalet och eventuella

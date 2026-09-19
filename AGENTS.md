@@ -25,7 +25,7 @@ När du gör förändringar i projektet ska du **alltid** uppdatera den använda
 - `README.md` — presentationssida (svenska): vad projektet är, länkar vidare
 - `docs/kom-igang.md` — snabbstart (svenska): krav, installation, API-nyckel, kör pipelinen, ställ första frågan
 - `docs/teknisk-referens.md` — detaljerad dokumentation (svenska): flödesdiagram, alla steg/flaggor, state-db, kunskapsgraf, LLM-config, filöversikt, tester
-- `docs/jev-reranker-pilot.md` — pilotstudie (svenska): Jev mot BGE som reranker, mått, begränsningar och rekommendation, samt uppföljningen som mätte kandidatlistans storlek och höjde `top_k` till 50
+- `docs/jev-reranker-pilot.md` — pilotstudie (svenska): Jev mot BGE som reranker, mått, begränsningar och rekommendation, samt uppföljningen som mätte kandidatlistans storlek (RAG och MCP), höjde `top_k` till 50 i båda lärna och gjorde Jev valbar även i utredningsläget
 - `AGENTS.md` — instruktioner för framtida Codex-sessioner
 
 ## Project Overview
@@ -232,22 +232,30 @@ faller tillbaka på RAG om användaren avmarkerar det. Bara den valda kroppen ri
 RAG-lägets sökinställningar (reranker, top-K/top-N, facetter, fuzzy) ritas i en
 **hopfällbar** `Sökinställningar`-sektion i sidofältet (minimerad som standard), ovanför tokenräknaren, och
 bara när RAG-läget är
-valt (`_render_rag_settings`, vars val skickas in i `_render_rag_tab`);
-standarden är `top_k` 50 och `top_n` 6 — 50 och inte 20 eftersom mätningen i
-`docs/jev-reranker-pilot.md` visade att topp 6 rymde 38 av 60 belägg med 20
-kandidater och 44 med 50, och kandidaterna inte kostar några tokens (`top_n` styr
-vad som skickas till modellen). MCP-verktyget `search_archive` har medvetet kvar sin
-egen standard `TOP_K_DEFAULT = 20` i `src/rag/mcp_server.py`: mätningen gällde
-RAG-vägen, och i MCP-läget gör modellen flera sökningar per fråga — höj den inte utan
-en egen mätning;
+valt (`_render_rag_settings`, vars val skickas in i `_render_rag_tab`).
+Utredningsläget har sin egen sektion (`_render_mcp_settings`) med samma tre
+rattar men nycklarna `mcp_*` plus webbsök-togglen, och bara den valda sektionen ritas: `mode` är
+normaliserat till RAG, så kropparna får alltid ett komplett set via `sokval`.
+Rattarna i MCP-läget gäller per verktygsanrop och **går före modellens argument**
+för reranker, `top_k` och `top_n` (`mcp_server.resolve_search_policy`) —
+reranker-valet är en driftfråga, inte en bedömningsfråga. Claude-vägen når
+subprocessen via `MCP_RERANKER`/`MCP_TOP_K`/`MCP_TOP_N` (+ `OPENROUTER_API_KEY`
+när Jev valts, annars faller Jev på saknad nyckel); OpenAI-vägen skickar in
+värdena direkt till `mcp_server.search_with_settings`;
+standarden är `top_k` 50 och `top_n` 6 i båda lärna — 50 och inte 20 eftersom
+mätningen i `docs/jev-reranker-pilot.md` visade att topp 6 rymde 38 av 60 belägg
+med 20 kandidater och 44 med 50 i RAG-läget, och 37 mot 47 när första steget är
+hybridsökning (MCP-läget). Kandidaterna kostar inga tokens (`top_n` styr vad som
+skickas till modellen);
 sidofältet har annars LLM-profil, kunskapsgrafens toggle (grafen kan byggas för
 båda lägena) och tokenräknaren, som är fäst i botten av sidofältet
 (`_SIDEBAR_BOTTOM_CSS`: `st-key-sidebar_scroll` scrollar för sig medan
 `st-key-palme_usage_slot` positioneras absolut i sidofältets botten).
-Sökvalen speglas (`_spara_rag_val`/`_aterstall_rag_val` till `<key>_sparad`):
+Sökvalen speglas (`_spara_sokval`/`_aterstall_sokval` till `<key>_sparad`):
 Streamlit raderar widgetstate för widgets som inte ritas i en körning, så
-sektionen som avmonteras i MCP-läget hade annars tyst tappat reranker-,
-top-K/N-, facett- och fuzzyvalen vid varje växling tillbaka.
+sektionen som avmonteras vid ett lägesbyte hade annars tyst tappat reranker-,
+top-K/N-, facett- och fuzzyvalen. Speglingen behövs åt båda hållen nu när båda
+lärna har en egen sektion.
 `tests/test_utredning_ui.py` kör sidan headless (AppTest) och låser det beteendet
  i stället för källtexten.
 Konversationskontinuitet uppnås genom att fånga `session_id` från `ResultMessage`
@@ -329,13 +337,107 @@ LaTeX-matte hos Streamlit.
 
 **Avklippta modellsvar (`stop_notice` i `src/rag/ask.py`)**: leverantörerna kan avsluta mitt i en mening och ändå svara HTTP 200 — DeepSeek `length`/`insufficient_system_resource`, Claude `max_tokens`/`error_max_turns`. Varje svarsväg i Utredning (`ask.openai`, `ask.openai-mcp`, `ask.claude`) ska därför gå via `ask.stop_notice` och visa `*[Svar avklippt — …]*` i svaret plus logga i `errors.log`; bara `stop`/`end_turn` (och motsvarande kompletta orsaker) får vara tysta. Lägg inte till en ny svarsväg utan slutorsakskontroll, och återinför inte den gamla ensidiga `finish_reason == "length"`-kontrollen.
 
-**Experimentell Jev-reranker (`rag/ask.py` + `Utredning.py`)**: Jev är endast
-valbar i RAG-läget; BGE förblir standard och MCP/Jämförelse använder befintlig
-BGE-väg. Jev använder den fasta Noul-frågan från piloten, högst fyra parallella
-anrop och `OPENROUTER_API_KEY`. UI:t visar API:ets rapporterade usage per sökning
-men lagrar den inte i `llm_usage`. Vid nätverks-, HTTP- eller valideringsfel ska
-sökningen avbrytas och loggas — fall aldrig tyst tillbaka till BGE, eftersom det
-gör jämförelsen ogiltig. Logga aldrig nyckeln eller hela dokumenttexter.
+**MCP-verktygen körs i subprocess för Claude men in-process för OpenAI**: Claude
+Agent SDK har en inbyggd MCP-klient, så `mcp_servers={"arkiv": {"command": …,
+"args": …, "env": …}}` (`McpStdioServerConfig`) låter SDK:n starta
+`src/rag/mcp_server.py` och tala MCP med den över stdio — vår kod startar
+ingenting själv. Samma konfiguration används av `src/rag/ask.py`, och därför är
+servern körbar fristående från Claude Desktop och Claude Code. OpenAI-kompatibla
+API:er har ingen MCP-klient (Chat Completions bär bara funktionsscheman, och den
+som ringer måste köra funktionen), så `Utredning.OPENAI_TOOLS` + `_run_tool`
+definierar och kör samma två verktyg i sidans process. Priset för uppdelningen
+ska inte "städas bort": sökvalen måste korsa processgränsen via `MCP_RERANKER`/
+`MCP_TOP_K`/`MCP_TOP_N` (+ `OPENROUTER_API_KEY` när Jev valts, annars faller Jev
+på saknad nyckel), subprocessen laddar sina egna modellkopior, och Jevs mätvärden
+går till stderr i stället för till statusraden. Lägg inte till ett andra
+startläge (`McpSdkServerConfig`) för sidans räkning — `mcp_server.py` måste ändå
+finnas som fristående server, och två startvägar ger två kontrakt att hålla i synk.
+
+**Experimentell Jev-reranker (`rag/ask.py` + `Utredning.py`)**: Jev är valbar i
+RAG-läget och i utredningsläget (MCP); BGE förblir standard i båda, och
+Jämförelse-sidan använder den befintliga BGE-vägen. Jev använder den fasta
+Noul-frågan från piloten, högst fyra parallella anrop och `OPENROUTER_API_KEY`.
+I RAG-läget visar UI:t API:ets rapporterade usage per sökning men lagrar den inte
+i `llm_usage`; i MCP-läget går samma mätvärden till subprocessens stderr i
+stället, eftersom verktygssvaret är modellens kontext. Vid nätverks-, HTTP- eller
+valideringsfel ska sökningen avbrytas och loggas — fall aldrig tyst tillbaka till
+BGE, eftersom det gör jämförelsen ogiltig. Logga aldrig nyckeln eller hela
+dokumenttexter.
+
+**Webbsök utanför arkivet (`web_search`)**: utredningsläget kan slå på **Tillåt
+webbsök** i sina sökinställningar (avstängt som standard), och modellen får då ett
+tredje verktyg. Sökningen görs av OpenRouters `web`-plugin med `engine:"exa"` och
+`max_tokens:1`; modellens svar används aldrig, bara `url_citation`-annoteringarna
+(url, titel, utdrag) — verktyget ska ge källutdrag, inte en mellanhands
+sammanfattning. Lägg inte pluggen på hela MCP-loopen: den söker på varje anrop
+oavsett behov (~$0,007 per tur i upp till tio turer) och fyller kontexten med
+orelaterade webbutdrag i ett verktyg som ska vara källbundet. Verktyget finns i
+`mcp_server.py` (Claude-vägen via `allowed_tools`, OpenAI-vägen via
+`Utredning.OPENAI_TOOLS` — samma verktygsmängd i båda, bevakad av
+`tests/test_mcp_server.py`) och kräver `OPENROUTER_API_KEY` oberoende av vald
+LLM-backend. Nätverks-, HTTP- och tolkningsfel redovisas som text till modellen
+och loggas — aldrig en tyst sökning utan träffar.
+
+Källor utanför arkivet får aldrig gå att läsa som arkivbelägg: prompten och
+skrivhjälpen kräver att varje sådan uppgift märks `[webbkälla: domän,
+titel](url)` med adressen synlig och aldrig som `[Nr X, sida Y]`, att det står att
+uppgiften kommer från internet, och att arkivet förblir förstahandskällan när
+uppgifterna motsäger varandra. Sökavgiften syns inte i något tokenfält, så
+kostnaden bokförs via `llm_usage.provider_cost` (OpenRouters `usage.cost`), som
+går före profilens priser; i Claude-vägens subprocess når den bara stderr.
+
+**När webbsöket ska ske räckte inte prompten.** En svagare modell läste en
+`[MASKAD]`-post som "uppgiften finns inte" och fyllde i betydelsen av en
+förkortning ur egen minneskunskap (CHP = "Centrala högskoleförbundet" om en
+vapenannons från 1993) — alltså precis den gissning verktyget finns för att
+undvika. Signalen ligger därför även i verktygssvaret
+(`mcp_server._mask_hint`, som lägger en rad i `search_archive`/`get_page` när
+texten innehåller `[MASKAD]`) och i båda verktygsbeskrivningarna; prompten pekar
+ut samma observerbara signaler: `[MASKAD]`, en förkortning eller ett begrepp som
+inte går att tolka, ett tvetydigt eller OCR-skadat namn, och samtida företeelser.
+Betydelsen ska komma ur materialet, ur ett uppslag eller inte alls. Innehållet
+bakom en maskering får varken gissas eller rekonstrueras från nätet. Saknas
+`OPENROUTER_API_KEY` när valet är på varnar sidofältet och anropet loggas —
+annars går ett dött webbsök inte att skilja från ett verktyg modellen aldrig
+valde.
+
+**Verifieringsläget är ett medvetet val, inte en bieffekt.** Modellen söker även
+när arkivet svarar, om svaret vilar på något som går att belägga utanför arkivet:
+ett företag, en firma, en adress, ett vapenmärke, en tidningsannons eller ett
+osäkert förhör ("tror", "ohörbart"). Skälet: frågan "var låg vapenaffären?"
+besvarades av arkivet (Sportskyttematerial på Arsenalsgatan), men firmanamnet,
+gatunumret och den samtida adressen går att kontrollera utifrån, och en kontroll
+som aldrig sker är ingen kontroll. Priset är en sökavgift per kontroll och att
+webbmaterial hamnar i svaret — därför märks det alltid separat, arkivhänvisningen
+står kvar, och en webbkopia av ett arkivdokument (t.ex. wpu.nu) räknas inte som
+självständigt arkivbelägg. En uttrycklig begäran i frågan ("kontrollera på
+nätet") följs direkt.
+
+**Regeln är sedan utvidgad två gånger på ägarens begäran** (listor av objekttyper
+läckte — varje klass som inte stod i listan passerade tyst, t.ex. en förkortning i
+en liggarepost och en ordförandes mandattid): (1) **osäkerhet är alltid ett skäl
+att söka** — tvekar modellen, eller ger materialet inget entydigt svar, söker den
+innan den svarar, och den ska söka innan den avslutar med att något "inte
+framgår"; (2) **nulägesfrågor söks alltid** — vad som gäller i dag eller numera
+ligger efter det arkivet kan svara på i tid. Nulägesuppgifter ska dateras. Ett
+medvetet beslut: uppgifter som finns **offentligt** på nätet får tas med även om
+de hör till en persons privatliv — det som styr är källan och datumet, inte en
+egen gallringsregel. Priset är fler sökningar: en körning gjorde 16 webbsökningar
+(~$0,12) efter en mandattid som inte finns på nätet, så kryssrutan är den enda
+kostnadsbromsen. Av samma skäl fick tursgränsen ett tvingat svar:
+`MAX_MCP_TURNS` (15) är taket för verktygsomgångar, och när taket nås görs en
+sista förfrågan med `tool_choice="none"` så det hämtade underlaget alltid
+sammanfattas i stället för att bara en avklippt-notis visas. Ta inte bort den
+vägen.
+
+**wpu.nu utesluts som källa** (`WEB_SEARCH_EXCLUDE_DOMAINS`): sajten är en
+spegling av arkivet självt, så träffar därifrån är ingen självständig källa och
+tränger ut riktiga nätkällor. Domen skickas som `exclude_domains` till
+OpenRouter och filtreras dessutom bort lokalt i `mcp_server.web_hits`, eftersom
+filtret är motorns ansvar (OpenAI-motorn ignorerar `exclude_domains`). En
+wpu.nu-adress kan fortfarande stå inne i en annan sajts citat eller
+foruminlägg — det är sajtens egen text — men wpu.nu är aldrig den märkta
+källan.
 
 **Kunskapsgraf byggs lazy (Utredning.py)**: `_render_answer_graph` tar svaret, inte färdiga centers. Den dyra entitetsextraktionen (`_compute_answer_centers` → vald backend i `generated/llm_config.json`) och Neo4j-frågorna körs **först när användaren öppnar graf-toggeln** — inte automatiskt efter varje svar. DeepSeek/OpenAI använder vald modell; Claude använder Haiku för den lilla extraktionsuppgiften. Resultatet cachas per svar i session state och returneras så utredningspärmen kan spara det.
 
@@ -422,3 +524,8 @@ LLM:en returnerar noll kandidater, så omkörningar inte debiterar tomma sidor i
 5. **OAuth vs API**: `CLAUDE_CODE_OAUTH_TOKEN` räknas mot Pro/Max-prenumerationen; `ANTHROPIC_API_KEY` drar API-credits.
 6. **SQLite WAL-filer**: `generated/db/state.db-wal` och `-shm` är normala WAL-filer och syncas vid checkpoint. Säkerhetskopiera alla tre samtidigt.
 7. **Kartor kräver nät för bakgrundsrutor**: folium-markörer och spår renderas även offline, men OSM-bakgrunden kräver internet.
+8. **Ändringar i importerade moduler kräver omstart av Streamlit**: en rerun kör
+   om `src/Utredning.py` från disk, men `prompts.py`, `mcp_server.py` och övriga
+   importerade moduler ligger kvar i `sys.modules` från första importen — en
+   pågående server kör alltså gamla promptar och gamla verktyg tills processen
+   startas om. Starta om `./web.sh` innan du felsöker uteblivet webbsök.

@@ -83,25 +83,45 @@ vektorplats 21–50 är värt att hämta hem.
 | BGE, 50 kandidater | 44 (73,3 %) | ~41 |
 | Jev, 20 kandidater | 46 (76,7 %) | 46 |
 | Jev, 50 kandidater | 55 (91,7 %) | ~51 |
+| Hybrid + BGE, 20 kandidater (MCP-läget) | 37 (61,7 %) | 37 |
+| Hybrid + BGE, 50 kandidater (MCP-läget) | 47 (78,3 %) | 47 |
+
+**Utredningsläget (MCP) mättes separat**, eftersom dess första steg är
+hybridsökning (`search_hybrid` = vektor + BM25 förenade med RRF) och inte ren
+vektor. Där gav djupet 37 → 47 belägg: bättre på fyra frågor, sämre på ingen.
+Skälet är att RRF tar **unionen** av två topp-k-listor, så djupet avgör hur
+mycket av BM25:s svans som alls existerar för rerankern att rangordna — mätt går
+det BM25-only-materialet från 78 till 177 passager över de tio frågorna. En
+reranker kan bara lyfta fram det som finns i poolen, så argumentet håller
+oavsett vilken reranker som väljs; det är storleken på vinsten som skiljer.
+Utan reranker är djupet däremot verkningslöst: i ren vektor ändrar det inte
+ordningen alls, och i hybrid ändras topp 6 på fem av tio frågor utan att
+beläggen rör sig (21 vid båda djupen).
+
+Av de 28 platser som byter innehåll när MCP-poolen blir djupare var det som
+lämnade topp 6 belägg i 15 fall och det som kom in belägg i 25 fall.
 
 Jev med 50 kandidater var bättre än Jev med 20 på fem frågor och sämre på ingen;
 BGE med 50 var bättre på fem och sämre på en. Mårten Palme-frågan, där varken BGE
 eller Jev hade ett enda belägg bland de 20, fick 3–4 belägg med 50 kandidater.
 Det var alltså listan och inte rerankern som saknade material.
 
-De 23 respektive 24 passager som blev nya i topp 6 bedömdes blint av två nya
-bedömare. Båda kalibrerades mot pilotens etiketter på samma 23 stratifierade
-passager: exakt samstämmighet 78,3 % respektive 73,9 %, linjärt viktad kappa 0,946
-respektive 0,935, medelförskjutning +0,04 respektive 0,00, och ingen av dem
-nedgraderade något av pilotens nio belägg. I båda fallen kom 18 % av deras belägg
-från passager piloten kallat 0 eller 1, vilket är korrigeringsfaktorn bakom kolumnen
-ovan. Deras höga beläggandel på det nya materialet förklaras av urvalet: de nya
-passagerna är de en reranker valt till en topp 6, inte ett slumpurval ur alla 20.
+De 23 respektive 24 passager som blev nya i topp 6 bedömdes blint av nya
+bedömare, och var och en kalibrerades mot pilotens etiketter på samma 23
+stratifierade passager. Alla tre — inklusive den som bedömde MCP-körningens 28
+nya passager — fick samma profil: linjärt viktad kappa 0,935–0,946, exakt
+samstämmighet 73,9–78,3 %, medelförskjutning +0,04 till 0,00, samma två av 14
+gränsfall lyfta till belägg, och **ingen nedgradering av pilotens nio belägg**.
+I alla tre fallen kom 18 % av deras belägg från passager piloten kallat 0 eller 1,
+vilket är korrigeringsfaktorn bakom kolumnen ovan. Deras höga beläggandel på det
+nya materialet förklaras av urvalet: de nya passagerna är de en reranker valt till
+en topp 6, inte ett slumpurval ur alla 20.
 
 Två följder:
 
-- **`top_k` höjt till 50** i `src/Utredning.py` (`rag_top_k`). Kandidaterna kostar
-  inga tokens — `top_n` styr fortfarande vad som skickas till modellen. Lokal BGE
+- **`top_k` höjt till 50** i båda lärna: `rag_top_k` i `src/Utredning.py` och
+  `TOP_K_DEFAULT` i `src/rag/mcp_server.py`. Kandidaterna kostar inga tokens —
+  `top_n` styr vad som skickas till modellen. Lokal BGE
   rangordnade 50 kandidater på 1,6–2,1 s per fråga i den här körningen, på en maskin
   där cross-encodern kör på `mps:0`; samma 50 par tog 0,65 s när de kördes utan en
   samtidig vektorsökning, eftersom encodern och embedding-modellen delar GPU. Siffran
@@ -109,10 +129,12 @@ Två följder:
   med antalet par. Jevs merkostnad är däremot oberoende av maskin: 50 kandidater tog
   ~5,0 s per fråga mot 2,0 s för 20, eftersom anropen är nätverksbundna (fyra
   samtidiga, 0,0014 USD per fråga).
-  MCP-verktyget `search_archive` har kvar sin egen standard på 20
-  (`TOP_K_DEFAULT` i `src/rag/mcp_server.py`). Mätningen gällde RAG-vägen, och i
-  MCP-läget gör modellen flera sökningar per fråga, så den vägen ska mätas separat
-  innan den ändras.
+- **MCP-verktyget fick samma tre rattar som RAG-läget** (reranker, top-K, top-N,
+  i utredningslägets sökinställningar) och **Jev blev valbar även där**. Rattarna
+  gäller per verktygsanrop och går före modellens argument; Claude-vägen når
+  subprocessen via `MCP_RERANKER`/`MCP_TOP_K`/`MCP_TOP_N`. Jevs mätvärden går till
+  stderr i stället för till verktygssvaret, eftersom det svaret är modellens
+  kontext, och de bokförs inte i tokenräknaren.
 - **`top_n` lämnad på 6.** Pilotens etiketter visar hur bra materialet är per
   rangplats: för Jev är plats 1–6 belägg i 76,7 % av fallen, plats 7–10 i 50,0 %,
   plats 11–15 i 36,0 % och plats 16–20 i 12,0 %. Tio vore alltså det enda försvarbara
@@ -135,7 +157,9 @@ alltså inte med i repot). Detta dokument är kopian som versionshanteras.
 - `bge.json`, `jev.json`: fulla rangordningar, tider, Jev-modellversion och leverantörens kostnadsuppgifter.
 - `summary.json`: sammanställda mått per fråga och totalt.
 - `prepare.py`, `run_jev.py`, `evaluate.py`: tillfälliga experimentskript, inte produktionsentrypoints. `prepare.py` återskapar och skriver över sökunderlaget; `run_jev.py` gör nya externa anrop och kostar krediter. `evaluate.py` räknar om resultaten lokalt utan API-anrop.
+- `hybrid50.py`, `hybrid_rerank.py`, `hybrid-rerank-nytt-att-bedoma.json`, `hybrid_rerank.json`, `labels-hybrid-rerank-nytt.json`: MCP-lägets mätning (hybridsökning, med och utan reranker) och dess bedömningar. `hybrid50.py` mäter utan reranker, `hybrid_rerank.py` med.
+- `labels-kalibrering.json`, `labels-kalibrering-c.json`, `labels-kalibrering-d.json`: de tre nya bedömarnas kalibrering mot piloten på samma 23 passager.
 - `recall.py`, `topk50.py`, `compare50.py`, `compare_all.py`, `jev50.py`: uppföljningens skript. `recall.py` och `compare_all.py` räknar bara om befintliga etiketter lokalt; `topk50.py` gör en ny lokal sökning och rangordning (inget API); `jev50.py` gör 500 externa anrop och kostade 0,0141 USD.
-- `topk50.json`, `jev50.json`, `jev50-rapport.json`, `topk50-nytt-att-bedoma.json`, `jev50-nytt-att-bedoma.json`, `kalibrering-att-bedoma.json`, `labels-topk50-nytt.json`, `labels-jev50-nytt.json`, `labels-kalibrering.json`, `labels-kalibrering-c.json`: uppföljningens underlag och bedömningar.
+- `topk50.json`, `jev50.json`, `jev50-rapport.json`: uppföljningens fulla rangordningar, tider och leverantörens kostnadsuppgifter.
 
 SHA-256 för fryst candidates.json: `a3875b1df605657ef021bf20303d0bbe3414f9643476572a298aa5144a3f09fa`.

@@ -330,7 +330,7 @@ flowchart TD
     end
     subgraph MCP["MCP: LLM:en söker i flera steg"]
         M1["LLM:en planerar nästa steg"] --> M2{"Behövs mer underlag?"}
-        M2 -->|Ja| M3["search_archive: sök i arkivet<br/>get_page: läs en hel sida"]
+        M2 -->|Ja| M3["search_archive: sök i arkivet<br/>get_page: läs en hel sida<br/>web_search: sök utanför arkivet"]
         M3 --> M4["Källtext tillbaka till LLM:en"]
         M4 --> M1
     end
@@ -351,9 +351,11 @@ Klassisk *retrieval-augmented generation*: en fast pipeline i tre steg.
 2. **Hybrid + reranking (valfritt)** — `--hybrid` kombinerar vektor och BM25 (FTS)
    med *Reciprocal Rank Fusion* (k=60). Sedan omrankar
    `BAAI/bge-reranker-v2-m3` resultaten och plockar ut topp-6. BGE körs lokalt och
-   är standard i RAG-lägets **Sökinställningar → Reranker** (hopfällbar sektion,
-   minimerad som standard, i sidofältet och bara synlig i RAG-läget), där **Ingen** också
-   finns. MCP-läget och Jämförelse-sidan använder fortfarande BGE.
+   är standard i **Sökinställningar → Reranker** (hopfällbar sektion, minimerad
+   som standard, i sidofältet och bara synlig i RAG-läget), där **Ingen** också
+   finns. Utredningsläget (MCP) har samma meny för sina egna sökningar, se
+   [Sökinställningar i utredningsläget](#sökinställningar-i-utredningsläget).
+   Jämförelse-sidan använder BGE.
    Samma meny erbjuder i stället **Jev – OpenRouter, experimentell**: samma väg
    som pilotstudien [jev-reranker-pilot.md](jev-reranker-pilot.md) mätte —
    modellalias `typesafe/jev-1.13` mot `/api/alpha/decisions`, ett anrop per
@@ -365,7 +367,8 @@ Klassisk *retrieval-augmented generation*: en fast pipeline i tre steg.
    sökningen och bokförs inte i token- och kostnadsräknaren. Jev kräver
    `OPENROUTER_API_KEY` och gör debiterade anrop; misslyckas anropet avbryts
    sökningen och felet loggas som `ask.rerank_jev` i stället för att tyst falla
-   tillbaka på BGE.
+   tillbaka på BGE. I utredningsläget går mätvärdena till processens stderr i
+   stället för till en statusrad, eftersom verktygssvaret är modellens kontext.
 3. **Claude svarar** — de 6 utdragen skickas som kontext till Claude Opus 4.8
    (adaptive thinking). Svaret innehåller källhänvisningar `[Nr X, sida Y]`.
 
@@ -382,6 +385,7 @@ och låter Claude anropa dessa verktyg hur många gånger det vill:
 |---|---|
 | `search_archive` | Vektor- eller hybridsökning med valfri reranking; returnerar utdrag med källinfo |
 | `get_page` | Läser råtexten från en specifik sida för att få mer kontext kring en träff |
+| `web_search` | Söker utanför arkivet hos OpenRouter och returnerar webbsidor med titel, adress och utdrag — bara när operatören slagit på **Tillåt webbsök** |
 
 Claude väljer själv söktermer, kan söka flera gånger med olika fraser, och kan
 följa upp intressanta träffar med `get_page`. Det ger markant bättre täckning på
@@ -490,22 +494,143 @@ men att nämna andra verktyg i prompten gör dem inte tillgängliga.
 Standardpromptarna kräver källhänvisningar nära sakuppgifterna, skiljer
 vittnesuppgifter från tolkningar och hanterar motsägelser, OCR-fel och maskeringar.
 RAG-svaret begränsas till de bifogade utdragen. MCP-prompten beskriver ett
-fokuserat sökflöde och dessa två verktyg:
+fokuserat sökflöde och dessa verktyg:
 
 | Verktyg | Parametrar och användning |
 | --- | --- |
-| `search_archive` | `query` på svenska; `top_k=20` (5–50), `top_n=6` (1–15), `hybrid=true`, `rerank=true`. Returnerar ett urval av textutdrag med dokument-ID, sida, titel och exakt `source`-filnamn. |
+| `search_archive` | `query` på svenska; `top_k=50` (5–50), `top_n=6` (1–15), `hybrid=true`, `rerank=true`. Returnerar ett urval av textutdrag med dokument-ID, sida, titel och exakt `source`-filnamn. När verktyget körs från Utredning-sidan går operatörens sökinställningar före parametrarna (se [Sökinställningar i utredningsläget](#sökinställningar-i-utredningsläget)). |
 | `get_page` | `source`: exakt textfilnamn eller filstam, med valfri `.txt`; `page`: sidnummer från 1. Läser sidtext, inte PDF-bilden. |
+| `web_search` | `query` på svenska; `max_results=5` (3–10). Söker på nätet och returnerar webbsidor med titel, adress och ett utdrag på högst 700 tecken. Finns bara när **Tillåt webbsök** är påslagen i sökinställningarna; annars är verktyget inte med i listan modellen ser. |
 
-Claude använder namnen `mcp__arkiv__search_archive` och
-`mcp__arkiv__get_page`; OpenAI-kompatibla modeller använder kortnamnen.
+Claude använder namnen `mcp__arkiv__search_archive`,
+`mcp__arkiv__get_page` och `mcp__arkiv__web_search`; OpenAI-kompatibla modeller
+använder kortnamnen.
 Varje MCP-sökträff innehåller en `source:`-rad med det exakta filnamnet som
 JSON-sträng. Modellen använder strängens värde som `source` till `get_page`,
 även när titeln är avkortad. Filnamnet finns redan i indexet, så ändringen
 kräver ingen omindexering. RAG-utdragens format är oförändrat. Verktygen kan inte
-söka på webben, läsa kunskapsgrafen eller ändra arkivet.
+läsa kunskapsgrafen eller ändra arkivet.
 Uppdaterade standardtexter ersätter inte egna sparade overrides; använd
 **Återställ till standard** för att börja använda dem där en override finns.
+
+#### Sökinställningar i utredningsläget
+
+MCP-läget har samma hopfällbara **Sökinställningar** i sidofältet som RAG-läget,
+men rattarna gäller **per verktygsanrop**: modellen söker själv och gör ofta flera
+sökningar i samma fråga.
+
+| Ratt | Intervall | Standard | Betydelse |
+| --- | --- | --- | --- |
+| Reranker | BGE / Jev / Ingen | BGE | Hur kandidaterna sorteras om i varje sökning. Jev kräver `OPENROUTER_API_KEY`, debiterar per anrop och tar ~5 s per sökning vid 50 kandidater. |
+| Hämta top-K kandidater | 5–50 | 50 | Kandidater per sökning som rerankern får välja bland. Taket 50 är verktygets eget (`search_archive` annonserar 5–50). |
+| Skicka top-N till AI | 1–15 | 6 | Utdrag per sökning som går till modellen. Modellens flera sökningar lägger sina utdrag till samma kontext — håll N lågt. |
+| Tillåt webbsök | på/av | av | Ger modellen `web_search`, som söker utanför arkivet. Se [Webbsökning i utredningsläget](#webbsökning-i-utredningsläget). |
+
+**Operatörens val går före modellens argument** för reranker, `top_k` och
+`top_n`: reranker-valet är en driftfråga (kostnad, nätverk, API-nyckel), inte en
+bedömningsfråga, och modellen kan inte veta att Jev debiterar kredit. Modellen
+behåller sin `query` och `hybrid`. Valet når verktyget på två vägar — Claude-vägen
+kör `mcp_server.py` som subprocess och får värdena via miljövariablerna
+`MCP_RERANKER`, `MCP_TOP_K` och `MCP_TOP_N` (plus `OPENROUTER_API_KEY` när Jev är
+valt), medan OpenAI-vägen kör verktyget in-process och skickar in dem direkt.
+
+Startas `mcp_server.py` utan de variablerna — från Claude Desktop eller
+`scripts/ask.py --mcp` — finns ingen operatör, och då gäller modellens argument
+och verktygets standardvärden. Ett okänt värde i `MCP_RERANKER` avbryter med ett
+tydligt fel i stället för att tyst falla tillbaka på BGE.
+
+Jevs mätvärden (modellversion, indatatoken, kostnad) skrivs till processens
+stderr i stället för att läggas i verktygssvaret, som är modellens kontext. De
+bokförs inte heller i token- och kostnadsräknaren, så räknaren är en undre gräns
+och MCP-anrop med Jev syns bara i jobbloggen/stderr. Samma sak gäller
+webbsökningens mätvärden (`web_search: N träffar, kostnad, query`): i OpenAI-vägen
+bokförs sökavgiften i räknaren, i Claude-vägen når den bara stderr.
+
+#### Webbsökning i utredningsläget
+
+Arkivet räcker inte alltid: ett namn, en plats, en förkortning eller en samtida
+omständighet kan behöva slås upp för att arkivtexten ska gå att tyda. **Tillåt
+webbsök** (avstängt som standard) ger modellen ett tredje verktyg, `web_search`,
+som söker på nätet via OpenRouters `web`-plugin och returnerar **källutdragen**
+— url, titel och sidtext — i stället för en mellanhands textsammanfattning.
+Modellen sammanfattar alltså inte sökresultatet åt sig själv; den får
+råmaterialet och måste citera det.
+
+- **När sökningen ska ske: så fort modellen är osäker.** Regeln är blankett, inte
+  en lista av objekttyper — den senare varianten visade sig läcka: varje klass som
+  inte stod i listan passerade tyst (en förkortning i en liggarepost, en
+  ordförandes mandattid). Prompten säger nu att osäkerhet alltid är ett skäl att
+  söka: tvekar modellen, eller ger materialet inget entydigt svar, söker den
+  innan den svarar — och den ska söka innan den avslutar med att något "inte
+  framgår". Det omfattar maskeringar, oläsliga namn, okända förkortningar,
+  firmor, adresser, vapenmärken, tidningsannonser och mandattider. Den ärliga
+  gränsen står kvar: en motsägelse mellan två vittnesmål kan nätet inte avgöra —
+  modellen ska säga det, men söka först.
+  *Maskeringen får fortfarande inte fyllas i.* Det som får kontrolleras på nätet
+  är rollen eller företeelsen runt maskeringen (vilka som varit ordförande i
+  klubben, var firman låg, vad förkortningen står för), och svaret får aldrig
+  påstå att webbens namn *är* det maskerade namnet — bara att nätet uppger ett
+  namn för den rollen och att arkivet har maskerat namnet där.
+  Att bara beskriva policyn i
+  systemprompten räckte inte: en svagare modell läste en `[MASKAD]`-post som
+  "uppgiften finns inte" och fyllde sedan i betydelsen av förkortningen ur egen
+  minneskunskap (`CHP` = "Centrala högskoleförbundet" om en vapenannons från
+  1993). `mcp_server._mask_hint` lägger därför en rad i
+  `search_archive`/`get_page`-svaret när texten innehåller `[MASKAD]`, och
+  prompten förbjuder uttryckligen att en betydelse gissas: den ska komma ur
+  materialet, ur ett uppslag eller inte alls.
+  Priset för blanketten är fler sökningar (~$0,007 per kontroll) och mer
+  webbmaterial i svaren — därför märks det alltid för sig, och operatörens
+  kryssruta är den enda kostnadsbromsen. Ber användaren uttryckligen om en
+  nätkontroll görs den direkt, utan motfråga.
+- **Källor utanför arkivet märks alltid.** Prompten kräver att varje uppgift från
+  nätet skrivs som `[webbkälla: domän, titel](url)` med adressen synlig, att det
+  uttryckligen står att uppgiften kommer från internet och inte ur arkivet, att
+  arkivformatet `[Nr X, sida Y]` aldrig används för den, samt att svaret avslutas
+  med webbkällorna i en egen kort lista. Arkivet är förstahandskällan; motsäger
+  webb och arkiv varandra ska båda redovisas. Innehållet bakom en maskering får
+  varken gissas eller rekonstrueras från nätet — det som får slås upp är
+  sammanhanget runt maskeringen.
+- **Nuläget och offentliga personuppgifter.** Frågor om vad som gäller i dag
+  eller numera — vad en person gör, om en klubb eller firma finns kvar, hur en
+  adress ser ut — ligger efter det arkivet kan svara på i tid och söks alltid på
+  nätet. Nulägesuppgifter ska dateras ("enligt en uppgift från <år>") och
+  webbkällans datum skiljas från arkivmaterialets. Ägarens beslut: uppgifter som
+  finns offentligt på nätet får tas med även om de hör till personens privatliv;
+  det som styr är källan och datumet, inte en egen gallringsregel. Arkivets
+  uppgifter om en person upprepas inte som nuläge.
+- **Tursgränsen har ett tvingat svar.** Utredningsläget ger modellen högst
+  `MAX_MCP_TURNS` (15) verktygsomgångar. Med webbsök påslaget gick tio turer lätt
+  åt till att söka, och då visades tidigare bara "Svar avklippt — modellen nådde
+  gränsen för antal verktygsanrop" i stället för ett svar. Nu görs en sista
+  förfrågan med `tool_choice="none"`, så det redan hämtade underlaget alltid
+  sammanfattas, följt av en notis om att fler sökningar inte gjordes. Ta inte
+  bort den vägen: den är skillnaden mellan ett ofullständigt svar och inget svar.
+  Kostnaden är värd att känna till: en körning med gpt-5.6-luna gjorde 16
+  webbsökningar (~$0,12 i sökavgifter) efter en ordförandes mandattid som inte
+  finns på nätet.
+- **wpu.nu utesluts som källa.** wpu.nu är en spegling av arkivet självt, så
+  träffar därifrån är ingen självständig källa och tränger ut riktiga nätkällor.
+  Domen skickas som `exclude_domains` ("wpu.nu" och "*.wpu.nu") till
+  OpenRouter — och filtreras dessutom bort lokalt i `mcp_server.web_hits`, eftersom
+  filtret är motorns ansvar och OpenAI-motorn ignorerar det. En wpu.nu-adress kan
+  fortfarande stå inne i en *annan* sajts citat eller foruminlägg; det är sajtens
+  egen text och rörs inte, men wpu.nu är aldrig den märkta källan.
+- **Nyckel och kostnad.** Verktyget kräver `OPENROUTER_API_KEY` oberoende av
+  vilken LLM-backend som är vald, och kostar en sökavgift hos OpenRouter per
+  anrop (~$0,007 för Exa auto, upp till 10 träffar; `max_results` 3–10). Avgiften
+  syns inte i något tokenfält, utan bokförs via `usage.cost` — se
+  [Token och kostnad per profil](#token-och-kostnad-per-profil). Saknas nyckeln
+  när valet är på visas en varning i sidofältet och anropet loggas i
+  `errors.log`; annars går ett dött webbsök inte att skilja från ett verktyg
+  modellen aldrig valde.
+- **Avstängt är inte samma sak som tomt.** Saknas nyckeln, eller svarar
+  OpenRouter med ett fel, redovisas det som text till modellen och loggas —
+  aldrig som en tyst sökning utan träffar.
+- **Claude-vägen** får verktyget via `allowed_tools` (`mcp__arkiv__web_search`);
+  OpenAI-vägen filtrerar `Utredning.OPENAI_TOOLS`, så verktyget syns inte alls
+  för modellen när valet är av. Är valet av och modellen ändå begär verktyget
+  (t.ex. efter injicerad text i ett dokument) avvisas anropet.
 
 #### Utredningspärm och bokmärken
 
@@ -576,7 +701,8 @@ behövs).
 
 Sidan `pages/6_Jämförelse.py` är ett korsförhörsläge: ange ett ämne, hämta
 flera källor med samma sök+rerank som Utredning (den lokala BGE-rerankern; det
-experimentella Jev-läget finns bara i RAG-läget), och låt språkmodellen ställa
+experimentella Jev-läget är valbart i RAG- och MCP-läget, inte här), och låt
+språkmodellen ställa
 dem mot varandra. System-prompten (i `src/compare.py`) ber modellen lyfta fram
 **motstridiga** och **överensstämmande** uppgifter med källhänvisningar, i
 stället för att syntetisera bort konflikterna. Backend följer det val som
@@ -889,8 +1015,10 @@ räknaren med profilen; **Ta bort** raderar den, så ett återanvänt namn inte 
 siffror.
 
 Kostnaden hämtas i första hand från leverantören: Claude Agent SDK rapporterar
-`total_cost_usd`. OpenAI-kompatibla backends rapporterar bara token, och då
-räknas kostnaden ur profilens priser. Saknas priserna visas `kostnad okänd` i
+`total_cost_usd`, och OpenRouter rapporterar hela anropets kostnad i
+`usage.cost` — den siffran går före profilens priser och innehåller även
+sökavgiften för `web_search`, som inte syns i något tokenfält. OpenAI, DeepSeek
+och Ollama rapporterar bara token, och då räknas kostnaden ur profilens priser. Saknas priserna visas `kostnad okänd` i
 stället för en gissning, och summan märks som ofullständig när något anrop
 saknade pris. Priserna slås upp när anropet görs — ändrar du dem i efterhand
 ändras inte redan bokförd kostnad.
@@ -1157,8 +1285,8 @@ entitetsextraktion (extract_entities), graf-laddning (load_neo4j) och
 nyckelentiteter ur svar (answer_entities) samt de sparade promptändringarna och
 Admin-formuläret för dem (prompts, admin_ui). `tests/test_utredning_ui.py` kör
 Utredning-sidan headless med Streamlits AppTest och kontrollerar lägesvalet
-(sökinställningarna bara i RAG-läget, att valen överlever ett varv i MCP-läget
-och att tokenpanelen finns i båda lägena) med fejkad vektor-db, modell och
+(att varje läge visar sin egen sökinställningssektion, att valen överlever ett
+varv i det andra läget och att tokenpanelen finns i båda lägena) med fejkad vektor-db, modell och
 state-db.
 Fixturen som genererar en mini-PDF med pymupdf skipas gracefully om pymupdf inte är installerat.
 

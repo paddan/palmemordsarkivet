@@ -519,22 +519,34 @@ sidofältet.
 """,
     "mcp": """**MCP: sök och läs med verktyg**
 
-Du kan hänvisa till följande två verktyg i instruktionerna. Du behöver inte
+Du kan hänvisa till följande tre verktyg i instruktionerna. Du behöver inte
 skriva programkod eller ange alla parametrar; modellen får verktygens schema.
 
 - `search_archive`: söker textutdrag i arkivet. `query` är sökfrågan på svenska.
-  `top_k=20` anger antal kandidater (5–50), `top_n=6` antal träffar (1–15).
+  `top_k=50` anger antal kandidater (5–50), `top_n=6` antal träffar (1–15).
   `hybrid=true` kombinerar vektor- och ordsökning när det stöds;
-  `rerank=true` omrankar träffarna för relevans. Börja med standardvärdena.
+  `rerank=true` omrankar träffarna för relevans. Sökdjupet, rerankern och antalet
+  träffar styrs av operatören i gränssnittet, så modellen behöver inte ange dem.
 - `get_page`: läser texten på en sida. `source` ska vara det exakta filnamnet
   från sökträffens `source`-rad, och `page` sidnumret räknat från 1. Raden visar
   filnamnet som en JSON-sträng; verktyget ska få strängens värde. Be modellen
   använda detta filnamn, inte gissa utifrån dokumentets titel.
+- `web_search`: söker på nätet utanför arkivet och ger webbsidor med titel,
+  adress och utdrag (`max_results` 3–10). Verktyget finns bara när **Tillåt
+  webbsök** är påslaget i sökinställningarna. Det används både när materialet är
+  otydligt (maskeringar, oläsliga namn, okända förkortningar) och för att
+  kontrollera sådant som går att belägga utanför arkivet — ett företag, en
+  adress, ett vapenmärke, en tidningsannons — även när arkivet svarar.
+  Uppgifterna är inte arkivmaterial: be modellen märka dem
+  `[webbkälla: domän, titel](url)` med adressen synlig och aldrig använda
+  `[Nr X, sida Y]` för dem. Osäkerhet är alltid ett skäl att söka: tvekar
+  modellen, eller ger materialet inget entydigt svar, ska den söka innan den
+  svarar.
 
-Claude kan visa namnen `mcp__arkiv__search_archive` och
-`mcp__arkiv__get_page`. Det är samma två verktyg. De läser arkivtext, inte
-PDF-bilder, och ger inte webbsökning, grafslagningar eller möjlighet att ändra
-arkivet. Att nämna ett annat verktyg i prompten gör det inte tillgängligt.
+Claude kan visa namnen `mcp__arkiv__search_archive`, `mcp__arkiv__get_page` och
+`mcp__arkiv__web_search`. Det är samma tre verktyg. De läser arkivtext, inte
+PDF-bilder, och ger inte grafslagningar eller möjlighet att ändra arkivet. Att
+nämna ett annat verktyg i prompten gör det inte tillgängligt.
 
 **Exempel på en regel att lägga till i standardtexten:**
 
@@ -542,6 +554,13 @@ arkivet. Att nämna ett annat verktyg i prompten gör det inte tillgängligt.
 > Läs sidkontext med get_page innan du drar slutsatser av ett oklart citat.
 > Sök även efter motsägande uppgifter. Avsluta med ett källbelagt svar och
 > kvarstående osäkerheter när fortsatta sökningar inte ger nytt underlag.
+> Märk varje uppgift från web_search som [webbkälla: domän, titel](url) och säg
+> att den kommer från nätet, inte från arkivet.
+> Kontrollera firmor, adresser och andra samtida företeelser på nätet även när
+> arkivet svarar, och redovisa vad webben bekräftar eller motsäger. Sök varje
+> gång du är osäker eller materialet inte ger ett entydigt svar, och säg vad som
+> fortfarande är osäkert. Frågor om nuläget — i dag, numera — söks alltid, och
+> webbuppgiften dateras.
 
 Undvik krav på att ”söka igenom hela arkivet”: sökträffarna är ett urval och
 antalet verktygsomgångar är begränsat. Ett uteblivet fynd bevisar inte att
