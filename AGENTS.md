@@ -25,6 +25,7 @@ När du gör förändringar i projektet ska du **alltid** uppdatera den använda
 - `README.md` — presentationssida (svenska): vad projektet är, länkar vidare
 - `docs/kom-igang.md` — snabbstart (svenska): krav, installation, API-nyckel, kör pipelinen, ställ första frågan
 - `docs/teknisk-referens.md` — detaljerad dokumentation (svenska): alla steg/flaggor, state-db, kunskapsgraf, LLM-config, filöversikt, tester
+- `docs/jev-reranker-pilot.md` — pilotstudie (svenska): Jev mot BGE som reranker, mått, begränsningar och rekommendation
 - `AGENTS.md` — instruktioner för framtida Codex-sessioner
 
 ## Project Overview
@@ -304,6 +305,14 @@ LaTeX-matte hos Streamlit.
 **PDF-opener för citat/källor**: inline-citat och källkort använder `casebook_ui.render_pdf_opener` + `citations.pdf_anchor`. När sidnummer finns ska länken bära `page=N`; openern validerar både PDF-token och sida, bygger `file://...#page=N` och öppnar PDF:en med `webbrowser.open(..., new=2)` så den hamnar i en ny webbläsarflik i stället för macOS Preview. WPU-uppslag måste även acceptera stammar där ett `Pol-..._...`-dokument-ID följs direkt av titeltext. Referenser utan sida (`[Nr X]`) länkar till hela filen utan `page=`, och flera sidnummer i samma citat hör till samma länk. Utredning, Jämförelse, Utredningspärm och grafens dokumentöppningar ska använda samma opener.
 
 **Avklippta modellsvar (`stop_notice` i `src/rag/ask.py`)**: leverantörerna kan avsluta mitt i en mening och ändå svara HTTP 200 — DeepSeek `length`/`insufficient_system_resource`, Claude `max_tokens`/`error_max_turns`. Varje svarsväg i Utredning (`ask.openai`, `ask.openai-mcp`, `ask.claude`) ska därför gå via `ask.stop_notice` och visa `*[Svar avklippt — …]*` i svaret plus logga i `errors.log`; bara `stop`/`end_turn` (och motsvarande kompletta orsaker) får vara tysta. Lägg inte till en ny svarsväg utan slutorsakskontroll, och återinför inte den gamla ensidiga `finish_reason == "length"`-kontrollen.
+
+**Experimentell Jev-reranker (`rag/ask.py` + `Utredning.py`)**: Jev är endast
+valbar i RAG-fliken; BGE förblir standard och MCP/Jämförelse använder befintlig
+BGE-väg. Jev använder den fasta Noul-frågan från piloten, högst fyra parallella
+anrop och `OPENROUTER_API_KEY`. UI:t visar API:ets rapporterade usage per sökning
+men lagrar den inte i `llm_usage`. Vid nätverks-, HTTP- eller valideringsfel ska
+sökningen avbrytas och loggas — fall aldrig tyst tillbaka till BGE, eftersom det
+gör jämförelsen ogiltig. Logga aldrig nyckeln eller hela dokumenttexter.
 
 **Kunskapsgraf byggs lazy (Utredning.py)**: `_render_answer_graph` tar svaret, inte färdiga centers. Den dyra entitetsextraktionen (`_compute_answer_centers` → vald backend i `generated/llm_config.json`) och Neo4j-frågorna körs **först när användaren öppnar graf-toggeln** — inte automatiskt efter varje svar. DeepSeek/OpenAI använder vald modell; Claude använder Haiku för den lilla extraktionsuppgiften. Resultatet cachas per svar i session state och returneras så utredningspärmen kan spara det.
 

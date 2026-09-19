@@ -65,7 +65,9 @@ export OPENAI_API_KEY=sk-...
 # DeepSeek (V4 / Reasoner):
 export DEEPSEEK_API_KEY=sk-...
 
-# OpenRouter (alla modeller via ett konto):
+# OpenRouter (alla modeller via ett konto). Valfritt om du svarar med Claude
+# eller en annan leverantör, men krävs för OpenRouter-profiler och för den
+# experimentella Jev-rerankern i RAG-fliken:
 export OPENROUTER_API_KEY=sk-or-...
 ```
 
@@ -116,6 +118,15 @@ Fliken **Utredning** har två flikar: **Fråga arkivet (RAG)** (snabbt,
 deterministiskt — bra för faktafrågor) och **Utredningsläge (MCP)** (autonomt,
 bättre täckning på komplexa frågor). Detaljer i
 [Teknisk referens](teknisk-referens.md#4-ställ-frågor).
+
+I RAG-fliken ligger sökvalen i **Sökinställningar**. Välj **Reranker** för att
+jämföra samma fråga med **BGE – lokal** (standard, körs lokalt) och **Jev –
+OpenRouter, experimentell**. Jev är ett experimentellt läge: det skickar varje
+utdrag till en extern tjänst, kräver `OPENROUTER_API_KEY` och gör debiterade
+anrop. Efter sökningen visar en rad vilken reranker som användes och hur lång
+tid den tog (gäller **BGE** och **Jev**) — för Jev även antal indatatoken och
+leverantörens rapporterade kostnad. Väljer du **Ingen** hoppas omrankningen
+över helt. Källkorten under svaret visar vilka utdrag som valdes.
 
 När du hittar något intressant kan du spara svaret i fliken **Utredningspärm**.
 Sparade spår visas som kollapsade poster med kort rubrik; öppna posten för att

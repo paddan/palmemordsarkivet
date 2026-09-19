@@ -92,6 +92,15 @@ embedas och matchas mot vektorindexet, de bästa utdragen rerankas, och de
 källhänvisningar. Snabbt och förutsägbart — passar enkla faktafrågor där ett
 söksteg räcker.
 
+Vilken reranker som används väljs i **Sökinställningar → Reranker**: **BGE –
+lokal** (standard) eller **Ingen**. Där finns också **Jev – OpenRouter,
+experimentell**, som gav bättre källurval i den inledande pilotstudien
+([docs/jev-reranker-pilot.md](docs/jev-reranker-pilot.md)) men kräver
+`OPENROUTER_API_KEY` och gör debiterade anrop till en extern tjänst. Efter varje
+sökning visar en rad vilken reranker som användes och hur lång tid den tog (**BGE**
+och **Jev**); för Jev även antal indatatoken och leverantörens rapporterade
+kostnad. **Ingen** hoppar över omrankningen helt.
+
 #### MCP (utredningsläge)
 
 AI söker *autonomt* via

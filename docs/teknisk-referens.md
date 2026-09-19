@@ -302,7 +302,21 @@ Klassisk *retrieval-augmented generation*: en fast pipeline i tre steg.
    och matchas mot LanceDB-indexet (top-20 kandidater).
 2. **Hybrid + reranking (valfritt)** — `--hybrid` kombinerar vektor och BM25 (FTS)
    med *Reciprocal Rank Fusion* (k=60). Sedan omrankar
-   `BAAI/bge-reranker-v2-m3` resultaten och plockar ut topp-6.
+   `BAAI/bge-reranker-v2-m3` resultaten och plockar ut topp-6. BGE körs lokalt och
+   är standard i RAG-flikens **Sökinställningar → Reranker**, där **Ingen** också
+   finns. MCP-läget och Jämförelse-sidan använder fortfarande BGE.
+   Samma meny erbjuder i stället **Jev – OpenRouter, experimentell**: samma väg
+   som pilotstudien [jev-reranker-pilot.md](jev-reranker-pilot.md) mätte —
+   modellalias `typesafe/jev-1.13` mot `/api/alpha/decisions`, ett anrop per
+   fråga–utdrag-par och högst fyra samtidiga anrop. Endast frågan och utdragstexten
+   skickas (aldrig titeln), lika poäng behåller sökordningen och timeouten är 60 s
+   per anrop. Efter en Jev-sökning visar en rad faktisk modellversion, tid, antal
+   indatatoken och leverantörens rapporterade kostnad; saknas usage står
+   `kostnad okänd` i stället för en påhittad nolla. Mätvärdena gäller den enskilda
+   sökningen och bokförs inte i token- och kostnadsräknaren. Jev kräver
+   `OPENROUTER_API_KEY` och gör debiterade anrop; misslyckas anropet avbryts
+   sökningen och felet loggas som `ask.rerank_jev` i stället för att tyst falla
+   tillbaka på BGE.
 3. **Claude svarar** — de 6 utdragen skickas som kontext till Claude Opus 4.8
    (adaptive thinking). Svaret innehåller källhänvisningar `[Nr X, sida Y]`.
 
@@ -508,7 +522,8 @@ behövs).
 #### Vittnesjämförelse (Jämförelse-fliken)
 
 Sidan `pages/6_Jämförelse.py` är ett korsförhörsläge: ange ett ämne, hämta
-flera källor med samma sök+rerank som Utredning, och låt språkmodellen ställa
+flera källor med samma sök+rerank som Utredning (den lokala BGE-rerankern; det
+experimentella Jev-läget finns bara i RAG-fliken), och låt språkmodellen ställa
 dem mot varandra. System-prompten (i `src/compare.py`) ber modellen lyfta fram
 **motstridiga** och **överensstämmande** uppgifter med källhänvisningar, i
 stället för att syntetisera bort konflikterna. Backend följer det val som
@@ -811,7 +826,7 @@ OpenAI-kompatibel endpoint anger profilen endast miljövariabelns namn i
 
 ### Token och kostnad per profil
 
-Varje avslutat LLM-anrop i Utredning bokförs i `llm_usage` (state.db) under
+Varje avslutat svarsgenererande LLM-anrop i Utredning bokförs i `llm_usage` (state.db) under
 profilens namn: antal anrop, indata-/utdata-token, cachade indata-token och
 kostnad. Summeringen **ärvs mellan sessioner** — den nollställs inte när
 webbläsaren laddas om — och visas både längst ner i Utrednings sidofält

@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,14 @@ import streamlit as st
 from sentence_transformers import SentenceTransformer
 
 MCP_SERVER = Path(__file__).resolve().parent / "rag" / "mcp_server.py"
+
+# Reranker-val i RAG-fliken: etikett → läge. BGE är standard; Jev är
+# experimentellt och kräver nätverk + OPENROUTER_API_KEY (se rag/ask.py).
+_RERANKERS = {
+    "BGE – lokal": "bge",
+    "Jev – OpenRouter, experimentell": "jev",
+    "Ingen": "none",
+}
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import backends as _backends  # noqa: E402
@@ -43,9 +52,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "rag"))
 from ask import (  # noqa: E402
     CLAUDE_MODEL,
     EMBED_MODEL,
+    RERANK_MODEL,
     TABLE,
     format_context,
+    format_rerank_metrics,
     rerank,
+    rerank_jev,
     search,
     stop_notice,
 )
@@ -310,7 +322,8 @@ def _render_usage_panel(cfg: dict) -> None:
     )
 
 
-st.session_state.setdefault("do_rerank", True)
+st.session_state.setdefault("reranker_choice", "BGE – lokal")
+st.session_state.setdefault("rerank_metrics", None)
 
 # Räknarens plats längst ner i sidofältet. Ett st.empty() (inte container) så
 # att samma yta kan skrivas om när ett anrop bokförts — sidofältet ritas före
@@ -1125,18 +1138,25 @@ def _render_rag_tab() -> None:
     with st.expander("Sökinställningar", expanded=False):
         _facet_to_name: dict[str, str] = {}
 
-        do_rerank = st.toggle(
-            "Använd cross-encoder reranker",
-            key="do_rerank",
-            help="Långsammare första gången (laddar ~568 MB) men bättre precision.",
+        reranker_label = st.selectbox(
+            "Reranker",
+            list(_RERANKERS),
+            key="reranker_choice",
+            help=(
+                "BGE körs lokalt och är standard. Jev är ett experimentellt OpenRouter-"
+                "läge som kräver nätverk och OPENROUTER_API_KEY och debiterar API-krediter."
+            ),
         )
+        reranker_mode = _RERANKERS[reranker_label]
+        if reranker_mode == "jev" and not os.environ.get("OPENROUTER_API_KEY"):
+            st.warning("Jev kräver att OPENROUTER_API_KEY är satt i miljön.")
         top_k = st.slider(
             "Hämta top-K kandidater",
             5,
             50,
             20,
             help="Antal chunks som vektorsökningen plockar fram ur indexet i första "
-            "steget. Högre K → fler alternativ för rerankern att välja bland "
+            "steget. Högre K → fler alternativ för vald reranker att välja bland "
             "(bättre täckning) men långsammare. Utan reranker används bara de "
             "första top-N av dessa.",
         )
@@ -1218,17 +1238,37 @@ def _render_rag_tab() -> None:
                     )
                 else:
                     status.update(label="Inga träffar", state="error")
-                ss.hits, ss.answer = None, ""
+                ss.hits, ss.answer, ss.rerank_metrics = None, "", None
                 return  # avbryt bara den här fliken, inte chatten
-            if do_rerank:
-                status.update(label="Omrankar med cross-encoder…")
+            ss.rerank_metrics = None
+            if reranker_mode == "bge":
+                status.update(label="Omrankar med BGE…")
+                started = time.perf_counter()
                 hits = rerank(q, hits, top_n)
+                ss.rerank_metrics = {
+                    "name": "BGE",
+                    "model": RERANK_MODEL,
+                    "seconds": time.perf_counter() - started,
+                    "local": True,
+                }
+            elif reranker_mode == "jev":
+                status.update(label="Omrankar med Jev via OpenRouter…")
+                try:
+                    hits, ss.rerank_metrics = rerank_jev(q, hits, top_n)
+                except (RuntimeError, ValueError) as exc:
+                    log_error("ask.rerank_jev", q[:80], str(exc))
+                    status.update(label=f"Jev-rerankingen misslyckades: {exc}", state="error")
+                    ss.hits, ss.answer, ss.rerank_metrics = None, "", None
+                    return
             else:
                 hits = hits[:top_n]
+                ss.rerank_metrics = {"name": "Ingen"}
             status.update(
                 label=f"Hittade {len(hits)} relevanta chunks", state="complete"
             )
         ss.hits = hits
+        if ss.rerank_metrics:
+            st.caption(format_rerank_metrics(ss.rerank_metrics))
 
         st.subheader(f"Svar ({backend_name})")
         # Skapa placeholders i skärmordning (svar → graf → källor) innan
@@ -1261,6 +1301,8 @@ def _render_rag_tab() -> None:
     # Rendera resultat från session_state vid rerun från PDF-knappar (ej ny sökning).
     # Bara i RAG-läget — MCP-chatten renderar sina källor inline per tur.
     if ss.hits and not (submitted and q.strip()):
+        if ss.rerank_metrics:
+            st.caption(format_rerank_metrics(ss.rerank_metrics))
         st.subheader("Svar")
         st.markdown(ss.answer, unsafe_allow_html=True)
         if show_graph:
