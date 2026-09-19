@@ -136,8 +136,14 @@ modellen verktyget `web_search` när den är osäker eller materialet inte ger e
 entydigt svar — vad ett namn, en plats eller en förkortning avser — för att
 kontrollera firmor, adresser och andra samtida företeelser även när arkivet
 svarar, och för frågor om nuläget ("i dag", "numera") som ligger efter
-materialets tid. Det kräver `OPENROUTER_API_KEY`,
-kostar en sökavgift per anrop och är avstängt som standard. Modellen ska då märka
+materialets tid. Det kräver en söknyckel — **Sökmodell** väljer vilken av dina
+konfigurerade LLM-profiler som gör sökningen (förstahandsvalet sätter du med
+kryssrutan **Använd som standard för webbsök** i LLM-konfigurationen) —
+kostar en sökavgift per anrop
+och är avstängt som standard; i samma sektion ställer du också **taket för
+antalet webbsökningar per fråga** (standard 3) och **antalet verktygsomgångar**
+(standard 15), som är de två rattar som håller kostnaden och svarstiden nere.
+Modellen ska då märka
 varje uppgift från nätet som `[webbkälla: domän, titel](url)` och säga att den
 kommer från internet i stället för ur arkivet.
 

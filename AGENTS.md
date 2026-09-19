@@ -234,7 +234,7 @@ RAG-lägets sökinställningar (reranker, top-K/top-N, facetter, fuzzy) ritas i 
 bara när RAG-läget är
 valt (`_render_rag_settings`, vars val skickas in i `_render_rag_tab`).
 Utredningsläget har sin egen sektion (`_render_mcp_settings`) med samma tre
-rattar men nycklarna `mcp_*` plus webbsök-togglen, och bara den valda sektionen ritas: `mode` är
+rattar men nycklarna `mcp_*` plus webbsök-togglen, budgeten och tursgränsen, och bara den valda sektionen ritas: `mode` är
 normaliserat till RAG, så kropparna får alltid ett komplett set via `sokval`.
 Rattarna i MCP-läget gäller per verktygsanrop och **går före modellens argument**
 för reranker, `top_k` och `top_n` (`mcp_server.resolve_search_policy`) —
@@ -413,6 +413,18 @@ står kvar, och en webbkopia av ett arkivdokument (t.ex. wpu.nu) räknas inte so
 självständigt arkivbelägg. En uttrycklig begäran i frågan ("kontrollera på
 nätet") följs direkt.
 
+**Taket för betalda sökningar och tursgränsen ligger i sökinställningarna**
+(`mcp_web_search_budget` 1–20, standard 3, och `mcp_max_turns` 3–30, standard
+15). Utan webbsökstak gjorde en körning 16 sökningar (~$0,12) efter ett faktum som
+inte fanns på nätet, så budgeten är operatörens enda kostnadsbroms utöver
+kryssrutan. OpenAI-vägen tar bort `web_search` ur verktygslistan när taket är
+nått; Claude-vägen får taket via `MCP_WEB_SEARCH_BUDGET` och servern svarar
+"budgeten är slut". Serverns räknare är processvid — i Streamlit-processen
+nollställs den av `stream_openai_mcp` vid varje fråga, och i Claude-vägen är
+servern ny per fråga. Tursgränsen styr bägge vägarna (Claude hade tidigare ett
+eget, lägre tak) och räknar turer, inte anrop: modellen kan begära flera verktyg i
+samma tur.
+
 **Regeln är sedan utvidgad två gånger på ägarens begäran** (listor av objekttyper
 läckte — varje klass som inte stod i listan passerade tyst, t.ex. en förkortning i
 en liggarepost och en ordförandes mandattid): (1) **osäkerhet är alltid ett skäl
@@ -425,15 +437,50 @@ de hör till en persons privatliv — det som styr är källan och datumet, inte
 egen gallringsregel. Priset är fler sökningar: en körning gjorde 16 webbsökningar
 (~$0,12) efter en mandattid som inte finns på nätet, så kryssrutan är den enda
 kostnadsbromsen. Av samma skäl fick tursgränsen ett tvingat svar:
-`MAX_MCP_TURNS` (15) är taket för verktygsomgångar, och när taket nås görs en
+**Verktygsomgångar (max)** (3–30, standard 15) är taket för verktygsomgångar, och när taket nås görs en
 sista förfrågan med `tool_choice="none"` så det hämtade underlaget alltid
 sammanfattas i stället för att bara en avklippt-notis visas. Ta inte bort den
 vägen.
 
+**Webbsöket är inte låst till OpenRouter** (`WEB_SEARCH_PROVIDERS`): det finns
+ingen gemensam sök-API, så `search_web` dispatchar till `openrouter`
+(chat/completions + `plugins: [{id: web}]`, verifierad live), `openai` (Responses
++ verktyget `web_search`) eller `anthropic` (Messages + serververktyget
+`web_search`). Alla tre svarar med samma url_citation-form, så `_hits_from_annotations`,
+`format_web_hits`, wpu.nu-undantaget och budgeten delas — lägg nya leverantörer i
+`WEB_SEARCH_BACKENDS` och deras nyckel i `PROVIDER_KEYS`, inte en egen kodväg.
+**OpenAI- och Anthropic-vägarna är best effort:** skrivna mot respektive
+dokumenterade svarsformat och enhetstestade mot mockad klient, men inte
+live-verifierade (ägaren har bara OpenRouter- och DeepSeek-nycklar). Verifiera dem
+innan de kallas klara. **Sökmodellen är en av operatörens egna LLM-profiler** (`mcp_server.search_profiles`
+listar de som har en sök-API — DeepSeek, Ollama och custom-endpoints faller bort),
+och valet ger både leverantör, endpoint, modell och nyckelnamn på en gång: man
+väljer en modell, inte ett API plus en modell. En vald profil löses med
+`config.resolve_runtime_profile`, så profilens `api_key_env` och modell används
+rakt av och sökningen kan gå via en annan profil än den som svarar. `auto` finns bara kvar som **serverfallback** för fristående körning
+(`resolve_web_search_provider` + `WEB_SEARCH_DEFAULT_MODELS`) — sidans rullista
+har ingen auto-post, för den är otydlig: där står alltid ett profilnamn.
+Standardkonfigurationen används om den kan söka, annars första sökbara profilen; ett uttryckligt val utan nyckel faller tillbaka och sidofältet
+skriver vilken leverantör som används i stället. Kostnaden kan bara bokföras för
+OpenRouter, som rapporterar `usage.cost`. **Sökmodellen är operatörens egen:**
+`WEB_SEARCH_DEFAULT_MODELS` är modellen när ingen profil är vald, och
+miljövariabeln `MCP_WEB_SEARCH_MODEL` sätts per fråga och går före. Det är
+avsiktligt billigt: bara annoteringarna läses, så en stor modell ger inte bättre
+träffar. Förstahandsvalet bor i **LLM-konfigurationen**:
+`config.save_search_default()`/`load_search_default()` skriver
+`web_search_default` i `generated/llm_config.json`, och kryssrutan **Använd som
+standard för webbsök** i profilformuläret (Admin → LLM-konfigurationer) sätter
+den — samma form och samma sparflöde som **Använd som standardkonfiguration**,
+via den rena hjälparen `apply_web_search_default_form` (namnbytet följer med,
+urkryssad ruta tar bort valet). Rutan är grå när tjänsten saknar sök-API. Den
+profilen ligger först i sökmodellslistan och är förvald. `save_profiles` måste
+bevara nyckeln, annars nollas den när en profil sparas.
+
 **wpu.nu utesluts som källa** (`WEB_SEARCH_EXCLUDE_DOMAINS`): sajten är en
 spegling av arkivet självt, så träffar därifrån är ingen självständig källa och
 tränger ut riktiga nätkällor. Domen skickas som `exclude_domains` till
-OpenRouter och filtreras dessutom bort lokalt i `mcp_server.web_hits`, eftersom
+OpenRouter och filtreras dessutom bort lokalt i `mcp_server._hits_from_annotations`
+och `_search_anthropic`, eftersom
 filtret är motorns ansvar (OpenAI-motorn ignorerar `exclude_domains`). En
 wpu.nu-adress kan fortfarande stå inne i en annan sajts citat eller
 foruminlägg — det är sajtens egen text — men wpu.nu är aldrig den märkta

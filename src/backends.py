@@ -9,6 +9,26 @@ OpenAI-kompatibel /v1/models-endpoint. Konsumeras av:
 """
 from __future__ import annotations
 
+from urllib.parse import urlsplit
+
+# Värdnamn i en LLM-profil → den sök-API som hör till leverantören. Ligger här
+# (och inte i mcp_server) så att både servern och adminformuläret kan avgöra om en
+# profil alls kan söka, utan att dra in den tunga MCP-modulen.
+SEARCH_PROVIDER_HOSTS: dict[str, str] = {
+    "openrouter.ai": "openrouter",
+    "api.openai.com": "openai",
+    "api.anthropic.com": "anthropic",
+}
+
+
+def provider_from_endpoint(base_url: object, kind: object = None) -> str | None:
+    """Sökleverantör ur en LLM-profols endpoint, eller None om den inte kan söka."""
+    if str(kind or "").strip().lower() == "claude":
+        return "anthropic"
+    host = urlsplit(str(base_url or "")).netloc.lower().removeprefix("www.")
+    return SEARCH_PROVIDER_HOSTS.get(host)
+
+
 # Backend-katalog. ``kind`` matchar provider-nyckeln i generated/llm_config.json
 # (claude/openai). ``models`` är den statiska fallback-listan; ``base_url``/``env``
 # styr om live-modeller kan hämtas; ``configurable`` markerar backends där

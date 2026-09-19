@@ -26,6 +26,9 @@ _DEFAULTS: dict = {
 }
 
 DEFAULT_PROFILE_NAME = "Standard"
+# Namnet på den profil som är förstahandsval för webbsök. Hör till LLM-konfigurationen
+# (den väljs bland profilerna), inte till sökinställningarna.
+SEARCH_DEFAULT_KEY = "web_search_default"
 
 
 def resolve_runtime_profile(
@@ -76,13 +79,15 @@ def profile_cache_key(name: str, profile: Mapping[str, object]) -> tuple[str, st
 
 
 def load_all() -> dict:
-    """Returnera ``{"profiles": {namn: profil}, "default": namn}``."""
+    """Returnera profilkatalogen, standardprofilen och webbsökets förstahandsval."""
     profiles: dict[str, dict] = {}
     default = DEFAULT_PROFILE_NAME
+    stored: dict = {}
 
     if CONFIG_FILE.exists():
         try:
-            stored = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+            laddad = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+            stored = laddad if isinstance(laddad, dict) else {}
             if isinstance(stored, dict) and isinstance(stored.get("profiles"), dict) and stored["profiles"]:
                 for name, profile in stored["profiles"].items():
                     profiles[name] = {**_DEFAULTS, **profile}
@@ -99,7 +104,11 @@ def load_all() -> dict:
     if default not in profiles:
         default = next(iter(profiles))
 
-    return {"profiles": profiles, "default": default}
+    return {
+        "profiles": profiles,
+        "default": default,
+        SEARCH_DEFAULT_KEY: str(stored.get(SEARCH_DEFAULT_KEY) or "") if isinstance(stored, dict) else "",
+    }
 
 
 def load() -> dict:
@@ -133,9 +142,37 @@ def save(cfg: dict) -> None:
     _write(all_cfg)
 
 
-def save_profiles(profiles: dict[str, dict], default: str) -> None:
-    """Spara hela profilkatalogen och default-namnet."""
-    _write({"profiles": profiles, "default": default})
+def save_profiles(
+    profiles: dict[str, dict], default: str, web_search_default: str | None = None
+) -> None:
+    """Spara hela profilkatalogen och default-namnet.
+
+    ``web_search_default`` bevaras orörd när den inte anges — den sätts i
+    LLM-formuläret och får inte nollas av att en profil sparas.
+    """
+    if web_search_default is None:
+        web_search_default = load_all().get(SEARCH_DEFAULT_KEY, "")
+    _write(
+        {
+            "profiles": profiles,
+            "default": default,
+            SEARCH_DEFAULT_KEY: web_search_default,
+        }
+    )
+
+
+def load_search_default() -> str:
+    """Profilnamnet som är förstahandsval för webbsök ('' = auto)."""
+    namn = str(load_all().get(SEARCH_DEFAULT_KEY) or "").strip()
+    # En borttagen eller omdöpt profil får inte bli ett dött förstahandsval.
+    return namn if namn in load_all()["profiles"] else ""
+
+
+def save_search_default(name: str) -> None:
+    """Sätt (eller rensa med tom sträng) förstahandsvalet för webbsök."""
+    all_cfg = load_all()
+    all_cfg[SEARCH_DEFAULT_KEY] = str(name or "").strip()
+    _write(all_cfg)
 
 
 def _write(all_cfg: dict) -> None:

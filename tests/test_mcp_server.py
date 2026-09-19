@@ -10,6 +10,16 @@ import mcp_server
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _full_webbsoksbudget() -> None:
+    """Budgeträknaren är modulstate (per fråga i drift, nollställs av
+    Utredning-sidan). Testerna ska starta med full budget i stället för att ärva
+    varandras förbrukning."""
+    mcp_server.set_web_search_budget(mcp_server.WEB_SEARCH_BUDGET_MAX)
+    mcp_server.set_web_search_provider(None)
+    mcp_server.set_web_search_profile(None)
+
+
 @pytest.mark.parametrize("rerank", [True, False])
 def test_search_result_can_open_exact_source(text_dir, monkeypatch, rerank) -> None:
     """Ett långt filnamn med citattecken ska gå från sökträff till sidläsning."""
@@ -486,3 +496,309 @@ def test_saknad_nyckel_loggas_en_gang_per_process(monkeypatch) -> None:
 
     assert len(rader) == 1
     assert "OPENROUTER_API_KEY" in rader[0][2]
+
+
+# ── Webbsöksbudget ───────────────────────────────────────────────────────────
+# Taket är operatörens kostnadsbroms: varje sökning kostar ~$0,007 hos
+# OpenRouter, och en körning utan tak gjorde 16 sökningar (~$0,12).
+
+def _web_svar(innehåll: list, nyckel: str = "choices") -> object:
+    """HTTP-svar i valt format: OpenRouters choices eller OpenAI/Anthropics listor."""
+    class _Svar:
+        status_code = 200
+
+        def json(self) -> dict:
+            if nyckel == "choices":
+                return {"usage": {"cost": 0.0074},
+                        "choices": [{"message": {"annotations": innehåll}}]}
+            return {nyckel: innehåll}
+
+    return _Svar()
+
+
+def test_budgeten_stoppar_fler_anrop_och_nollstalls_per_fraga(monkeypatch) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-nyckel")
+    anrop: list = []
+    monkeypatch.setattr(
+        mcp_server.requests, "post",
+        lambda *a, **k: anrop.append(1) or _web_svar([]),
+    )
+    mcp_server.set_web_search_budget(2)
+
+    assert mcp_server.web_search_budget_left() == 2
+    assert mcp_server.search_web("ett")[1] is not None
+    assert mcp_server.search_web("två")[1] is not None
+    text, kostnad = mcp_server.search_web("tre")
+
+    assert "budgeten" in text and "2 sökningar" in text
+    assert kostnad is None
+    assert len(anrop) == 2, "den tredje sökningen ska inte ens nå nätet"
+    assert mcp_server.web_search_budget_left() == 0
+
+    # Ny fråga → ny budget.
+    mcp_server.set_web_search_budget(5)
+    assert mcp_server.web_search_budget_left() == 5
+    assert mcp_server.search_web("fyra")[1] is not None
+
+
+def test_budgeten_lases_ur_miljon_och_klampas(monkeypatch) -> None:
+    monkeypatch.setenv(mcp_server.ENV_WEB_SEARCH_BUDGET, "1")
+    mcp_server.set_web_search_budget(None)
+    assert mcp_server.web_search_budget() == 1
+
+    monkeypatch.setenv(mcp_server.ENV_WEB_SEARCH_BUDGET, "99")
+    mcp_server.set_web_search_budget(None)
+    assert mcp_server.web_search_budget() == mcp_server.WEB_SEARCH_BUDGET_MAX
+
+    assert mcp_server.clamp_web_search_budget(0) == mcp_server.WEB_SEARCH_BUDGET_MIN
+    assert mcp_server.clamp_web_search_budget("många") == mcp_server.WEB_SEARCH_BUDGET_DEFAULT
+
+
+def test_nyckel_loggas_trots_tom_budget(monkeypatch) -> None:
+    """Budgeten prövas före nyckeln: en nyckellös körning ska inte heller den
+    tystna — och en slot som förbrukas av ett anrop som aldrig blev av räknas
+    ändå, så räknaren inte kan låsas upp av en död konfiguration."""
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.setattr(mcp_server, "_nyckel_loggad", False)
+    rader: list = []
+    monkeypatch.setattr(mcp_server, "log_error", lambda *a: rader.append(a))
+    mcp_server.set_web_search_budget(1)
+
+    mcp_server.search_web("fråga")
+    mcp_server.search_web("fråga igen")
+
+    assert len(rader) == 1
+    assert mcp_server.web_search_budget_left() == 0, "förbrukad slot, inget anrop"
+
+
+# ── Leverantörsval ───────────────────────────────────────────────────────────
+# Verktyget får inte vara låst till OpenRouter: sökningen går via den leverantör
+# operatören (eller LLM-profilen) har nyckel till. OpenAI- och Anthropic-vägarna
+# är skrivna mot respektive dokumenterade svar och enhetstestade mot mockad
+# klient — de är inte live-verifierade härifrån (best effort).
+
+def _bara_nycklar(monkeypatch, *namn: str) -> None:
+    for env in mcp_server.PROVIDER_KEYS.values():
+        monkeypatch.delenv(env, raising=False)
+    for provider in namn:
+        monkeypatch.setenv(mcp_server.PROVIDER_KEYS[provider], "test-nyckel")
+
+
+def test_provider_from_endpoint_kanner_igen_profilerna(monkeypatch) -> None:
+    assert mcp_server.provider_from_endpoint("https://openrouter.ai/api/v1") == "openrouter"
+    assert mcp_server.provider_from_endpoint("https://api.openai.com/v1") == "openai"
+    assert mcp_server.provider_from_endpoint("https://api.anthropic.com/v1") == "anthropic"
+    assert mcp_server.provider_from_endpoint(None, kind="claude") == "anthropic"
+    assert mcp_server.provider_from_endpoint("http://localhost:11434/v1") is None
+
+
+def test_auto_foljer_llm_profilens_leverantor(monkeypatch) -> None:
+    _bara_nycklar(monkeypatch, "openrouter", "openai")
+
+    assert mcp_server.resolve_web_search_provider("auto", preferred="openai") == "openai"
+    assert mcp_server.resolve_web_search_provider("auto", preferred="openrouter") == "openrouter"
+    # Okänd preferens (lokal modell) → första leverantör med nyckel.
+    assert mcp_server.resolve_web_search_provider("auto", preferred=None) == "openrouter"
+
+
+def test_uttryckligt_val_utan_nyckel_faller_tillbaka(monkeypatch) -> None:
+    _bara_nycklar(monkeypatch, "openrouter")
+
+    # OpenAI valt men nyckeln saknas: hellre en fungerande sökning än ett tyst nej.
+    assert mcp_server.resolve_web_search_provider("openai", preferred="openrouter") == "openrouter"
+    # Ingen nyckel alls: namnge standardleverantörens nyckel i felet.
+    _bara_nycklar(monkeypatch)
+    assert mcp_server.resolve_web_search_provider("auto", preferred="openai") == "openrouter"
+
+
+def test_openai_vagen_anropar_responses_med_web_search(monkeypatch) -> None:
+    _bara_nycklar(monkeypatch, "openai")
+    mcp_server.set_web_search_provider("openai")
+    anrop: dict = {}
+
+    def fake_post(url: str, **kwargs):
+        anrop["url"] = url
+        anrop.update(kwargs)
+        return _web_svar(
+            [
+                {
+                    "type": "message",
+                    "content": [
+                        {
+                            "annotations": [
+                                {
+                                    "type": "url_citation",
+                                    "url_citation": {
+                                        "url": "https://svd.se/a/palme",
+                                        "title": "SvD om Palmemordet",
+                                    },
+                                }
+                            ]
+                        }
+                    ],
+                }
+            ],
+            nyckel="output",
+        )
+
+    monkeypatch.setattr(mcp_server.requests, "post", fake_post)
+    text, kostnad = mcp_server.search_web("Christer Andersson revolver", max_results=4)
+
+    assert anrop["url"] == mcp_server.WEB_SEARCH_OPENAI_ENDPOINT
+    assert anrop["headers"]["Authorization"] == "Bearer test-nyckel"
+    assert anrop["json"]["tools"] == [{"type": "web_search"}]
+    assert "[webbkälla: svd.se, SvD om Palmemordet](https://svd.se/a/palme)" in text
+    # OpenAI fakturerar sökningen separat och rapporterar den inte i svaret.
+    assert kostnad is None
+
+
+def test_anthropic_vagen_laser_web_search_tool_result(monkeypatch) -> None:
+    _bara_nycklar(monkeypatch, "anthropic")
+    mcp_server.set_web_search_provider("anthropic")
+    anrop: dict = {}
+
+    def fake_post(url: str, **kwargs):
+        anrop["url"] = url
+        anrop.update(kwargs)
+        return _web_svar(
+            [
+                {
+                    "type": "web_search_tool_result",
+                    "content": [
+                        {"type": "web_search_result", "url": "https://wpu.nu/x",
+                         "title": "spegling"},
+                        {"type": "web_search_result", "url": "https://skyttekretsen.se/f",
+                         "title": "Föreningar"},
+                    ],
+                }
+            ],
+            nyckel="content",
+        )
+
+    monkeypatch.setattr(mcp_server.requests, "post", fake_post)
+    text, kostnad = mcp_server.search_web("Akademiska skytteklubben")
+
+    assert anrop["url"] == mcp_server.WEB_SEARCH_ANTHROPIC_ENDPOINT
+    assert anrop["headers"]["x-api-key"] == "test-nyckel"
+    assert anrop["json"]["tools"][0]["type"] == "web_search_20250305"
+    assert anrop["json"]["tool_choice"] == {"type": "tool", "name": "web_search"}
+    # wpu.nu-undantaget gäller alla leverantörer.
+    assert "wpu.nu" not in text
+    assert "skyttekretsen.se" in text
+    assert kostnad is None
+
+
+def test_nyckellos_vald_leverantor_namnges_i_feltexten(monkeypatch) -> None:
+    _bara_nycklar(monkeypatch)
+    mcp_server.set_web_search_provider("openai")
+    monkeypatch.setattr(mcp_server.requests, "post",
+                        lambda *a, **k: pytest.fail("ska inte anropa nätet"))
+
+    text, kostnad = mcp_server.search_web("fråga")
+
+    assert "OPENAI_API_KEY" in text and "openai" in text
+    assert kostnad is None
+
+
+def _med_profil(monkeypatch, namn: str = "Billig", standard: str = "", **profil) -> None:
+    """En konfigurerad LLM-profil i llm_config, som sökningen kan välja."""
+    import config
+
+    monkeypatch.setattr(config, "load_search_default", lambda: standard)
+    vald = {
+        "backend_name": "OpenRouter",
+        "model": "openai/gpt-4.1-nano",
+        "base_url": "https://openrouter.ai/api/v1",
+        "api_key_env": "OPENROUTER_API_KEY",
+        **profil,
+    }
+    monkeypatch.setattr(
+        config, "load_all", lambda: {"profiles": {namn: vald}, "default": namn}
+    )
+
+
+def test_sokmodellen_ar_en_konfigurerad_llm_profil(monkeypatch, tmp_path) -> None:
+    """Sökmodellen väljs bland operatörens egna LLM-profiler: profilens leverantör
+    avgör sök-API:et och profilens modell gör anropet."""
+    _bara_nycklar(monkeypatch, "openrouter")
+    _med_profil(monkeypatch)
+    mcp_server.set_web_search_profile(None)
+    monkeypatch.delenv(mcp_server.ENV_WEB_SEARCH_MODEL, raising=False)
+
+    # Utan vald profil: auto → LLM-profilens leverantör och dess standardmodell.
+    assert mcp_server.web_search_profile() == ""
+    assert mcp_server.web_search_provider() == "openrouter"
+    assert mcp_server.web_search_model() == mcp_server.WEB_SEARCH_DEFAULT_MODELS["openrouter"]
+
+    mcp_server.set_web_search_profile("Billig")
+    assert mcp_server.web_search_profile() == "Billig"
+    assert mcp_server.web_search_provider() == "openrouter"
+    assert mcp_server.web_search_model() == "openai/gpt-4.1-nano"
+
+    # Förstahandsvalet ligger i LLM-konfigurationen (llm_config.json) och används
+    # när inget annat är satt.
+    _med_profil(monkeypatch, standard="Billig")
+    mcp_server.set_web_search_profile(None)
+    assert mcp_server.web_search_profile() == "Billig"
+    assert mcp_server.web_search_model() == "openai/gpt-4.1-nano"
+
+    _med_profil(monkeypatch, standard="")
+    mcp_server.set_web_search_profile(None)
+    assert mcp_server.web_search_profile() == ""
+
+
+def test_vald_sokmodell_skickas_med_i_anropet(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-nyckel")
+    _med_profil(monkeypatch)
+    mcp_server.set_web_search_profile("Billig")
+    anrop: dict = {}
+
+    def fake_post(url: str, **kwargs):
+        anrop.update(kwargs)
+        return _web_svar([])
+
+    monkeypatch.setattr(mcp_server.requests, "post", fake_post)
+    mcp_server.search_web("fråga")
+
+    assert anrop["json"]["model"] == "openai/gpt-4.1-nano"
+    assert anrop["headers"]["Authorization"] == "Bearer test-nyckel"
+
+
+def test_search_profiles_speglar_konfigurationen(monkeypatch) -> None:
+    """Listan i gränssnittet byggs ur operatörens profiler — inte en fast lista
+    över API:er som erbjuder val utan nyckel. Profiler utan sök-API faller bort."""
+    import config
+
+    profiler = {
+        "Deepseek flash": {"backend_name": "DeepSeek", "base_url": "https://api.deepseek.com/v1"},
+        "Openrouter billig": {
+            "backend_name": "OpenRouter",
+            "model": "openai/gpt-4.1-nano",
+            "base_url": "https://openrouter.ai/api/v1",
+            "api_key_env": "OPENROUTER_API_KEY",
+        },
+        "ollama": {"backend_name": "Ollama (lokal)", "base_url": "http://localhost:11434/v1"},
+        "Openai profil": {
+            "backend_name": "OpenAI",
+            "base_url": "https://api.openai.com/v1",
+            "api_key_env": "OPENAI_API_KEY",
+        },
+    }
+    monkeypatch.setattr(
+        config, "load_all", lambda: {"profiles": profiler, "default": "Deepseek flash"}
+    )
+    import backends
+
+    valbara = mcp_server.search_profiles(profiler, backends.BACKENDS)
+
+    assert [v["name"] for v in valbara] == ["Openrouter billig", "Openai profil"]
+    assert valbara[0] == {
+        "name": "Openrouter billig",
+        "provider": "openrouter",
+        "model": "openai/gpt-4.1-nano",
+        "key_env": "OPENROUTER_API_KEY",
+    }
+    assert valbara[1]["provider"] == "openai"
+    assert mcp_server.search_profiles(None) == []
+
+

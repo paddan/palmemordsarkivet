@@ -11,6 +11,7 @@ kontrollerar beteendet i stället för källkoden.
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 
 import numpy as np
@@ -70,6 +71,9 @@ _TESTPROFIL = {"kind": "openai", "backend_name": "Test", "model": "test-modell",
 def sida(monkeypatch, tmp_path) -> AppTest:
     """Utredning-sidan utan tunga beroenden, startad i RAG-läget."""
     monkeypatch.setenv("STATE_DB", str(tmp_path / "state.db"))
+    # Sidan läser (och LLM-formuläret skriver) llm_config.json — peka allt på en
+    # temp-fil, annars kan ett test ändra utvecklarens riktiga konfiguration.
+    monkeypatch.setattr("config.CONFIG_FILE", tmp_path / "llm_config.json")
     monkeypatch.setattr("lancedb.connect", lambda *a, **k: _FakeDB())
     monkeypatch.setattr(
         "sentence_transformers.SentenceTransformer", lambda *a, **k: _FakeModel()
@@ -226,16 +230,27 @@ def test_tokenpanelen_ar_kvar_i_bada_lägena(sida: AppTest) -> None:
 
 
 def test_webbsok_utan_nyckel_varnar_i_sidofaltet(sida: AppTest, monkeypatch) -> None:
-    """En saknad OPENROUTER_API_KEY gjorde webbsöket tyst dött: verktyget svarade
-    bara med en feltext, inget hamnade i errors.log och gränssnittet sade inget.
-    Sidofältet ska säga till, som för Jev."""
-    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    """En saknad nyckel för sökmodellen gjorde webbsöket tyst dött: verktyget
+    svarade bara med en feltext, inget hamnade i errors.log och gränssnittet sade
+    inget. Sidofältet ska säga till, som för Jev."""
+    _med_profiler(
+        monkeypatch,
+        {
+            "Openrouter billig": {
+                "backend_name": "OpenRouter",
+                "model": "openai/gpt-4.1-nano",
+                "base_url": "https://openrouter.ai/api/v1",
+                "api_key_env": "OPENROUTER_API_KEY",
+            }
+        },
+    )
     _run(sida, MCP)
     _toggle(sida, WEBBSÖK).set_value(True)
     sida.run()
 
     varningar = " ".join(w.value for w in sida.sidebar.warning)
     assert "OPENROUTER_API_KEY" in varningar
+    assert "Openrouter billig" in varningar
 
 
 def test_webbsok_tipset_beskriver_nar_sokningar_sker(sida: AppTest) -> None:
@@ -251,37 +266,16 @@ def test_webbsok_tipset_beskriver_nar_sokningar_sker(sida: AppTest) -> None:
     assert "webbkälla" in help_text
 
 
-class _FakeToolCall:
-    """Stoppar in ett verktygsanrop i varje tur, så tursgränsen nås."""
+def _tool_call(namn: str, argument: str):
+    """Verktygsanrop av OpenAI-typ: loopen kräver isinstance och model_dump, och
+    en handrullad klass hoppas över tyst — då mäter testet ingenting."""
+    from openai.types.chat import ChatCompletionMessageFunctionToolCall
+    from openai.types.chat.chat_completion_message_tool_call import Function
 
-    def __init__(self) -> None:
-        self.id = "call_1"
-        self.type = "function"
-        self.function = _FakeFunction()
-        # Inte en riktig ChatCompletionMessageFunctionToolCall, så loopen hoppar
-        # över att köra verktyget — testet mäter tursgränsen, inte sökningen.
-        self.model_dump = _FakeCallDump(self)
-
-
-class _FakeFunction:
-    name = "search_archive"
-    arguments = '{"query": "ordförande"}'
-
-
-class _FakeCallDump:
-    """Loopen gör model_dump() på varje verktygsanrop innan den lägger tillbaka
-    det i meddelandehistoriken."""
-
-    def __init__(self, call: _FakeToolCall) -> None:
-        self._call = call
-
-    def __call__(self) -> dict:
-        return {
-            "id": self._call.id,
-            "type": "function",
-            "function": {"name": self._call.function.name,
-                         "arguments": self._call.function.arguments},
-        }
+    return ChatCompletionMessageFunctionToolCall(
+        id="call_1", type="function",
+        function=Function(name=namn, arguments=argument),
+    )
 
 
 class _FakeMessage:
@@ -318,7 +312,10 @@ class _FakeCompletions:
             )
         self.med_verktyg += 1
         return _FakeResponse(
-            _FakeChoice(_FakeMessage(None, [_FakeToolCall()]), "tool_calls")
+            _FakeChoice(
+                _FakeMessage(None, [_tool_call("search_archive", '{"query": "ordförande"}')]),
+                "tool_calls",
+            )
         )
 
 
@@ -352,3 +349,279 @@ def test_tursgransen_tvingar_fram_ett_svar(sida: AppTest, monkeypatch) -> None:
     assert fejk.utan_verktyg == 1
     # Loopen ska ha gått tills taket nåddes, inte stannat efter en eller två turer.
     assert fejk.med_verktyg > 10
+
+
+TURER = "Verktygsomgångar (max)"
+BUDGET = "Högst antal webbsökningar per fråga"
+
+
+def test_granserna_ligger_i_sokinstallningarna(sida: AppTest) -> None:
+    """Tursgränsen och webbsöksbudgeten är operatörens kostnadsrattar: 15 omgångar
+    och 3 betalda sökningar som standard. Budgeten är grå när webbsök är av."""
+    _run(sida, MCP)
+
+    assert _slider(sida, TURER).value == 15
+    assert (_slider(sida, TURER).min, _slider(sida, TURER).max) == (3, 30)
+    assert _slider(sida, BUDGET).value == 3
+    assert (_slider(sida, BUDGET).min, _slider(sida, BUDGET).max) == (1, 20)
+    assert _slider(sida, BUDGET).disabled is True
+
+    _toggle(sida, WEBBSÖK).set_value(True)
+    sida.run()
+    assert _slider(sida, BUDGET).disabled is False
+
+
+def test_granserna_overlever_ett_varv_i_rag(sida: AppTest) -> None:
+    _run(sida, MCP)
+    _slider(sida, TURER).set_value(25)
+    _slider(sida, BUDGET).set_value(7)
+    sida.run()
+
+    _run(sida, RAG)
+    _run(sida, MCP)
+
+    assert _slider(sida, TURER).value == 25
+    assert _slider(sida, BUDGET).value == 7
+
+
+def test_granserna_visas_inte_i_rag_laget(sida: AppTest) -> None:
+    labels = _sidebar_labels(sida)
+    assert TURER not in labels
+    assert BUDGET not in labels
+
+
+class _FakeWebSearchClient:
+    """Modellen ber om webbsök i varje tur; testet ser när verktyget försvinner."""
+
+    def __init__(self) -> None:
+        self.verktygslistor: list[list[str]] = []
+
+    async def create(self, **kwargs):
+        self.verktygslistor.append(
+            [t["function"]["name"] for t in kwargs.get("tools") or []]
+        )
+        if kwargs.get("tool_choice") == "none":
+            return _FakeResponse(
+                _FakeChoice(_FakeMessage("Sammanfattning utan fler sökningar.", None), "stop")
+            )
+        return _FakeResponse(
+            _FakeChoice(
+                _FakeMessage(None, [_tool_call("web_search", '{"query": "x"}')]),
+                "tool_calls",
+            )
+        )
+
+
+def test_webbsok_verktyget_forsvinner_nar_budgeten_ar_slut(
+    sida: AppTest, monkeypatch
+) -> None:
+    """Taket ska inte bara stoppa anropen — modellen ska sluta se verktyget, så
+    den inte fortsätter be om något den ändå inte får."""
+    monkeypatch.setattr(
+        "mcp_server.search_web", lambda *a, **k: ("webbsvar", None)
+    )
+    fejk = _FakeWebSearchClient()
+
+    class _FakeOpenAI:
+        def __init__(self, *a, **k) -> None:
+            self.chat = type("Chat", (), {"completions": fejk})()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a) -> None:
+            return None
+
+    monkeypatch.setattr("openai.AsyncOpenAI", lambda *a, **k: _FakeOpenAI())
+    _run(sida, MCP)
+    _toggle(sida, WEBBSÖK).set_value(True)
+    _slider(sida, BUDGET).set_value(2)
+    sida.run()
+    sida.chat_input[0].set_value("Vem var ordförande?").run()
+    assert not sida.exception, sida.exception
+
+    alla_namn = [namn for lista in fejk.verktygslistor for namn in lista]
+    med_webbsok = [i for i, lista in enumerate(fejk.verktygslistor) if "web_search" in lista]
+    assert med_webbsok == [0, 1], "web_search erbjuds exakt budgeten ut"
+    assert len(fejk.verktygslistor) > 2, "loopen fortsätter efter att budgeten är slut"
+    assert "search_archive" in alla_namn, "arkivverktygen ska finnas kvar"
+    svar = " ".join(m.value for m in sida.markdown if isinstance(m.value, str))
+    assert "Sammanfattning utan fler sökningar." in svar
+
+
+SÖKMODELL = "Sökmodell"
+
+
+def _med_profiler(
+    monkeypatch,
+    profiler: dict,
+    *,
+    nycklar: tuple[str, ...] = (),
+    standard: str = "",
+) -> None:
+    """Operatörens profiler i testet: sökmodellslistan byggs ur dem.
+
+    ``standard`` är förstahandsvalet från LLM-konfiguratorn (Admin).
+    """
+    monkeypatch.setattr("config.load_search_default", lambda: standard)
+    for env in ("OPENROUTER_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"):
+        monkeypatch.delenv(env, raising=False)
+    for nyckel in nycklar:
+        monkeypatch.setenv(nyckel, "test")
+    monkeypatch.setattr(
+        "config.load_all", lambda: {"profiles": profiler, "default": next(iter(profiler))}
+    )
+    monkeypatch.setattr(
+        "config.resolve_runtime_profile",
+        lambda profil, katalog, **kw: {
+            "kind": profil.get("provider") or "openai",
+            "backend_name": profil.get("backend_name") or "Test",
+            "model": profil.get("model") or "test-modell",
+            "base_url": profil.get("base_url") or "",
+            "api_key_env": profil.get("api_key_env") or "",
+            "api_key": os.environ.get(profil.get("api_key_env") or "", ""),
+            "prices": {},
+        },
+    )
+
+
+def test_sokmodellen_visar_konfigurerade_profiler(sida: AppTest, monkeypatch) -> None:
+    """Ett val i stället för två: listan är operatörens egna LLM-profiler, och
+    profilens leverantör avgör sök-API:et. Profiler utan sök-API listas inte."""
+    _med_profiler(
+        monkeypatch,
+        {
+            "Openrouter billig": {
+                "backend_name": "OpenRouter",
+                "model": "openai/gpt-4.1-nano",
+                "base_url": "https://openrouter.ai/api/v1",
+                "api_key_env": "OPENROUTER_API_KEY",
+            },
+            "Deepseek flash": {
+                "backend_name": "DeepSeek",
+                "model": "deepseek-v4-flash",
+                "base_url": "https://api.deepseek.com/v1",
+                "api_key_env": "DEEPSEEK_API_KEY",
+            },
+            "ollama": {"backend_name": "Ollama (lokal)", "base_url": "http://localhost:11434/v1"},
+        },
+        nycklar=("OPENROUTER_API_KEY",),
+    )
+    _run(sida, MCP)
+
+    val = _selectbox(sida, SÖKMODELL)
+    # Ingen "auto": valet är ett namn operatören känner igen.
+    assert val.options == ["Openrouter billig — OpenRouter, openai/gpt-4.1-nano"]
+    assert val.value == "Openrouter billig — OpenRouter, openai/gpt-4.1-nano"
+    assert val.disabled is True
+
+    _toggle(sida, WEBBSÖK).set_value(True)
+    sida.run()
+    assert _selectbox(sida, SÖKMODELL).disabled is False
+
+
+def test_konfigurerad_profil_utan_nyckel_markeras(sida: AppTest, monkeypatch) -> None:
+    """En profil vars nyckel saknas syns — med nyckeln namngiven — i stället för
+    att se ut som ett fungerande val."""
+    _med_profiler(
+        monkeypatch,
+        {
+            "Openrouter billig": {
+                "backend_name": "OpenRouter",
+                "model": "openai/gpt-4.1-nano",
+                "base_url": "https://openrouter.ai/api/v1",
+                "api_key_env": "OPENROUTER_API_KEY",
+            },
+            "Openai profil": {
+                "backend_name": "OpenAI",
+                "model": "gpt-4o-mini",
+                "base_url": "https://api.openai.com/v1",
+                "api_key_env": "OPENAI_API_KEY",
+            },
+        },
+        nycklar=("OPENROUTER_API_KEY",),
+    )
+    _run(sida, MCP)
+    _toggle(sida, WEBBSÖK).set_value(True)
+    sida.run()
+
+    assert _selectbox(sida, SÖKMODELL).options == [
+        "Openrouter billig — OpenRouter, openai/gpt-4.1-nano",
+        "Openai profil — OpenAI, gpt-4o-mini (OPENAI_API_KEY saknas)",
+    ]
+
+
+def test_standardvalet_ligger_forst_och_ar_forvalt(
+    sida: AppTest, monkeypatch, tmp_path
+) -> None:
+    """En sparad standard ska vara förstahandsval i listan — det är hela poängen
+    med att kunna sätta den."""
+    _med_profiler(
+        monkeypatch,
+        {
+            "A openrouter": {
+                "backend_name": "OpenRouter",
+                "model": "openai/gpt-4.1-nano",
+                "base_url": "https://openrouter.ai/api/v1",
+                "api_key_env": "OPENROUTER_API_KEY",
+            },
+            "B openrouter": {
+                "backend_name": "OpenRouter",
+                "model": "openai/gpt-4o-mini",
+                "base_url": "https://openrouter.ai/api/v1",
+                "api_key_env": "OPENROUTER_API_KEY",
+            },
+        },
+        nycklar=("OPENROUTER_API_KEY",),
+        standard="B openrouter",
+    )
+    _run(sida, MCP)
+
+    val = _selectbox(sida, SÖKMODELL)
+    assert val.options[0] == "B openrouter — OpenRouter, openai/gpt-4o-mini"
+    assert val.value == val.options[0]
+    assert len(val.options) == 2
+    assert _toggle(sida, WEBBSÖK).value is False
+    # Kryssrutan hör inte hit — förstahandsvalet ställs in i LLM-konfiguratorn.
+    assert not any(c.label == "Standardval för webbsök" for c in sida.sidebar.checkbox)
+
+
+def test_utan_sokbar_profil_visas_ingen_vald_sokmodell(sida: AppTest, monkeypatch) -> None:
+    """Saknas en LLM vars leverantör kan söka (den lokala testprofilen kan inte)
+    ska rutan säga det i stället för att erbjuda ett dött val."""
+    for env in ("OPENROUTER_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"):
+        monkeypatch.delenv(env, raising=False)
+    _run(sida, MCP)
+    _toggle(sida, WEBBSÖK).set_value(True)
+    sida.run()
+
+    val = _selectbox(sida, SÖKMODELL)
+    assert val.options == ["Ingen konfigurerad LLM kan söka"]
+    assert val.disabled is True
+
+
+def test_sokmodellen_overlever_ett_varv_i_rag(sida: AppTest, monkeypatch) -> None:
+    """Samma spegling som de övriga sökvalen: widgeten avmonteras i RAG-läget."""
+    _med_profiler(
+        monkeypatch,
+        {
+            "Openrouter billig": {
+                "backend_name": "OpenRouter",
+                "model": "openai/gpt-4.1-nano",
+                "base_url": "https://openrouter.ai/api/v1",
+                "api_key_env": "OPENROUTER_API_KEY",
+            }
+        },
+        nycklar=("OPENROUTER_API_KEY",),
+    )
+    _run(sida, MCP)
+    _toggle(sida, WEBBSÖK).set_value(True)
+    sida.run()
+    etikett = "Openrouter billig — OpenRouter, openai/gpt-4.1-nano"
+    _selectbox(sida, SÖKMODELL).set_value(etikett)
+    sida.run()
+
+    _run(sida, RAG)
+    _run(sida, MCP)
+
+    assert _selectbox(sida, SÖKMODELL).value == etikett

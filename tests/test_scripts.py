@@ -351,9 +351,11 @@ def test_utredning_mcp_controls_live_in_the_sidebar_only_in_mcp_mode() -> None:
     project_root = Path(__file__).resolve().parents[1]
     text = (project_root / "src" / "Utredning.py").read_text(encoding="utf-8")
 
-    settings = text.split("def _render_mcp_settings()", 1)[1].split("\ndef ", 1)[0]
+    settings = text.split("def _render_mcp_settings(", 1)[1].split("\ndef ", 1)[0]
     assert 'st.expander("Sökinställningar", expanded=False)' in settings
-    for label in ("Reranker", "Hämta top-K kandidater", "Skicka top-N till AI"):
+    for label in ("Reranker", "Hämta top-K kandidater", "Skicka top-N till AI",
+                  "Tillåt webbsök", "Sökmodell",
+                  "Högst antal webbsökningar per fråga", "Verktygsomgångar (max)"):
         assert label in settings, f"{label} saknas i utredningslägets sökinställningar"
     # MCP-verktyget har ingen facett- eller fuzzy-väg, så filtren hör inte hit.
     for label in ("Begränsa till entiteter", "OCR-tolerant fuzzy-sökning"):
@@ -361,11 +363,13 @@ def test_utredning_mcp_controls_live_in_the_sidebar_only_in_mcp_mode() -> None:
 
     # Samma spegling som RAG behöver, men åt andra hållet: MCP-widgetarna
     # avmonteras i RAG-läget, så utan stabila nycklar tappas valen vid varje byte.
-    for key in ("mcp_top_k", "mcp_top_n", "mcp_reranker_choice"):
+    for key in ("mcp_top_k", "mcp_top_n", "mcp_reranker_choice", "mcp_web_search",
+                "mcp_web_search_profile", "mcp_web_search_budget",
+                "mcp_max_turns"):
         assert f'key="{key}"' in settings, f"{key} saknas — valet tappas vid lägesbyte"
 
     # Båda sektionerna ritas bara för sitt eget läge.
-    assert "_render_rag_settings() if mode == MODE_RAG else _render_mcp_settings()" in text
+    assert "else _render_mcp_settings(" in text and "_render_mcp_settings(\n                _all_llm[\"profiles\"]" in text
     assert "if mode == MODE_MCP:" in text
 
 
@@ -417,7 +421,7 @@ def test_utredning_rag_controls_live_in_the_sidebar_only_in_rag_mode() -> None:
 
     sidebar = text.split("with st.sidebar:", 1)[1].split("def _render_mcp_tab(", 1)[0]
     assert "Visa kunskapsgraf" in sidebar
-    settings_call = "_render_rag_settings() if mode == MODE_RAG else _render_mcp_settings()"
+    settings_call = "_render_rag_settings() if mode == MODE_RAG else _render_mcp_settings("
     assert settings_call in sidebar
     # Token- och kostnadspanelen ska ligga absolut i sidofältets botten medan
     # den separata innehållscontainern scrollar och reserverar plats under sig.

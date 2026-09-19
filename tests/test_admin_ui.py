@@ -31,10 +31,16 @@ from operations.registry import OperationRegistry
 def _llm_settings_app(tmp_path, monkeypatch) -> object:
     from streamlit.testing.v1 import AppTest
 
+    import config
+
     # Panelen läser räknaren ur state.db — peka den på en testdatabas så testet
     # aldrig rör utvecklarens riktiga state.db.
     monkeypatch.setenv("STATE_DB", str(tmp_path / "state.db"))
     config_file = tmp_path / "llm_config.json"
+    # AppTest-skriptet sätter config.CONFIG_FILE globalt i den här processen, så
+    # testet måste återställa den — annars läser efterföljande tester en tmp-fil
+    # (med bl.a. web_search_default) i stället för den riktiga konfigurationen.
+    monkeypatch.setattr(config, "CONFIG_FILE", config_file)
     config_file.write_text(
         json.dumps(
             {
@@ -584,9 +590,12 @@ def test_llm_settings_uses_provider_model_catalog_when_available(tmp_path, monke
     """Regression: Admin ska visa /v1/models, inte bara den statiska reservlistan."""
     from streamlit.testing.v1 import AppTest
 
+    import config
+
     config_file = tmp_path / "llm_config.json"
     config_file.write_text(json.dumps({}), encoding="utf-8")
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+    monkeypatch.setattr(config, "CONFIG_FILE", config_file)
     app = AppTest.from_string(
         "from pathlib import Path\n"
         "import admin_ui, backends, config, streamlit as st\n"
@@ -610,9 +619,13 @@ def test_llm_settings_uses_provider_model_catalog_when_available(tmp_path, monke
     ]
 
 
-def test_pipeline_form_reveals_default_llm_profile_only_when_enabled(tmp_path) -> None:
+def test_pipeline_form_reveals_default_llm_profile_only_when_enabled(
+    tmp_path, monkeypatch
+) -> None:
     """Regression: pipelineprofilen ska endast synas och skickas vid LLM-korrigering."""
     from streamlit.testing.v1 import AppTest
+
+    import config
 
     config_file = tmp_path / "llm_config.json"
     config_file.write_text(
@@ -624,6 +637,7 @@ def test_pipeline_form_reveals_default_llm_profile_only_when_enabled(tmp_path) -
         ),
         encoding="utf-8",
     )
+    monkeypatch.setattr(config, "CONFIG_FILE", config_file)
     app = AppTest.from_string(
         "from pathlib import Path\n"
         "import admin_ui, config\n"
@@ -1389,3 +1403,39 @@ def test_missing_required_field_names_the_label(tmp_path, monkeypatch) -> None:
     form = _picker_form(tmp_path, monkeypatch, "ocr-pages")
 
     assert [error.value for error in form.error] == ["Välj ett värde för: PDF-fil"]
+
+
+def test_llm_settings_satter_forstahandsval_for_webbsok(tmp_path, monkeypatch) -> None:
+    """Förstahandsvalet för webbsök hör till LLM-konfigurationen och sätts med en
+    kryssruta i profilformuläret, som "Använd som standardkonfiguration"."""
+    app = _llm_settings_app(tmp_path, monkeypatch)
+
+    ruta = next(
+        item for item in app.checkbox if item.label == "Använd som standard för webbsök"
+    )
+    # Testprofilen är Claude — Anthropic har en sök-API, så rutan går att kryssa i.
+    assert ruta.disabled is False
+    assert ruta.value is False
+
+    ruta.set_value(True)
+    next(button for button in app.button if button.label == "Spara ändringar").click()
+    app.run(timeout=20)
+
+    assert not app.exception
+    assert json.loads(
+        (tmp_path / "llm_config.json").read_text(encoding="utf-8")
+    )["web_search_default"] == "Standard"
+
+
+def test_llm_settings_sokrutan_ar_grad_for_osokbar_tjanst(tmp_path, monkeypatch) -> None:
+    """En tjänst utan sök-API (DeepSeek, Ollama, custom) kan inte vara
+    förstahandsval — rutan ska vara grå och hjälpen säga varför."""
+    app = _llm_settings_app(tmp_path, monkeypatch)
+    next(item for item in app.selectbox if item.label == "Tjänst").set_value("DeepSeek")
+    app.run(timeout=20)
+
+    ruta = next(
+        item for item in app.checkbox if item.label == "Använd som standard för webbsök"
+    )
+    assert ruta.disabled is True
+    assert "ingen sök-API" in (ruta.help or "")

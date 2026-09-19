@@ -524,7 +524,10 @@ sökningar i samma fråga.
 | Reranker | BGE / Jev / Ingen | BGE | Hur kandidaterna sorteras om i varje sökning. Jev kräver `OPENROUTER_API_KEY`, debiterar per anrop och tar ~5 s per sökning vid 50 kandidater. |
 | Hämta top-K kandidater | 5–50 | 50 | Kandidater per sökning som rerankern får välja bland. Taket 50 är verktygets eget (`search_archive` annonserar 5–50). |
 | Skicka top-N till AI | 1–15 | 6 | Utdrag per sökning som går till modellen. Modellens flera sökningar lägger sina utdrag till samma kontext — håll N lågt. |
+| Verktygsomgångar (max) | 3–30 | 15 | Antal omgångar modellen får använda verktyg i. En omgång kan innehålla **flera** anrop (15 omgångar blev 29 anrop i en mätning), så taket räknar turer. Nås taket tvingas ett svar fram på det hämtade underlaget. |
+| Högst antal webbsökningar per fråga | 1–20 | 3 | Tak för antalet **betalda** sökningar (~$0,007 per styck). Grå när webbsök är avstängt. |
 | Tillåt webbsök | på/av | av | Ger modellen `web_search`, som söker utanför arkivet. Se [Webbsökning i utredningsläget](#webbsökning-i-utredningsläget). |
+| Sökmodell | dina LLM-profiler | förstahandsvalet | Vilken av dina **konfigurerade LLM-profiler** som gör sökningen. Profilens leverantör avgör sök-API:et och profilens modell gör anropet, så man slipper välja både API och modell — och byter man här gäller det bara frågorna man ställer, inte vilken modell som svarar. Listan byggs ur `generated/llm_config.json`: DeepSeek, Ollama och custom-endpoints har ingen sök-API och listas inte. Profilen som är **förstahandsval** (kryssrutan **Använd som standard för webbsök** i LLM-konfigurationen, `web_search_default` i `generated/llm_config.json`) ligger först i listan och är förvald. Finns inget förstahandsval används standardkonfigurationen om den kan söka, annars första sökbara profilen — det finns ingen "auto"-post, valet är alltid ett namn man känner igen. Grå när webbsök är avstängt. |
 
 **Operatörens val går före modellens argument** för reranker, `top_k` och
 `top_n`: reranker-valet är en driftfråga (kostnad, nätverk, API-nyckel), inte en
@@ -600,7 +603,9 @@ råmaterialet och måste citera det.
   det som styr är källan och datumet, inte en egen gallringsregel. Arkivets
   uppgifter om en person upprepas inte som nuläge.
 - **Tursgränsen har ett tvingat svar.** Utredningsläget ger modellen högst
-  `MAX_MCP_TURNS` (15) verktygsomgångar. Med webbsök påslaget gick tio turer lätt
+  **Verktygsomgångar (max)** (3–30, standard 15) verktygsomgångar — Claude-vägen
+  hade tidigare ett eget tak på 10, men båda styrs nu av samma ratt. Med webbsök
+  påslaget gick tio turer lätt
   åt till att söka, och då visades tidigare bara "Svar avklippt — modellen nådde
   gränsen för antal verktygsanrop" i stället för ett svar. Nu görs en sista
   förfrågan med `tool_choice="none"`, så det redan hämtade underlaget alltid
@@ -612,15 +617,53 @@ råmaterialet och måste citera det.
 - **wpu.nu utesluts som källa.** wpu.nu är en spegling av arkivet självt, så
   träffar därifrån är ingen självständig källa och tränger ut riktiga nätkällor.
   Domen skickas som `exclude_domains` ("wpu.nu" och "*.wpu.nu") till
-  OpenRouter — och filtreras dessutom bort lokalt i `mcp_server.web_hits`, eftersom
+  OpenRouter — och filtreras dessutom bort lokalt i
+  `mcp_server._hits_from_annotations` och `_search_anthropic`, eftersom
   filtret är motorns ansvar och OpenAI-motorn ignorerar det. En wpu.nu-adress kan
   fortfarande stå inne i en *annan* sajts citat eller foruminlägg; det är sajtens
   egen text och rörs inte, men wpu.nu är aldrig den märkta källan.
-- **Nyckel och kostnad.** Verktyget kräver `OPENROUTER_API_KEY` oberoende av
-  vilken LLM-backend som är vald, och kostar en sökavgift hos OpenRouter per
-  anrop (~$0,007 för Exa auto, upp till 10 träffar; `max_results` 3–10). Avgiften
-  syns inte i något tokenfält, utan bokförs via `usage.cost` — se
-  [Token och kostnad per profil](#token-och-kostnad-per-profil). Saknas nyckeln
+- **Taket för betalda sökningar.** Webbsökningar är den enda utgiften per anrop
+  (~$0,007), så antalet begränsas av **Högst antal webbsökningar per fråga**
+  (1–20, standard 3). OpenAI-vägen tar bort `web_search` ur verktygslistan när
+  taket är nått, så modellen slutar se verktyget i stället för att fortsätta be
+  om det; Claude-vägen får taket via `MCP_WEB_SEARCH_BUDGET` och servern svarar
+  "budgeten är slut". Serverns räknare är per process, vilket är per fråga
+  eftersom servern startas per fråga — i den långlivade Streamlit-processen
+  nollställs den av sidan vid varje fråga. Arkivsökningarna är gratis och styrs i
+  stället av **Verktygsomgångar (max)**.
+- **Leverantören är inte låst till OpenRouter.** Det finns ingen gemensam sök-API:
+  varje leverantör har sin mekanism, så `search_web` väljer väg efter den valda
+  **sökmodellen** (en LLM-profil) och alla vägar svarar med samma
+  url_citation-form (url, titel, utdrag) — `format_web_hits`, wpu.nu-undantaget
+  och budgeten delas.
+
+  | Leverantör | Mekanism | Nyckel | Kostnad i räknaren |
+  | --- | --- | --- | --- |
+  | OpenRouter | chat/completions med `plugins: [{id: "web"}]` (Exa-motorn) | `OPENROUTER_API_KEY` | ja, ur `usage.cost` |
+  | OpenAI | Responses-API:et med verktyget `web_search` | `OPENAI_API_KEY` | nej — faktureras separat och rapporteras inte |
+  | Anthropic | Messages-API:et med serververktyget `web_search` | `ANTHROPIC_API_KEY` | nej — faktureras separat och rapporteras inte |
+
+  **`auto`** följer LLM-profilens endpoint (`openrouter.ai`, `api.openai.com`,
+  `api.anthropic.com` eller en Claude-profil), så kör du en OpenRouter-modell
+  används OpenRouter-nyckeln utan att någon ny profil behövs. En vald sökprofil
+  använder sin egen endpoint, modell och nyckel (`api_key_env`), oberoende av
+  vilken profil frågan besvaras av — vill du låta en billig OpenRouter-profil göra
+  sökningarna medan en annan modell svarar är det hela poängen. Sidofältet varnar
+  när nyckeln för vald profil saknas.
+
+  **OpenAI- och Anthropic-vägarna är best effort.** De är skrivna mot respektive
+  dokumenterade svarsformat (`output[*].content[*].annotations[*].url_citation`
+  respektive `web_search_tool_result`) och enhetstestade mot mockad klient, men
+  har inte kunnat köras live härifrån eftersom bara OpenRouter- och
+  DeepSeek-nycklar funnits tillgängliga. Anthropic returnerar ingen sidtext i
+  sökresultatet, så träffarna får url och titel utan utdrag.
+- **Nyckel och kostnad.** Verktyget kräver nyckeln för vald leverantör, oberoende
+  av vilken LLM-backend som är vald. OpenRouter debiterar en sökavgift per anrop
+  (~$0,007 för Exa auto, upp till 10 träffar; `max_results` 3–10); avgiften syns
+  inte i något tokenfält utan bokförs via `usage.cost` — se
+  [Token och kostnad per profil](#token-och-kostnad-per-profil). OpenAI och
+  Anthropic fakturerar sökningen separat utan att rapportera den i svaret, så där
+  står `kostnad okänd` och summan märks ofullständig. Saknas nyckeln
   när valet är på visas en varning i sidofältet och anropet loggas i
   `errors.log`; annars går ett dött webbsök inte att skilja från ett verktyg
   modellen aldrig valde.
@@ -998,6 +1041,7 @@ OpenAI-kompatibel endpoint anger profilen endast miljövariabelns namn i
 |---|---|
 | `provider` | `claude` eller `openai`; DeepSeek, OpenRouter, Ollama och egna endpoints använder det OpenAI-kompatibla protokollet |
 | `model` | t.ex. `claude-opus-4-8`, `gpt-4o`, `deepseek-v4-flash`, `openai/gpt-4o` (OpenRouter) |
+| `default` / `web_search_default` | Standardprofilen för sidor och operationer, respektive profilen som är förstahandsval för webbsök i utredningsläget. Den första sätts med kryssrutan **Använd som standardkonfiguration**, den andra med **Använd som standard för webbsök** (grå för tjänster utan sök-API). Ett namnbyte följer med, och `web_search_default` som pekar på en borttagen profil faller tillbaka på standardkonfigurationen. |
 | `base_url` | Tomt för molntjänster; URL för lokal endpoint (`http://localhost:11434/v1` för Ollama) |
 | `backend_name` | Visningsnamn i gränssnittet (valfritt) |
 | `api_key_env` | Namnet på miljövariabeln som innehåller API-nyckeln; aldrig nyckelvärdet |

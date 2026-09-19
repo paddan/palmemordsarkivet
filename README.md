@@ -94,11 +94,15 @@ webbsök** under *Sökinställningar*. Sökningar görs också för att kontroll
 samtida företeelser när arkivet svarar, och modellen ska märka varje uppgift
 därifrån som `[webbkälla: domän, titel](url)` och säga att den kommer från
 internet, aldrig citera den som arkivmaterial. Avstängt som standard: det kräver
-`OPENROUTER_API_KEY` och debiterar en sökavgift per anrop.
+en söknyckel och debiterar en sökavgift per anrop. Sökningen är inte låst till
+OpenRouter — **Sökmodell** låter dig välja vilken av dina konfigurerade
+LLM-profiler som gör sökningen (profilens leverantör avgör sök-API:et), och
+**Standardval för webbsök** gör valet till förstahandsval nästa gång.
 
 Läget väljs med en segmenterad kontroll högst upp: **Fråga arkivet (RAG)** och
 **Utredningsläge (MCP)**. Båda lärna har en hopfällbar sektion *Sökinställningar* i
-sidofältet (minimerad som standard) med reranker, top-K och top-N. I RAG-läget
+sidofältet (minimerad som standard) med reranker, top-K, top-N, antal
+verktygsomgångar och tak för antalet webbsökningar per fråga. I RAG-läget
 finns dessutom facetter och OCR-tolerant fuzzy-sökning, och rattarna gäller den
 enda sökningen; i utredningsläget gäller de varje sökning modellen gör. Chatten
 och **Ny konversation** finns bara i utredningsläget. Sidofältet visar dessutom LLM-profilen, kunskapsgrafens

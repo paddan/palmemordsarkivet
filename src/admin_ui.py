@@ -525,8 +525,9 @@ skriva programkod eller ange alla parametrar; modellen får verktygens schema.
 - `search_archive`: söker textutdrag i arkivet. `query` är sökfrågan på svenska.
   `top_k=50` anger antal kandidater (5–50), `top_n=6` antal träffar (1–15).
   `hybrid=true` kombinerar vektor- och ordsökning när det stöds;
-  `rerank=true` omrankar träffarna för relevans. Sökdjupet, rerankern och antalet
-  träffar styrs av operatören i gränssnittet, så modellen behöver inte ange dem.
+  `rerank=true` omrankar träffarna för relevans. Sökdjupet, rerankern, antalet
+  träffar, antalet verktygsomgångar och taket för webbsökningar per fråga styrs
+  av operatören i gränssnittet, så modellen behöver inte ange dem.
 - `get_page`: läser texten på en sida. `source` ska vara det exakta filnamnet
   från sökträffens `source`-rad, och `page` sidnumret räknat från 1. Raden visar
   filnamnet som en JSON-sträng; verktyget ska få strängens värde. Be modellen
@@ -813,6 +814,30 @@ def render_llm_settings() -> None:
         backend = backends.BACKENDS[backend_name]
         field_defaults = llm_form_defaults(profile, backend_name, backend)
 
+        # Förstahandsval för webbsök: samma form som "Använd som
+        # standardkonfiguration" — en kryssruta per profil, applicerad när
+        # formuläret sparas. Bara profiler vars leverantör har en sök-API kan
+        # väljas; DeepSeek, Ollama och custom-endpoints har ingen.
+        sparad_sok_standard = llm_config.load_search_default()
+        sokbar = backends.provider_from_endpoint(
+            field_defaults["base_url"], backend["kind"]
+        ) is not None
+        make_web_search_default = st.checkbox(
+            "Använd som standard för webbsök",
+            value=not creating and selected == sparad_sok_standard,
+            key=f"llm_web_search_default_{profile_key}",
+            disabled=not sokbar,
+            help=(
+                "Profilen ligger då först och är förvald i **Sökmodell** i "
+                "utredningslägets sökinställningar. Det är här man pekar ut en billig "
+                "konfiguration för sökningarna — sökträffarna kommer från sökmotorn, "
+                "inte från modellen. "
+                + ("" if sokbar else
+                   f"**{backend_name}** har ingen sök-API, så den kan inte vara "
+                   "förstahandsval för webbsök.")
+            ),
+        )
+
         saved_model = field_defaults["model"]
         base_url_key = f"llm_base_url_{profile_key}_{backend_name}"
         api_key_env_key = f"llm_api_key_env_{profile_key}_{backend_name}"
@@ -947,7 +972,16 @@ def render_llm_settings() -> None:
                 st.error(str(exc))
             else:
                 saved_name = name.strip()
-                llm_config.save_profiles(updated, updated_default)
+                llm_config.save_profiles(
+                    updated,
+                    updated_default,
+                    web_search_default=apply_web_search_default_form(
+                        saved_name=saved_name,
+                        selected_name=None if creating else selected,
+                        checked=make_web_search_default,
+                        current=sparad_sok_standard,
+                    ),
+                )
                 if not creating and saved_name != selected:
                     # Räknaren följer med vid namnbyte i stället för att lämnas kvar.
                     db.rename_llm_usage(conn, selected, saved_name)
@@ -988,6 +1022,23 @@ def llm_form_defaults(
         "base_url": str(source.get("base_url") or backend.get("base_url") or ""),
         "api_key_env": str(source.get("api_key_env") or backend.get("env") or "").strip(),
     }
+
+
+def apply_web_search_default_form(
+    *, saved_name: str, selected_name: str | None, checked: bool, current: str
+) -> str:
+    """Förstahandsvalet för webbsök efter ett sparat profilformulär.
+
+    - Ett namnbyte följer med, annars pekar valet på en profil som inte finns.
+    - Ikryssad ruta gör den här profilen till förstahandsval.
+    - Urkryssad ruta tar bort valet, men bara om det var den här profilen.
+    """
+    if not selected_name and checked:
+        return saved_name
+    ny = saved_name if (selected_name and selected_name == current) else current
+    if checked:
+        return saved_name
+    return "" if ny == saved_name else ny
 
 
 def apply_llm_profile_form(

@@ -27,6 +27,14 @@ _RERANKERS = {
     "Ingen": "none",
 }
 
+# Visningsnamn i rullistan. Nycklarna är mcp_server.WEB_SEARCH_PROVIDERS.
+_WEB_SEARCH_LABELS: dict[str, str] = {
+    "openrouter": "OpenRouter",
+    "openai": "OpenAI",
+    "anthropic": "Anthropic",
+}
+
+
 # Startvärden för sökvalen i båda lärna. Widgetnycklarna (reranker_choice, rag_*,
 # mcp_*) försvinner när sektionen avmonteras — Streamlit raderar state för
 # widgets som inte ritas i körningen — så varje val speglas i "<key>_sparad" via
@@ -54,7 +62,56 @@ _SOKVAL_DEFAULT: dict[str, Any] = {
     # Webbsök är avstängt som standard: det kostar en avgift per anrop hos
     # OpenRouter (~$0,007) och får bara användas när arkivet inte räcker.
     "mcp_web_search": False,
+    # Taket för antal verktygsomgångar (modellen kan begära flera anrop per tur)
+    # och för antalet betalda webbsökningar per fråga. Utan webbsökstak gjorde en
+    # körning 16 sökningar (~$0,12) efter ett faktum som inte fanns på nätet.
+    "mcp_max_turns": 15,
+    "mcp_web_search_budget": 3,
+    # Vilken leverantör som gör själva sökningen. auto följer LLM-profilens
+    # endpoint och faller annars på första nyckel som finns.
 }
+
+# Gränser för rattarna; samma tal används för att klämma av ett värde som kommer
+# in från en sparad session.
+MCP_TURNS_MIN = 3
+MCP_TURNS_MAX = 30
+MIN_WEB_SEARCH_BUDGET = 1
+MAX_WEB_SEARCH_BUDGET = 20  # hålls i synk med mcp_server.WEB_SEARCH_BUDGET_MAX
+
+
+def _search_key_env(profilnamn: str) -> str:
+    """Miljövariabeln med nyckeln för en vald sökprofil ('' = okänd)."""
+    profil = (_llm_config.load_all().get("profiles") or {}).get(profilnamn) or {}
+    try:
+        löst = _llm_config.resolve_runtime_profile(profil, BACKENDS)
+    except ValueError:
+        return ""
+    nyckel_namn: str = str(löst.get("api_key_env") or "")
+    if nyckel_namn:
+        return nyckel_namn
+    provider = _mcp_server_module().provider_from_endpoint(
+        löst.get("base_url"), löst.get("kind")
+    )
+    return str(_mcp_server_module().PROVIDER_KEYS.get(provider or "", ""))
+
+
+def _mcp_server_module():
+    """mcp_server importeras på anrop (tung modul, behövs inte vid sidladdning)."""
+    import mcp_server  # noqa: PLC0415
+
+    return mcp_server
+
+
+def _mcp_limits(search: dict) -> tuple[int, int]:
+    """(verktygsomgångar, webbsöksbudget) ur sökinställningarna.
+
+    Klämmer av värden som kommer från en sparad session, så en gammal dict utan
+    nycklarna ger standardvärdena i stället för ett fel."""
+    import mcp_server  # noqa: PLC0415
+
+    varv = min(max(int(search.get("max_turns") or MAX_MCP_TURNS), MCP_TURNS_MIN), MCP_TURNS_MAX)
+    budget = mcp_server.clamp_web_search_budget(search.get("web_search_budget"))
+    return varv, budget
 
 
 def _spara_sokval(key: str) -> None:
@@ -62,11 +119,21 @@ def _spara_sokval(key: str) -> None:
     st.session_state[f"{key}_sparad"] = st.session_state[key]
 
 
-def _aterstall_sokval(key: str) -> None:
-    """Sätt widgetens startvärde ur speglingen innan widgeten skapas."""
+def _aterstall_sokval(key: str, standard: Any = None) -> None:
+    """Sätt widgetens startvärde ur speglingen innan widgeten skapas.
+
+    ``standard`` gäller nycklar som inte står i _SOKVAL_DEFAULT, t.ex. en sökmodell
+    per leverantör.
+    """
+    if standard is not None and key not in _SOKVAL_DEFAULT:
+        st.session_state.setdefault(
+            key, st.session_state.setdefault(f"{key}_sparad", standard)
+        )
+        return
     st.session_state.setdefault(
         key, st.session_state.setdefault(f"{key}_sparad", _SOKVAL_DEFAULT[key])
     )
+
 
 # Utredning-sidans två lägen, valda med en segmenterad kontroll i stället för
 # st.tabs: flikkomponenten kör båda kropparna varje rerun och rapporterar inte
@@ -358,14 +425,17 @@ def _render_rag_settings() -> dict[str, Any]:
     }
 
 
-def _render_mcp_settings() -> dict[str, Any]:
-    """Utredningslägets sökval (reranker, top-K/N, webbsök) i sidofältet.
+def _render_mcp_settings(profiles: dict | None = None) -> dict[str, Any]:
+    """Utredningslägets sökval (reranker, top-K/N, webbsök, budget) i sidofältet.
+
+    ``profiles`` är operatörens LLM-profiler; de bygger sökmodellslistan.
 
     Samma tre rattar som RAG-läget, men de gäller **per verktygsanrop**:
     modellen söker själv och kan göra flera sökningar i samma fråga.
     Inställningarna går före modellens egna argument — se
     :func:`mcp_server.resolve_search_policy`.
     """
+    import mcp_server  # noqa: PLC0415
     with st.expander("Sökinställningar", expanded=False):
         _aterstall_sokval("mcp_reranker_choice")
         reranker_label = st.selectbox(
@@ -424,23 +494,119 @@ def _render_mcp_settings() -> dict[str, Any]:
                 "nulägesfrågor (\"i dag\", \"numera\") som ligger efter materialets "
                 "tid. Modellen ska märka varje sådan uppgift som "
                 "**[webbkälla: domän, titel](url)** i stället för [Nr X, sida Y]. "
-                "Kräver `OPENROUTER_API_KEY` (oberoende av vald LLM-backend) och "
-                "debiterar en sökavgift hos OpenRouter per anrop (~$0,007, upp till "
-                "10 träffar); kostnaden bokförs i tokenräknaren."
+                "Sökningen görs av sökmodellen nedan och kostar en sökavgift per "
+                "anrop; kostnaden bokförs i tokenräknaren när leverantören "
+                "rapporterar den."
             ),
         )
-        if web_search and not os.environ.get("OPENROUTER_API_KEY"):
-            # Annars blir ett påslaget webbsök tyst dött: verktyget svarar med en
-            # feltext som modellen kan välja att inte nämna.
-            st.warning(
-                "Webbsök kräver att OPENROUTER_API_KEY är satt i miljön. "
-                "Modellen får verktyget, men varje anrop svarar att nyckeln saknas."
+        # Ett val: bland operatörens egna LLM-profiler. Profilens leverantör
+        # bestämmer sök-API:et och profilens modell gör sök-anropet, så man slipper
+        # välja både API och modell. DeepSeek, Ollama och custom-endpoints har
+        # ingen sök-API och listas därför inte.
+        valbara_profiler = mcp_server.search_profiles(profiles or {}, BACKENDS)
+        standard_profil = _llm_config.load_search_default()
+        if not any(val["name"] == standard_profil for val in valbara_profiler):
+            # Inget (eller ett dött) förstahandsval: standardkonfigurationen om den
+            # kan söka, annars första sökbara profilen. Ingen "auto" — valet ska
+            # vara ett namn man känner igen.
+            standard_konfig = str(_llm_config.load_all().get("default") or "")
+            standard_profil = next(
+                (val["name"] for val in valbara_profiler if val["name"] == standard_konfig),
+                valbara_profiler[0]["name"] if valbara_profiler else "",
             )
+        # Förstahandsvalet står först och är förvalt.
+        ordning = sorted(valbara_profiler, key=lambda val: (val["name"] != standard_profil,))
+        profil_etikett: dict[str, str] = {}
+        sokmodell_etiketter: list[str] = []
+        for val in ordning:
+            etikett = f"{val['name']} — {_WEB_SEARCH_LABELS[val['provider']]}, {val['model']}"
+            if not os.environ.get(val["key_env"]):
+                etikett += f" ({val['key_env']} saknas)"
+            profil_etikett[etikett] = val["name"]
+            sokmodell_etiketter.append(etikett)
+        if sokmodell_etiketter:
+            _aterstall_sokval("mcp_web_search_profile", sokmodell_etiketter[0])
+            sokmodell_etikett = st.selectbox(
+                "Sökmodell",
+                sokmodell_etiketter,
+                key="mcp_web_search_profile",
+                on_change=_spara_sokval,
+                args=("mcp_web_search_profile",),
+                disabled=not web_search,
+                help=(
+                    "Vilken av dina konfigurerade LLM-profiler som gör sökningen. "
+                    "Profilens leverantör avgör sök-API:et (OpenRouter använder sitt "
+                    "`web`-plugin, OpenAI sitt `web_search`-verktyg i Responses-API:et, "
+                    "Anthropic `web_search` i Messages-API:et) och profilens modell "
+                    "gör själva anropet. En billig profil räcker: sökträffarna kommer "
+                    "från sökmotorn, inte från modellen. Förstahandsvalet ställs in i "
+                    "**Admin → Inställningar → LLM-konfigurationer**."
+                ),
+            )
+            vald_profil = profil_etikett.get(sokmodell_etikett, "")
+            vald_nyckel = next(
+                (val["key_env"] for val in valbara_profiler if val["name"] == vald_profil), ""
+            )
+            if web_search and vald_nyckel and not os.environ.get(vald_nyckel):
+                # Annars blir ett påslaget webbsök tyst dött: verktyget svarar med en
+                # feltext som modellen kan välja att inte nämna.
+                st.warning(
+                    f"Webbsök via **{vald_profil}** kräver att `{vald_nyckel}` är satt "
+                    "i miljön. Modellen får verktyget, men varje anrop svarar att "
+                    "nyckeln saknas."
+                )
+        else:
+            st.selectbox(
+                "Sökmodell",
+                ["Ingen konfigurerad LLM kan söka"],
+                disabled=True,
+                help=(
+                    "Webbsök kräver en LLM-konfiguration vars leverantör har en "
+                    "sök-API (OpenRouter, OpenAI eller Anthropic). Lägg till en sådan "
+                    "i Admin → Inställningar → LLM-konfigurationer."
+                ),
+            )
+            vald_profil = ""
+        _aterstall_sokval("mcp_web_search_budget")
+        web_search_budget = st.slider(
+            "Högst antal webbsökningar per fråga",
+            MIN_WEB_SEARCH_BUDGET,
+            MAX_WEB_SEARCH_BUDGET,
+            key="mcp_web_search_budget",
+            on_change=_spara_sokval,
+            args=("mcp_web_search_budget",),
+            disabled=not web_search,
+            help=(
+                "Tak för antalet **betalda** webbsökningar i en fråga (~$0,007 per "
+                "sökning hos OpenRouter). Nås taket tas verktyget bort för resten av "
+                "frågan — modellen sammanfattar då med det underlag den har. Sättet "
+                "att bara begränsa kostnaden; arkivsökningarna är gratis och styrs av "
+                "verktygsomgångarna i stället."
+            ),
+        )
+        _aterstall_sokval("mcp_max_turns")
+        max_turns = st.slider(
+            "Verktygsomgångar (max)",
+            MCP_TURNS_MIN,
+            MCP_TURNS_MAX,
+            key="mcp_max_turns",
+            on_change=_spara_sokval,
+            args=("mcp_max_turns",),
+            help=(
+                "Antal omgångar modellen får använda verktyg i. En omgång kan "
+                "innehålla **flera** anrop — 15 omgångar blev 29 anrop i en körning — "
+                "så taket räknar turer, inte sökningar. Nås taket tvingas ett svar "
+                "fram på det som redan hämtats, i stället för en ofullständig rad."
+            ),
+        )
     return {
         "reranker_mode": reranker_mode,
         "top_k": top_k,
         "top_n": top_n,
         "web_search": web_search,
+        "web_search_profile": vald_profil,
+        "web_search_budget": web_search_budget,
+        "max_turns": max_turns,
     }
 
 
@@ -715,7 +881,9 @@ with st.sidebar:
         # tillbaka samma dict. `mode` är normaliserat till RAG (kontrollen kan
         # avmarkeras), så det finns alltid ett komplett set att skicka in.
         sokval: dict[str, Any] = (
-            _render_rag_settings() if mode == MODE_RAG else _render_mcp_settings()
+            _render_rag_settings() if mode == MODE_RAG else _render_mcp_settings(
+                _all_llm["profiles"]
+            )
         )
     # Token & kostnad är ett syskon till den scrollbar innehållscontainern.
     # Den skapas sist, men CSS gör bottenplatsen fysisk i stället för bara
@@ -821,6 +989,21 @@ async def stream_mcp(
     web_search_on = bool(search.get("web_search"))
     if web_search_on and os.environ.get("OPENROUTER_API_KEY"):
         env["OPENROUTER_API_KEY"] = os.environ["OPENROUTER_API_KEY"]
+    max_turns, web_search_budget = _mcp_limits(search)
+    provider = str(search.get("web_search_profile") or "")
+    # Taket för betalda sökningar följer med till servern, som räknar per process
+    # (servern startas per fråga) och svarar att budgeten är slut.
+    if web_search_on:
+        env[mcp_server.ENV_WEB_SEARCH_BUDGET] = str(web_search_budget)
+        if search.get("web_search_profile"):
+            # Servern löser profilens leverantör och modell själv; bara nyckeln
+            # behöver följa med in i den avskärmade subprocessmiljön.
+            env[mcp_server.ENV_WEB_SEARCH_PROFILE] = str(search["web_search_profile"])
+            nyckel_namn = _search_key_env(str(search["web_search_profile"]))
+            if nyckel_namn and os.environ.get(nyckel_namn):
+                env[nyckel_namn] = os.environ[nyckel_namn]
+        else:
+            env[mcp_server.WEB_SEARCH_PROVIDER_ENV] = provider
     options = ClaudeAgentOptions(
         system_prompt=mcp_prompt(),
         model=cfg["model"],
@@ -834,7 +1017,7 @@ async def stream_mcp(
         ],
         thinking=ThinkingConfigAdaptive(type="adaptive"),
         effort="high",
-        max_turns=10,
+        max_turns=max_turns,
         setting_sources=[],
         resume=resume_id,
     )
@@ -1074,22 +1257,31 @@ async def stream_openai_mcp(
     """
     import json  # noqa: PLC0415
 
+    import mcp_server  # noqa: PLC0415
     from openai import AsyncOpenAI  # noqa: PLC0415
     from openai.types.chat import ChatCompletionMessageFunctionToolCall  # noqa: PLC0415
 
     api_key = cfg.get("api_key") or "ollama"
     tool_count = 0
     turns_usage: dict = {}
+    # Taket för betalda sökningar ligger i serverns räknare (samma modul, den här
+    # processen), och nollställs här så budgeten gäller per fråga. Modellen ser
+    # inte verktyget när taket är nått.
+    max_turns, web_search_budget = _mcp_limits(search)
+    web_search_on = bool(search.get("web_search"))
+    mcp_server.set_web_search_budget(web_search_budget)
+    mcp_server.set_web_search_profile(search.get("web_search_profile"))
+    web_searches = 0
     # Leverantörens rapporterade kostnad (OpenRouter) summeras för sig: den
     # innehåller webbsökningens avgift, som inte syns i några token.
     verktygs_och_provider_kostnad: float | None = None
     try:
         async with AsyncOpenAI(api_key=api_key or "ollama", base_url=cfg["base_url"]) as client:
-            for _turn in range(MAX_MCP_TURNS):
+            for _turn in range(max_turns):
                 response = await client.chat.completions.create(
                     model=cfg["model"],
                     messages=messages,
-                    tools=active_tools(bool(search.get("web_search"))),
+                    tools=active_tools(web_search_on and web_searches < web_search_budget),
                 )
                 # Icke-strömmande svar: usage per tur, summeras över turerna.
                 _llm_usage.add_usage(
@@ -1118,6 +1310,8 @@ async def stream_openai_mcp(
                             continue
                         args = json.loads(tc.function.arguments)
                         tool_count += 1
+                        if tc.function.name == WEB_SEARCH_TOOL:
+                            web_searches += 1
                         status_box.write(_mcp_tool_label(tc.function.name, args))
                         result, verktygskostnad = _run_tool(tc.function.name, args, search)
                         if verktygskostnad is not None:
