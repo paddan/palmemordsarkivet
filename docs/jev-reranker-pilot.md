@@ -2,11 +2,11 @@
 
 Jev gav bättre källurval i detta lilla test, med nästan samma uppmätta svarstid som nuvarande BGE. Resultatet motiverar fortsatt utvärdering, men räcker inte för ett automatiskt byte av standardmodell. Produktionskod, inställningar och index har inte ändrats.
 
-> **Efter piloten:** Ett experimentellt Jev-val har lagts till i RAG-flikens
+> **Efter piloten:** Ett experimentellt Jev-val har lagts till i RAG-lägets
 > sökinställningar. BGE är fortfarande standard. Pilotens resultat och påståendet
 > ovan om oförändrad produktionskod beskriver själva mättillfället.
 >
-> Vid manuell användning i RAG-fliken har BGE hittills gett bättre urval än Jev.
+> Vid manuell användning i RAG-läget har BGE hittills gett bättre urval än Jev.
 > Det är en användarerfarenhet från enstaka frågor, inte en mätning, och den
 > motsäger därför inte pilotens siffror. Jev-läget behålls som opt-in för att
 > kunna testas vidare; BGE förblir standard tills en större granskad jämförelse
@@ -15,7 +15,7 @@ Jev gav bättre källurval i detta lilla test, med nästan samma uppmätta svars
 ## Upplägg
 
 - 10 svenska frågor, 20 frysta kandidater per fråga och 6 slutliga utdrag.
-- Samma vektorsökning som RAG-fliken (`ask.search`, `intfloat/multilingual-e5-large`). Ingen fuzzy-sökning eller facettfiltrering. MCP:s hybridsökning testades inte.
+- Samma vektorsökning som RAG-läget (`ask.search`, `intfloat/multilingual-e5-large`). Ingen fuzzy-sökning eller facettfiltrering. MCP:s hybridsökning testades inte.
 - Samma textutdrag gavs till lokal `BAAI/bge-reranker-v2-m3` och OpenRouter `typesafe/jev-1.13`. Jev svarade med `typesafe/jev-1.13-20260917` via `/api/alpha/decisions`.
 - Jev bedömde varje fråga–utdrag-par med en fast Noul-fråga; högst fyra anrop samtidigt. Instruktionerna var på engelska, arkivfrågor och utdrag på svenska. Inga dokumenttitlar gavs till någondera rerankern.
 - Tre subagenter gjorde blinda relevansbedömningar utan att se modellernas poäng eller ordning. 0 = fel/irrelevant, 1 = relevant bakgrund, 2 = konkret belägg som besvarar minst en del av den exakta frågan. Sammanfattningar och motstridiga vittnesmål kunde få 2; sanningshalten i vittnesmålen bedömdes inte.
@@ -64,7 +64,7 @@ Detta är ett utforskande pilotprov med tio egenvalda frågor, inga statistiskt 
 
 Slutliga LLM-svar genererades inte. Testet mäter källurval, inte svarens faktiska korrekthet, totala RAG-svarstid eller slutmodellens tokenbesparing. Jev kräver nätverk och ett separat besluts-API som för närvarande ligger under alpha.
 
-Rekommendation: behåll BGE som standard tills vidare. Nästa steg är ett valbart Jev-läge (infört i RAG-fliken 2026-09-19) och en större, mänskligt granskad frågesamling med särskilt fokus på korrekt talare, tidpunkt och kandidattäckning.
+Rekommendation: behåll BGE som standard tills vidare. Nästa steg är ett valbart Jev-läge (infört i RAG-läget 2026-09-19) och en större, mänskligt granskad frågesamling med särskilt fokus på korrekt talare, tidpunkt och kandidattäckning.
 
 ## Reproducerbart underlag
 

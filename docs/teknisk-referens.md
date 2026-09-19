@@ -303,7 +303,8 @@ Klassisk *retrieval-augmented generation*: en fast pipeline i tre steg.
 2. **Hybrid + reranking (valfritt)** — `--hybrid` kombinerar vektor och BM25 (FTS)
    med *Reciprocal Rank Fusion* (k=60). Sedan omrankar
    `BAAI/bge-reranker-v2-m3` resultaten och plockar ut topp-6. BGE körs lokalt och
-   är standard i RAG-flikens **Sökinställningar → Reranker**, där **Ingen** också
+   är standard i RAG-lägets **Sökinställningar → Reranker** (hopfällbar sektion,
+   minimerad som standard, i sidofältet och bara synlig i RAG-läget), där **Ingen** också
    finns. MCP-läget och Jämförelse-sidan använder fortfarande BGE.
    Samma meny erbjuder i stället **Jev – OpenRouter, experimentell**: samma väg
    som pilotstudien [jev-reranker-pilot.md](jev-reranker-pilot.md) mätte —
@@ -344,17 +345,21 @@ Enkla faktafrågor  → RAG-läge (snabbt, deterministiskt)
 Komplexa utredningsfrågor  → MCP-läge (--mcp, autonomt, bättre täckning)
 ```
 
-Fliken **Utredning** har två flikar: **Fråga arkivet (RAG)** med den fasta
-pipelinen och **Utredningsläge (MCP)** med chatten. Båda flikarnas innehåll
-renderas vid varje körning (Streamlit), så ett misslyckat RAG-svar lämnar
+Fliken **Utredning** har två lägen, **Fråga arkivet (RAG)** med den fasta
+pipelinen och **Utredningsläge (MCP)** med chatten, valda med en segmenterad
+kontroll högst upp på sidan (`st.segmented_control`) — inte `st.tabs`, eftersom
+flikarnas båda kroppar annars körs varje rerun och sidofältet inte kan veta vilket
+läge som är valt. Bara den valda kroppen ritas, så ett misslyckat RAG-svar lämnar
 chatten orörd.
-I MCP-fliken får du en chatt där Claude minns tidigare frågor i konversationen
+I MCP-läget får du en chatt där Claude minns tidigare frågor i konversationen
 (implementerat via Claude Agent SDK:s `resume`-fält — `session_id` från senaste
-svaret skickas med nästa fråga). Knappen "Ny konversation" överst i MCP-fliken
+svaret skickas med nästa fråga). Knappen "Ny konversation" överst i MCP-läget
 nollställer historiken och startar en ny session. RAG-lägets sökinställningar
 (reranker, top-K/top-N, facetter och fuzzy) ligger i den hopfällbara sektionen
-**Sökinställningar** i RAG-fliken; sidofältet har LLM-profilen och
-kunskapsgrafens toggle, som gäller båda flikarna.
+**Sökinställningar** i sidofältet och ritas bara när RAG-läget är valt;
+RAG-läget tillåter top-K 5–100 och top-N 1–30. Sidofältet har annars
+LLM-profilen och kunskapsgrafens toggle, som gäller båda lägena, samt
+tokenräknaren, som är fäst i botten av sidofältet.
 
 #### Utredning-fliken
 
@@ -420,7 +425,7 @@ kan ändras under **Admin → Inställningar → Promptar**. Overrides sparas i
 nyckel används standardtexterna i `src/prompts.py` (`SYSTEM_PROMPT` /
 `MCP_SYSTEM_PROMPT`). Prompten läses vid frågetillfället och inte vid import,
 så ändringar gäller direkt vid nästa fråga — ingen omstart krävs (i en pågående
-chatt med OpenAI/DeepSeek i MCP-fliken slår ändringen igenom först efter **Ny
+chatt med OpenAI/DeepSeek i MCP-läget slår ändringen igenom först efter **Ny
 konversation**). Varje prompt har en egen **Spara**- och **Återställ till
 standard**-knapp, så de kan ändras oberoende av varandra. Tomt fält eller
 **Återställ till standard** tar bort overriden för den prompten.
@@ -431,7 +436,7 @@ formuleringsexempel och MCP-verktygens parametrar. Utgå från standardtexten,
 i systemprompten och själva utredningsfrågan i Utredning-fliken. Behåll regler
 om källhänvisningar, osäkerhet och motsägelser: en sparad egen prompt ersätter
 hela standardtexten, inte bara de delar som ändrats. RAG kan inte anropa
-verktyg; sökinställningar görs i RAG-fliken. MCP kan använda verktygen nedan,
+verktyg; sökinställningar görs i RAG-läget (sidofältet). MCP kan använda verktygen nedan,
 men att nämna andra verktyg i prompten gör dem inte tillgängliga.
 
 Standardpromptarna kräver källhänvisningar nära sakuppgifterna, skiljer
@@ -523,7 +528,7 @@ behövs).
 
 Sidan `pages/6_Jämförelse.py` är ett korsförhörsläge: ange ett ämne, hämta
 flera källor med samma sök+rerank som Utredning (den lokala BGE-rerankern; det
-experimentella Jev-läget finns bara i RAG-fliken), och låt språkmodellen ställa
+experimentella Jev-läget finns bara i RAG-läget), och låt språkmodellen ställa
 dem mot varandra. System-prompten (i `src/compare.py`) ber modellen lyfta fram
 **motstridiga** och **överensstämmande** uppgifter med källhänvisningar, i
 stället för att syntetisera bort konflikterna. Backend följer det val som
@@ -1042,7 +1047,7 @@ per-dokumentresultat behålls; ett avbrutet jobb markeras aldrig `succeeded`.
 | `src/backends.py` | Delad backend-katalog (Claude/OpenAI/DeepSeek/OpenRouter/Ollama/custom) + `fetch_models`/`available_models` — delas av Utredning-sidan och `scripts/llm_config.py` |
 | `scripts/llm_config.py` → `src/llm_config_cli.py` | Visa/ändra `generated/llm_config.json` utan webgränssnittet (interaktiv meny i terminal) |
 | `src/citations.py` | Slår upp `[Nr X, sida Y]` (även `[Nr X, sida Y, Z]` och sida-lösa `[Nr X]`) och WPU-prefix som `[Pol-..., sida Y]` mot PDF:er och renderar citatlänkar; hanterar även WPU-stammar där dokument-ID och titel sitter ihop utan avskiljare |
-| `src/Utredning.py` | Streamlit-sida för frågor (RAG- och MCP-flik), token-/kostnadsräknare, svarsgraf, sparknapp, källbokmärken samt facett-/fuzzy-sökfilter |
+| `src/Utredning.py` | Streamlit-sida för frågor (RAG- och MCP-läget, valda med en segmenterad kontroll), token-/kostnadsräknare, svarsgraf, sparknapp, källbokmärken samt facett-/fuzzy-sökfilter i sidofältet |
 | `src/llm_usage.py` | Token- och kostnadsräkning för LLM-anrop (Streamlit-fri): parsning av leverantörernas usage, prissättning inkl. cache-träffar och formatering av räknaren |
 | `src/casebook_ui.py` | Delade Streamlit-komponenter: kompakt sidhuvud (`render_page_header`), utredningspärm, källbokmärken och anteckningar |
 | `src/pages/2_Utredningspärm.py` | Streamlit-sida för sparade fråga/svar-spår, bokmärkta källor och anteckningar |
@@ -1102,7 +1107,11 @@ schema-migrationer, delta-urval och `text_mtime`-stämpling (db, ocr_db_helper, 
 citatuppslag/-länkning (citations), RRF-hybridsökningen (ask) och `get_page` (mcp_server),
 entitetsextraktion (extract_entities), graf-laddning (load_neo4j) och
 nyckelentiteter ur svar (answer_entities) samt de sparade promptändringarna och
-Admin-formuläret för dem (prompts, admin_ui).
+Admin-formuläret för dem (prompts, admin_ui). `tests/test_utredning_ui.py` kör
+Utredning-sidan headless med Streamlits AppTest och kontrollerar lägesvalet
+(sökinställningarna bara i RAG-läget, att valen överlever ett varv i MCP-läget
+och att tokenpanelen finns i båda lägena) med fejkad vektor-db, modell och
+state-db.
 Fixturen som genererar en mini-PDF med pymupdf skipas gracefully om pymupdf inte är installerat.
 
 ## Loggning

@@ -19,13 +19,93 @@ from sentence_transformers import SentenceTransformer
 
 MCP_SERVER = Path(__file__).resolve().parent / "rag" / "mcp_server.py"
 
-# Reranker-val i RAG-fliken: etikett → läge. BGE är standard; Jev är
+# Reranker-val i RAG-läget: etikett → läge. BGE är standard; Jev är
 # experimentellt och kräver nätverk + OPENROUTER_API_KEY (se rag/ask.py).
 _RERANKERS = {
     "BGE – lokal": "bge",
     "Jev – OpenRouter, experimentell": "jev",
     "Ingen": "none",
 }
+
+# Startvärden för RAG-lägets sökval. Widgetnycklarna (reranker_choice, rag_*)
+# försvinner när sektionen avmonteras i MCP-läget — Streamlit raderar state för
+# widgets som inte ritas i körningen — så varje val speglas i "<key>_sparad" via
+# on_change och läses tillbaka innan widgeten skapas. Utan speglingen hade
+# reranker, top-K/top-N, facetter och fuzzy tyst återställts varje gång man
+# växlade tillbaka till RAG.
+_RAG_SETTINGS_DEFAULTS: dict[str, Any] = {
+    "reranker_choice": "BGE – lokal",
+    "rag_top_k": 20,
+    "rag_top_n": 6,
+    "rag_facets": [],
+    "rag_fuzzy_on": False,
+    "rag_fuzzy_threshold": 0.70,
+}
+
+
+def _spara_rag_val(key: str) -> None:
+    """``on_change``: spegla widgetens värde så det överlever avmontering."""
+    st.session_state[f"{key}_sparad"] = st.session_state[key]
+
+
+def _aterstall_rag_val(key: str) -> None:
+    """Sätt widgetens startvärde ur speglingen innan widgeten skapas."""
+    st.session_state.setdefault(
+        key, st.session_state.setdefault(f"{key}_sparad", _RAG_SETTINGS_DEFAULTS[key])
+    )
+
+# Utredning-sidans två lägen, valda med en segmenterad kontroll i stället för
+# st.tabs: flikkomponenten kör båda kropparna varje rerun och rapporterar inte
+# vilken flik som är aktiv, så sidofältet kan inte veta om RAG-läget är valt.
+MODE_RAG = "Fråga arkivet (RAG)"
+MODE_MCP = "Utredningsläge (MCP)"
+_MODES = [MODE_RAG, MODE_MCP]
+
+# Token & kostnad ska ligga fäst i botten av sidofältet, inte bara sist i
+# innehållet, och inte flytta sig när sökvalen expanderas/minimeras. Panelen
+# ligger därför absolut mot stSidebarContent (position:relative), medan
+# innehållet ovanför scrollar i _sidebar_scroll.
+#
+# Höjden måste begränsas hela vägen ned till scrollcontainern, annars blir den
+# så hög som innehållet och inget kan scrolla. Streamlit lägger flera nivåer
+# mellan stSidebarUserContent och vår container (en otaggad div, en
+# stVerticalBlock och en stLayoutWrapper), så varje nivå får display:flex +
+# flex:1 1 auto + min-height:0. De mellanliggande nivåerna får INTE
+# overflow:hidden — då klipps innehållet i stället för att scrolla, och
+# scrollcontainerns scrollHeight blir lika med dess egen höjd.
+_SIDEBAR_BOTTOM_CSS = (
+    "<style>"
+    'section[data-testid="stSidebar"] div[data-testid="stSidebarContent"]{'
+    "display:flex;flex-direction:column;overflow:hidden;position:relative;}"
+    'section[data-testid="stSidebar"] div[data-testid="stSidebarUserContent"]{'
+    "display:flex;flex-direction:column;flex:1 1 auto;min-height:0;"
+    "height:auto;overflow:visible;}"
+    'section[data-testid="stSidebar"] div[data-testid="stSidebarUserContent"] '
+    '> div{'
+    "display:flex;flex-direction:column;flex:1 1 auto;min-height:0;"
+    "height:auto;overflow:visible;}"
+    'section[data-testid="stSidebar"] div[data-testid="stSidebarUserContent"] '
+    '> div > div[data-testid="stVerticalBlock"]{'
+    "display:flex;flex-direction:column;flex:1 1 auto;min-height:0;"
+    "height:auto;overflow:visible;}"
+    'section[data-testid="stSidebar"] div[data-testid="stSidebarUserContent"] '
+    'div[data-testid="stLayoutWrapper"]{'
+    "display:flex;flex-direction:column;flex:1 1 auto;min-height:0;"
+    "height:auto;overflow:visible;}"
+    'section[data-testid="stSidebar"] .st-key-sidebar_scroll{'
+    "flex:1 1 auto;min-height:0;height:auto;overflow-y:auto;overflow-x:hidden;"
+    "padding-bottom:6rem;}"
+    'section[data-testid="stSidebar"] .st-key-palme_usage_slot{'
+    "position:absolute;left:0;right:0;bottom:1.25rem;z-index:5;"
+    "box-sizing:border-box;height:auto!important;min-height:0!important;"
+    "max-height:none!important;overflow:visible!important;"
+    "padding:0.5rem 1rem 0.75rem;color:inherit;}"
+    'section[data-testid="stSidebar"] .st-key-palme_usage_slot '
+    '[data-testid="stVerticalBlock"]{'
+    "height:auto!important;min-height:0!important;max-height:none!important;"
+    "overflow:visible!important;}"
+    "</style>"
+)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import backends as _backends  # noqa: E402
@@ -157,6 +237,113 @@ def _interleave_hits(primary: list[dict], extra: list[dict]) -> list[dict]:
     return out
 
 
+def _render_rag_settings() -> dict[str, Any]:
+    """RAG-lägets sökinställningar (reranker, top-K/N, sökfilter) i sidofältet.
+
+    Anropas bara när RAG-läget är valt. Returnerar valen så att
+    :func:`_render_rag_tab` slipper äga widgetsarna."""
+    _facet_to_name: dict[str, str] = {}
+    # Widgetnycklarna är stabila (rag_*) eftersom sektionen avmonteras när MCP-
+    # läget väljs: utan nycklar hade top-K/top-N, facetter och fuzzy tyst
+    # återställts till default varje gång man växlade tillbaka till RAG.
+    with st.expander("Sökinställningar", expanded=False):
+        _aterstall_rag_val("reranker_choice")
+        reranker_label = st.selectbox(
+            "Reranker",
+            list(_RERANKERS),
+            key="reranker_choice",
+            on_change=_spara_rag_val,
+            args=("reranker_choice",),
+            help=(
+                "En reranker bedömer och sorterar om de hämtade kandidatutdragen efter "
+                "hur relevanta de är för din fråga, så att bättre källor skickas till AI:n. "
+                "BGE körs lokalt och är standard. Jev är ett experimentellt OpenRouter-läge "
+                "som kräver nätverk och OPENROUTER_API_KEY och debiterar API-krediter. "
+                "Ingen hoppar över omrankningen och behåller sökordningen."
+            ),
+        )
+        reranker_mode = _RERANKERS[reranker_label]
+        if reranker_mode == "jev" and not os.environ.get("OPENROUTER_API_KEY"):
+            st.warning("Jev kräver att OPENROUTER_API_KEY är satt i miljön.")
+        _aterstall_rag_val("rag_top_k")
+        top_k = st.slider(
+            "Hämta top-K kandidater",
+            5,
+            100,
+            key="rag_top_k",
+            on_change=_spara_rag_val,
+            args=("rag_top_k",),
+            help="Antal chunks som vektorsökningen plockar fram ur indexet i första "
+            "steget. Högre K → fler alternativ för vald reranker att välja bland "
+            "(bättre täckning) men långsammare. Utan reranker används bara de "
+            "första top-N av dessa.",
+        )
+        _aterstall_rag_val("rag_top_n")
+        top_n = st.slider(
+            "Skicka top-N till AI",
+            1,
+            30,
+            key="rag_top_n",
+            on_change=_spara_rag_val,
+            args=("rag_top_n",),
+            help="Antal chunks (efter ev. reranking) som faktiskt skickas som "
+            "kontext till språkmodellen. Högre N → mer underlag men längre "
+            "prompt, högre kostnad och risk att modellen tappar fokus.",
+        )
+
+        # Sökfilter (RAG-läget): facetter ur kunskapsgrafen + OCR-tolerant fuzzy.
+        st.subheader("Sökfilter")
+        _facet_data = _load_facets()
+        _facet_options: list[str] = []
+        for _typ in _facets.FACET_TYPES:
+            for _namn, _cnt in _facet_data.get(_typ, [])[:50]:
+                _label = f"{_typ}: {_namn} ({_cnt})"
+                _facet_options.append(_label)
+                _facet_to_name[_label] = _namn
+        _aterstall_rag_val("rag_facets")
+        selected_facets = st.multiselect(
+            "Begränsa till entiteter",
+            _facet_options,
+            key="rag_facets",
+            on_change=_spara_rag_val,
+            args=("rag_facets",),
+            help="Visa bara träffar ur dokument som nämner valda personer/platser/"
+            "organisationer (ur kunskapsgrafen). Tomt = ingen begränsning.",
+        )
+        _aterstall_rag_val("rag_fuzzy_on")
+        fuzzy_on = st.toggle(
+            "OCR-tolerant fuzzy-sökning",
+            key="rag_fuzzy_on",
+            on_change=_spara_rag_val,
+            args=("rag_fuzzy_on",),
+            help="Lägg till träffar där söktermer förekommer felstavade av OCR "
+            "(t.ex. 'Engstrcm' för 'Engström'). Första körningen bygger ett index "
+            "(~30 s, ~100 MB minne).",
+        )
+        _aterstall_rag_val("rag_fuzzy_threshold")
+        fuzzy_threshold = st.slider(
+            "Fuzzy-likhet (tröskel)",
+            0.50, 0.95, step=0.05,
+            key="rag_fuzzy_threshold",
+            on_change=_spara_rag_val,
+            args=("rag_fuzzy_threshold",),
+            help="Lägre = fångar fler felstavningar men mer brus. Korta namn med "
+            "ett OCR-fel (t.ex. 'Palme'→'Paine') kräver ~0.6; längre ord klarar "
+            "högre tröskel. Påverkar bara när fuzzy-sökning är på.",
+            disabled=not fuzzy_on,
+        )
+
+    return {
+        "reranker_mode": reranker_mode,
+        "top_k": top_k,
+        "top_n": top_n,
+        "selected_facets": selected_facets,
+        "facet_to_name": _facet_to_name,
+        "fuzzy_on": fuzzy_on,
+        "fuzzy_threshold": fuzzy_threshold,
+    }
+
+
 def extract_cited_sources(answer: str) -> list[dict]:
     """Bygg källlista ur ett MCP-svar genom att parsa unika Nr-citat."""
     sources: list[dict] = _citations.extract_cited_sources(answer, build_nr_to_pdf())
@@ -180,6 +367,22 @@ _casebook_ui.render_page_header(
 )
 
 _casebook_ui.render_pdf_opener(ROOT)
+
+# Lägesväljaren ritas medvetet före sidofältet i koden: sidofältet nedan måste
+# kunna läsa valet i samma körning för att bara visa RAG-lägets sökinställningar.
+# Kontrollen går att avmarkera och ger då None; det tolkas som RAG-läget här, så
+# sidan alltid har ett läge att visa (session_state behåller dock None, eftersom
+# en widgetnyckel inte får skrivas om i samma körning — kontrollen kan därför se
+# tom ut medan RAG-läget körs).
+mode = st.segmented_control(
+    "Läge",
+    _MODES,
+    default=MODE_RAG,
+    key="main_mode",
+    label_visibility="collapsed",
+) or MODE_RAG
+
+st.markdown(_SIDEBAR_BOTTOM_CSS, unsafe_allow_html=True)
 
 # Backend-katalogen bor i src/backends.py (delas med llm_config_cli). Claude-
 # defaulten knyts lokalt till ask.CLAUDE_MODEL så Utredning-sidans val följer den modell
@@ -305,9 +508,9 @@ def _render_usage_panel(cfg: dict) -> None:
     totals = _state_db.get_llm_usage(_casebook_ui.state_conn(), profile)
     rader = [
         "<span class='palme-usage-titel'>Token & kostnad</span>",
-        f"Totalt: {_llm_usage.format_summary(_llm_usage.totals_from_row(totals))}",
         "Session: "
         f"{_llm_usage.format_summary(st.session_state.get('llm_usage_session') or {})}",
+        f"Totalt: {_llm_usage.format_summary(_llm_usage.totals_from_row(totals))}",
     ]
     if cfg.get("kind") != "claude" and not (cfg.get("prices") or {}):
         rader.append("Priser saknas — sätt dem i Admin → Inställningar.")
@@ -322,40 +525,49 @@ def _render_usage_panel(cfg: dict) -> None:
     )
 
 
-st.session_state.setdefault("reranker_choice", "BGE – lokal")
 st.session_state.setdefault("rerank_metrics", None)
 
-# Räknarens plats längst ner i sidofältet. Ett st.empty() (inte container) så
-# att samma yta kan skrivas om när ett anrop bokförts — sidofältet ritas före
-# frågan och skulle annars visa förra anropets siffror.
+# Räknarens plats fäst i botten av sidofältet (se _SIDEBAR_BOTTOM_CSS). Ett
+# st.empty() i en keyad container så att samma yta kan skrivas om när ett anrop
+# bokförts — sidofältet ritas före frågan och skulle annars visa förra anropets
+# siffror — och så att platsen får CSS-klassen st-key-palme_usage_slot.
 _usage_slot = None
 
 with st.sidebar:
-    st.header("Inställningar")
-    _all_llm = _llm_config.load_all()
-    _profile_names = list(_all_llm["profiles"].keys())
-    if "llm_profile" not in st.session_state or st.session_state["llm_profile"] not in _profile_names:
-        st.session_state["llm_profile"] = _all_llm["default"]
-    _profile_name = st.selectbox("LLM-profil", _profile_names, key="llm_profile")
-    _profile = _all_llm["profiles"][_profile_name]
-    try:
-        backend = _llm_config.resolve_runtime_profile(_profile, BACKENDS)
-    except ValueError as exc:
-        st.error(f"LLM-profilen {_profile_name!r} kan inte användas: {exc}")
-        st.stop()
-    backend_name = backend["backend_name"]
-    _profile_runtime_key = _llm_config.profile_cache_key(_profile_name, _profile)
-    st.caption("Hantera profiler i **Admin → Inställningar → LLM-inställningar**.")
-    show_graph = st.toggle(
-        "Visa kunskapsgraf",
-        value=True,
-        key="show_graph",
-        help="Visar en hopfällbar grafsektion under svaret. Själva grafen "
-        "(entitetsextraktion med vald LLM-backend + Neo4j) byggs först när du "
-        "öppnar den — inte automatiskt efter varje svar. "
-        "Kräver att Neo4j är igång (.venv/bin/python scripts/neo4j.py).",
-    )
-    _usage_slot = st.empty()
+    with st.container(key="sidebar_scroll"):
+        st.header("Inställningar")
+        _all_llm = _llm_config.load_all()
+        _profile_names = list(_all_llm["profiles"].keys())
+        if "llm_profile" not in st.session_state or st.session_state["llm_profile"] not in _profile_names:
+            st.session_state["llm_profile"] = _all_llm["default"]
+        _profile_name = st.selectbox("LLM-profil", _profile_names, key="llm_profile")
+        _profile = _all_llm["profiles"][_profile_name]
+        try:
+            backend = _llm_config.resolve_runtime_profile(_profile, BACKENDS)
+        except ValueError as exc:
+            st.error(f"LLM-profilen {_profile_name!r} kan inte användas: {exc}")
+            st.stop()
+        backend_name = backend["backend_name"]
+        _profile_runtime_key = _llm_config.profile_cache_key(_profile_name, _profile)
+        st.caption("Hantera profiler i **Admin → Inställningar → LLM-inställningar**.")
+        show_graph = st.toggle(
+            "Visa kunskapsgraf",
+            value=True,
+            key="show_graph",
+            help="Visar en hopfällbar grafsektion under svaret. Själva grafen "
+            "(entitetsextraktion med vald LLM-backend + Neo4j) byggs först när du "
+            "öppnar den — inte automatiskt efter varje svar. "
+            "Kräver att Neo4j är igång (.venv/bin/python scripts/neo4j.py).",
+        )
+        # RAG-lägets sökinställningar ritas bara när RAG-läget är valt — MCP-chatten
+        # har inga sökval. Valen returneras i stället för att ägas av kroppen,
+        # eftersom widgetsarna nu bor i sidofältet.
+        rag_settings = _render_rag_settings() if mode == MODE_RAG else None
+    # Token & kostnad är ett syskon till den scrollbar innehållscontainern.
+    # Den skapas sist, men CSS gör bottenplatsen fysisk i stället för bara
+    # sista positionen i den växande sökinställningssektionen.
+    with st.container(key="palme_usage_slot"):
+        _usage_slot = st.empty()
 
 _render_usage_panel(backend)
 
@@ -1132,74 +1344,18 @@ def _render_mcp_tab() -> None:
             st.rerun()
 
 
-def _render_rag_tab() -> None:
-    """RAG-läget: en fråga, fast pipeline, ett svar. Sökinställningarna nedan
-    påverkar bara den här fliken."""
-    with st.expander("Sökinställningar", expanded=False):
-        _facet_to_name: dict[str, str] = {}
+def _render_rag_tab(settings: dict[str, Any]) -> None:
+    """RAG-läget: en fråga, fast pipeline, ett svar.
 
-        reranker_label = st.selectbox(
-            "Reranker",
-            list(_RERANKERS),
-            key="reranker_choice",
-            help=(
-                "BGE körs lokalt och är standard. Jev är ett experimentellt OpenRouter-"
-                "läge som kräver nätverk och OPENROUTER_API_KEY och debiterar API-krediter."
-            ),
-        )
-        reranker_mode = _RERANKERS[reranker_label]
-        if reranker_mode == "jev" and not os.environ.get("OPENROUTER_API_KEY"):
-            st.warning("Jev kräver att OPENROUTER_API_KEY är satt i miljön.")
-        top_k = st.slider(
-            "Hämta top-K kandidater",
-            5,
-            50,
-            20,
-            help="Antal chunks som vektorsökningen plockar fram ur indexet i första "
-            "steget. Högre K → fler alternativ för vald reranker att välja bland "
-            "(bättre täckning) men långsammare. Utan reranker används bara de "
-            "första top-N av dessa.",
-        )
-        top_n = st.slider(
-            "Skicka top-N till AI",
-            1,
-            15,
-            6,
-            help="Antal chunks (efter ev. reranking) som faktiskt skickas som "
-            "kontext till språkmodellen. Högre N → mer underlag men längre "
-            "prompt, högre kostnad och risk att modellen tappar fokus.",
-        )
-
-        # Sökfilter (RAG-läget): facetter ur kunskapsgrafen + OCR-tolerant fuzzy.
-        st.subheader("Sökfilter")
-        _facet_data = _load_facets()
-        _facet_options: list[str] = []
-        for _typ in _facets.FACET_TYPES:
-            for _namn, _cnt in _facet_data.get(_typ, [])[:50]:
-                _label = f"{_typ}: {_namn} ({_cnt})"
-                _facet_options.append(_label)
-                _facet_to_name[_label] = _namn
-        selected_facets = st.multiselect(
-            "Begränsa till entiteter",
-            _facet_options,
-            help="Visa bara träffar ur dokument som nämner valda personer/platser/"
-            "organisationer (ur kunskapsgrafen). Tomt = ingen begränsning.",
-        )
-        fuzzy_on = st.toggle(
-            "OCR-tolerant fuzzy-sökning",
-            value=False,
-            help="Lägg till träffar där söktermer förekommer felstavade av OCR "
-            "(t.ex. 'Engstrcm' för 'Engström'). Första körningen bygger ett index "
-            "(~30 s, ~100 MB minne).",
-        )
-        fuzzy_threshold = st.slider(
-            "Fuzzy-likhet (tröskel)",
-            0.50, 0.95, 0.70, step=0.05,
-            help="Lägre = fångar fler felstavningar men mer brus. Korta namn med "
-            "ett OCR-fel (t.ex. 'Palme'→'Paine') kräver ~0.6; längre ord klarar "
-            "högre tröskel. Påverkar bara när fuzzy-sökning är på.",
-            disabled=not fuzzy_on,
-        )
+    Sökinställningarna ritas i sidofältet (bara när det här läget är valt) och
+    kommer in färdiga via ``settings``."""
+    reranker_mode: str = settings["reranker_mode"]
+    top_k: int = settings["top_k"]
+    top_n: int = settings["top_n"]
+    selected_facets: list[str] = settings["selected_facets"]
+    facet_to_name: dict[str, str] = settings["facet_to_name"]
+    fuzzy_on: bool = settings["fuzzy_on"]
+    fuzzy_threshold: float = settings["fuzzy_threshold"]
 
     with st.form("ask"):
         q = st.text_input("Din fråga", placeholder="Vem är Stig Engström?")
@@ -1215,7 +1371,7 @@ def _render_rag_tab() -> None:
                 facet_index = _load_facet_index()
                 for _label in selected_facets:
                     facet_stems |= facet_index.get(
-                        _facet_to_name[_label].casefold(), set()
+                        facet_to_name[_label].casefold(), set()
                     )
                 status.update(label="Söker bland valda entiteters dokument…")
             where = _facets.sources_where_clause(facet_stems)
@@ -1321,8 +1477,9 @@ def _render_rag_tab() -> None:
         _render_rag_sources(ss.hits, "cached")
 
 
-_tab_rag, _tab_mcp = st.tabs(["Fråga arkivet (RAG)", "Utredningsläge (MCP)"])
-with _tab_rag:
-    _render_rag_tab()
-with _tab_mcp:
+# Bara den valda lägeskroppen ritas (lägesväljaren högst upp sparar valet).
+# Inställningarna finns bara i RAG-läget, så utan dem ritas MCP-chatten.
+if mode == MODE_MCP or rag_settings is None:
     _render_mcp_tab()
+else:
+    _render_rag_tab(rag_settings)

@@ -201,7 +201,9 @@ def render_pdf_opener(root: Path) -> None:
 _LAYOUT_CSS = """
 <style>
 [data-testid="stMainBlockContainer"] { padding-top: 1.5rem !important; }
+[data-testid="stWidgetLabel"] { column-gap: 0.25rem; }
 [data-testid="stWidgetLabel"] > div { flex: 0 1 auto; justify-content: flex-start; }
+[data-testid="stWidgetLabel"] [data-testid="stTooltipIcon"] { margin-left: 0; }
 .palme-header { font-size: 0.95rem; line-height: 1.4; margin: 0 0 0.9rem 0; }
 .palme-header .palme-titel { font-weight: 600; }
 .palme-header .palme-meta { color: rgba(128, 128, 128, 0.95); }

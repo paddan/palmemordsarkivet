@@ -67,7 +67,7 @@ export DEEPSEEK_API_KEY=sk-...
 
 # OpenRouter (alla modeller via ett konto). Valfritt om du svarar med Claude
 # eller en annan leverantör, men krävs för OpenRouter-profiler och för den
-# experimentella Jev-rerankern i RAG-fliken:
+# experimentella Jev-rerankern i RAG-läget:
 export OPENROUTER_API_KEY=sk-or-...
 ```
 
@@ -114,12 +114,15 @@ hittar nya filer, så väntande arbete från en tidigare avbruten körning slutf
 `./web.sh` startar Streamlit och vidarebefordrar eventuella Streamlit-flaggor —
 se [Kortkommandon](#kortkommandon) för fler genvägar.
 
-Fliken **Utredning** har två flikar: **Fråga arkivet (RAG)** (snabbt,
+Fliken **Utredning** har två lägen: **Fråga arkivet (RAG)** (snabbt,
 deterministiskt — bra för faktafrågor) och **Utredningsläge (MCP)** (autonomt,
-bättre täckning på komplexa frågor). Detaljer i
+bättre täckning på komplexa frågor), valda med en segmenterad kontroll högst upp.
+Detaljer i
 [Teknisk referens](teknisk-referens.md#4-ställ-frågor).
 
-I RAG-fliken ligger sökvalen i **Sökinställningar**. Välj **Reranker** för att
+I RAG-läget ligger sökvalen i den hopfällbara sektionen **Sökinställningar** i
+sidofältet (minimerad som standard), ovanför räknaren för token och kostnad. Välj
+**Reranker** för att
 jämföra samma fråga med **BGE – lokal** (standard, körs lokalt) och **Jev –
 OpenRouter, experimentell**. Jev är ett experimentellt läge: det skickar varje
 utdrag till en extern tjänst, kräver `OPENROUTER_API_KEY` och gör debiterade
@@ -137,7 +140,7 @@ snabbt komma tillbaka till samma PDF eller sida senare, och skriva fria
 **anteckningar** på en källa via ✏️-rutan på källkorten (samlas på en egen flik
 i Utredningspärmen).
 
-I RAG-flikens hopfällbara **Sökinställningar** finns två extra sökfilter:
+I RAG-lägets **Sökinställningar** finns två extra sökfilter:
 **facetter** (begränsa träffarna till dokument som nämner en viss person/plats/
 organisation ur kunskapsgrafen) och **OCR-tolerant fuzzy-sökning** (fångar
 söktermer som OCR:en felstavat, t.ex. *Engstrcm* för *Engström* — första

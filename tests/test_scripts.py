@@ -299,10 +299,13 @@ def test_every_page_uses_the_shared_compact_header() -> None:
 
     assert "class='palme-header'" in shared
     assert "padding-top: 1.5rem !important" in shared
+    assert '[data-testid="stWidgetLabel"] { column-gap: 0.25rem; }' in shared
     assert (
         '[data-testid="stWidgetLabel"] > div '
         "{ flex: 0 1 auto; justify-content: flex-start; }" in shared
     )
+    assert '[data-testid="stWidgetLabel"] [data-testid="stTooltipIcon"]' in shared
+    assert "margin-left: 0;" in shared
 
     for sida in [src / "Utredning.py", *sorted((src / "pages").glob("*.py"))]:
         text = sida.read_text(encoding="utf-8")
@@ -321,48 +324,93 @@ def test_utredning_header_shows_the_index_size() -> None:
     assert "index: {table.count_rows():,} chunks" in text
 
 
-def test_utredning_puts_rag_and_mcp_in_their_own_tabs() -> None:
-    """Lägena är flikar (som på adminsidan), inte en sidofälts-toggle."""
+def test_utredning_selects_mode_without_st_tabs() -> None:
+    """Lägena väljs med en segmenterad kontroll, inte med ``st.tabs``.
+
+    Flikkomponenten kör båda kropparna varje rerun och rapporterar inte vilken
+    flik som är aktiv, så sidofältet kan inte veta om RAG-läget är valt."""
     project_root = Path(__file__).resolve().parents[1]
     text = (project_root / "src" / "Utredning.py").read_text(encoding="utf-8")
 
-    assert (
-        '_tab_rag, _tab_mcp = st.tabs(["Fråga arkivet (RAG)", "Utredningsläge (MCP)"])'
-        in text
-    )
-    assert "    _render_rag_tab()" in text
+    assert "st.tabs(" not in text
+    assert "_MODES = [MODE_RAG, MODE_MCP]" in text
+    assert 'st.segmented_control(' in text
+    assert 'key="main_mode"' in text
     assert "    _render_mcp_tab()" in text
+    assert "    _render_rag_tab(rag_settings)" in text
     # Toggeln och dess synk mot RAG-kontrollerna ska vara borta.
     assert "mcp_mode" not in text
     assert "_on_mcp_change" not in text
+    # Lägesväljaren måste ritas före sidofältet i koden, annars hinner
+    # sidofältet inte se valet i samma körning.
+    assert text.index("st.segmented_control(") < text.index("with st.sidebar:")
 
 
-def test_utredning_rag_controls_live_inside_the_rag_tab() -> None:
-    """Sökinställningarna hör till RAG-fliken — de ska inte synas i chatten."""
+def test_utredning_rag_controls_live_in_the_sidebar_only_in_rag_mode() -> None:
+    """Sökinställningarna ligger sist i sidofältet och bara i RAG-läget."""
     project_root = Path(__file__).resolve().parents[1]
     text = (project_root / "src" / "Utredning.py").read_text(encoding="utf-8")
 
-    rag_block = text.split("def _render_rag_tab()", 1)[1]
-    assert 'st.expander("Sökinställningar", expanded=False)' in rag_block
+    settings = text.split("def _render_rag_settings()", 1)[1].split("\ndef ", 1)[0]
+    assert 'st.expander("Sökinställningar", expanded=False)' in settings
     for label in (
+        "Reranker",
         "Hämta top-K kandidater",
         "Skicka top-N till AI",
         "Sökfilter",
         "Begränsa till entiteter",
         "OCR-tolerant fuzzy-sökning",
     ):
-        assert label in rag_block, f"{label} ligger utanför RAG-fliken"
+        assert label in settings, f"{label} saknas i sidofältets sökinställningar"
+
+    # Stabila widgetnycklar: sektionen avmonteras i MCP-läget, så utan nycklar
+    # hade användarens val tyst återställts vid varje växling tillbaka.
+    for key in (
+        "rag_top_k",
+        "rag_top_n",
+        "rag_facets",
+        "rag_fuzzy_on",
+        "rag_fuzzy_threshold",
+    ):
+        assert f'key="{key}"' in settings, f"{key} saknas — valet tappas vid lägesbyte"
+
+    # RAG-kroppen äger inte längre widgetsarna — den får dem färdiga.
+    rag_tab = text.split("def _render_rag_tab(", 1)[1]
+    assert 'st.expander("Sökinställningar"' not in rag_tab
+    assert 'settings["reranker_mode"]' in rag_tab
 
     sidebar = text.split("with st.sidebar:", 1)[1].split("def _render_mcp_tab()", 1)[0]
     assert "Visa kunskapsgraf" in sidebar
-    assert "Hämta top-K kandidater" not in sidebar
+    settings_call = "rag_settings = _render_rag_settings() if mode == MODE_RAG else None"
+    assert settings_call in sidebar
+    # Token- och kostnadspanelen ska ligga absolut i sidofältets botten medan
+    # den separata innehållscontainern scrollar och reserverar plats under sig.
+    assert sidebar.index(settings_call) < sidebar.index('key="palme_usage_slot"')
+    assert 'with st.container(key="sidebar_scroll"):' in sidebar
+    assert 'with st.container(key="palme_usage_slot"):' in sidebar
+    # Layouten är mätt i webbläsare: höjden begränsas hela vägen ned till
+    # scrollcontainern (annars blir den så hög som innehållet och inget kan
+    # scrolla), de mellanliggande nivåerna får inte overflow:hidden (då klipps
+    # innehållet i stället), och panelen ligger absolut i botten.
+    bottom_css = text.split("_SIDEBAR_BOTTOM_CSS = (", 1)[1].split("\n)", 1)[0]
+    assert ".st-key-sidebar_scroll" in bottom_css
+    assert ".st-key-palme_usage_slot" in bottom_css
+    assert 'div[data-testid="stLayoutWrapper"]' in bottom_css
+    assert bottom_css.count("min-height:0") >= 5
+    assert "overflow:visible" in bottom_css
+    assert "position:absolute" in bottom_css
+    assert "bottom:1.25rem" in bottom_css
+    assert "overflow-y:auto" in bottom_css
+    assert "padding-bottom:6rem" in bottom_css
+    assert "st.markdown(_SIDEBAR_BOTTOM_CSS, unsafe_allow_html=True)" in text
 
 
-def test_utredning_raises_instead_of_stopping_the_whole_page_in_a_tab() -> None:
-    """``st.stop()`` i en flik hade tömt även den andra fliken (båda körs)."""
+def test_utredning_returns_instead_of_stopping_the_whole_page() -> None:
+    """``st.stop()`` i en lägeskropp hade tömt hela sidan, även sidofältet."""
     project_root = Path(__file__).resolve().parents[1]
     text = (project_root / "src" / "Utredning.py").read_text(encoding="utf-8")
-    assert "st.stop()" not in text.split("def _render_rag_tab()", 1)[1]
+    for block in ("def _render_rag_tab(", "def _render_mcp_tab("):
+        assert "st.stop()" not in text.split(block, 1)[1]
 
 
 # ---------------------------------------------------------------------------

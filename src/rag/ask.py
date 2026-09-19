@@ -287,7 +287,7 @@ def rerank_jev(
 
 
 def format_rerank_metrics(metrics: dict[str, object]) -> str:
-    """Kompakt rad med rerankerns mätvärden för RAG-flikens statusrad."""
+    """Kompakt rad med rerankerns mätvärden för RAG-lägets statusrad."""
     name = str(metrics.get("name") or "")
     if name == "Ingen":
         return "Ingen reranking"

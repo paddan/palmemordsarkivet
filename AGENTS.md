@@ -221,17 +221,31 @@ jämfördes, vilken fil som hoppades över och varför — inte bara att det hä
 
 ## Non-obvious Design Decisions
 
-**MCP-läge (Utredning.py)**: Lägena är **flikar** på Utredning-sidan
-(`st.tabs(["Fråga arkivet (RAG)", "Utredningsläge (MCP)"])`, kropparna i
-`_render_rag_tab`/`_render_mcp_tab` — samma upplägg som adminsidan), inte en
-toggle. Streamlit kör båda flikarnas kod varje rerun, så flikkropparna får
-avbryta med `return` — aldrig `st.stop()`, som hade tömt även den andra fliken.
-RAG-flikens sökinställningar (reranker, top-K/top-N, facetter, fuzzy) ligger i
-en hopfällbar `Sökinställningar`-sektion i RAG-fliken; sidofältet har bara
-LLM-profil och kunskapsgrafens toggle (grafen kan byggas för båda lägena).
+**MCP-läge (Utredning.py)**: Lägena väljs med en **segmenterad kontroll**
+(`st.segmented_control`) högst upp på Utredning-sidan — inte `st.tabs`, eftersom
+flikkomponenten kör båda kropparna varje rerun och inte rapporterar vilken flik
+som är aktiv, så sidofältet inte kan veta om RAG-läget är valt. Valet sparas i
+`session_state["main_mode"]`, ritas medvetet **före** sidofältet i koden och
+faller tillbaka på RAG om användaren avmarkerar det. Bara den valda kroppen ritas
+(`_render_rag_tab`/`_render_mcp_tab`); en misslyckad RAG-sökning får avbryta med
+`return` — aldrig `st.stop()`, som hade tömt hela sidan.
+RAG-lägets sökinställningar (reranker, top-K/top-N, facetter, fuzzy) ritas i en
+**hopfällbar** `Sökinställningar`-sektion i sidofältet (minimerad som standard), ovanför tokenräknaren, och
+bara när RAG-läget är
+valt (`_render_rag_settings`, vars val skickas in i `_render_rag_tab`);
+sidofältet har annars LLM-profil, kunskapsgrafens toggle (grafen kan byggas för
+båda lägena) och tokenräknaren, som är fäst i botten av sidofältet
+(`_SIDEBAR_BOTTOM_CSS`: `st-key-sidebar_scroll` scrollar för sig medan
+`st-key-palme_usage_slot` positioneras absolut i sidofältets botten).
+Sökvalen speglas (`_spara_rag_val`/`_aterstall_rag_val` till `<key>_sparad`):
+Streamlit raderar widgetstate för widgets som inte ritas i en körning, så
+sektionen som avmonteras i MCP-läget hade annars tyst tappat reranker-,
+top-K/N-, facett- och fuzzyvalen vid varje växling tillbaka.
+`tests/test_utredning_ui.py` kör sidan headless (AppTest) och låser det beteendet
+ i stället för källtexten.
 Konversationskontinuitet uppnås genom att fånga `session_id` från `ResultMessage`
 och skicka tillbaka det som `ClaudeAgentOptions(resume=...)` på nästa fråga.
-"Ny konversation" (överst i MCP-fliken) nollställer `chat_history` +
+"Ny konversation" (överst i MCP-läget) nollställer `chat_history` +
 `mcp_session_id`.
 
 **Sidhuvud och hjälp-ikoner (alla sidor)**: Rubriken ritas med
@@ -282,7 +296,9 @@ förklara att egna promptar ersätter standardtexten och att RAG saknar verktyg.
 tabellen `llm_usage` i state.db med **profilnamnet som nyckel** (ackumuleras
 alltså mellan sessioner, till skillnad från `st.session_state`), och visas både
 längst ner i Utrednings sidofält (mindre text via CSS-klassen `.palme-usage`,
-kompakt form `↑34k ↓8k`) och i Admin → Inställningar vid profilen. Kostnaden tas
+kompakt form `↑34k ↓8k`) och i Admin → Inställningar vid profilen. Panelen är
+fäst i botten av sidofältet (se `_SIDEBAR_BOTTOM_CSS`), alltså också under
+RAG-lägets `Sökinställningar`, som är minimerad som standard. Kostnaden tas
 från leverantören när den finns (Claude Agent SDK:s `total_cost_usd`, en
 klientberäkning — inte en faktura), annars ur profilens
 `input_price_usd`/`output_price_usd`/`cache_hit_price_usd` (USD per 1M token).
@@ -307,7 +323,7 @@ LaTeX-matte hos Streamlit.
 **Avklippta modellsvar (`stop_notice` i `src/rag/ask.py`)**: leverantörerna kan avsluta mitt i en mening och ändå svara HTTP 200 — DeepSeek `length`/`insufficient_system_resource`, Claude `max_tokens`/`error_max_turns`. Varje svarsväg i Utredning (`ask.openai`, `ask.openai-mcp`, `ask.claude`) ska därför gå via `ask.stop_notice` och visa `*[Svar avklippt — …]*` i svaret plus logga i `errors.log`; bara `stop`/`end_turn` (och motsvarande kompletta orsaker) får vara tysta. Lägg inte till en ny svarsväg utan slutorsakskontroll, och återinför inte den gamla ensidiga `finish_reason == "length"`-kontrollen.
 
 **Experimentell Jev-reranker (`rag/ask.py` + `Utredning.py`)**: Jev är endast
-valbar i RAG-fliken; BGE förblir standard och MCP/Jämförelse använder befintlig
+valbar i RAG-läget; BGE förblir standard och MCP/Jämförelse använder befintlig
 BGE-väg. Jev använder den fasta Noul-frågan från piloten, högst fyra parallella
 anrop och `OPENROUTER_API_KEY`. UI:t visar API:ets rapporterade usage per sökning
 men lagrar den inte i `llm_usage`. Vid nätverks-, HTTP- eller valideringsfel ska

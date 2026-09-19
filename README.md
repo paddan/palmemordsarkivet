@@ -92,7 +92,8 @@ embedas och matchas mot vektorindexet, de bästa utdragen rerankas, och de
 källhänvisningar. Snabbt och förutsägbart — passar enkla faktafrågor där ett
 söksteg räcker.
 
-Vilken reranker som används väljs i **Sökinställningar → Reranker**: **BGE –
+Vilken reranker som används väljs i **Sökinställningar → Reranker** i RAG-lägets
+sidofält: **BGE –
 lokal** (standard) eller **Ingen**. Där finns också **Jev – OpenRouter,
 experimentell**, som gav bättre källurval i den inledande pilotstudien
 ([docs/jev-reranker-pilot.md](docs/jev-reranker-pilot.md)) men kräver
@@ -109,11 +110,13 @@ fast pipeline får AI:n tillgång till verktyg (`search_archive`, `get_page`)
 som den anropar hur många gånger den vill — provar olika söktermer, följer
 upp intressanta träffar och läser hela sidor för mer kontext. Bättre täckning
 på komplexa flerstegs-frågor, men långsammare (~1–3 min).
-Läget väljs som flik: **Fråga arkivet (RAG)** och **Utredningsläge (MCP)**. I
-RAG-fliken ligger sökvalen (reranker, top-K/top-N, facetter och fuzzy-sökning)
-i den hopfällbara sektionen *Sökinställningar*; MCP-fliken har i stället chatten
-och **Ny konversation**. Sidofältet visar LLM-profilen, kunskapsgrafens toggle
-och en räknare över token och ackumulerad kostnad för profilen.
+Läget väljs med en segmenterad kontroll högst upp: **Fråga arkivet (RAG)** och
+**Utredningsläge (MCP)**. I RAG-läget ligger sökvalen (reranker, top-K/top-N,
+facetter och fuzzy-sökning) i den hopfällbara sektionen *Sökinställningar* i
+sidofältet (minimerad som standard) och syns bara där; MCP-läget har i stället chatten
+och **Ny konversation**. Sidofältet visar dessutom LLM-profilen, kunskapsgrafens
+toggle och en räknare över token och ackumulerad kostnad för profilen, som alltid
+ligger allra sist.
 
 LLM-profiler skapas och redigeras i ett sammanhållet formulär under **Admin →
 Inställningar → LLM-inställningar** och väljs i Utredningssidans sidofält. I

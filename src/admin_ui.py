@@ -509,7 +509,8 @@ PROMPT_MODE_HELP = {
 Modellen får sökutdrag tillsammans med frågan. Den kan inte själv söka vidare
 eller anropa `search_archive` eller `get_page` i detta läge. Skriv därför regler
 för hur utdragen ska användas och hur otillräckligt underlag ska redovisas.
-Antalet träffar och sökmetoden väljer du i RAG-flikens **Sökinställningar**.
+Antalet träffar och sökmetoden väljer du i RAG-lägets **Sökinställningar** i
+sidofältet.
 
 **Exempel på en regel att lägga till i standardtexten:**
 
@@ -626,14 +627,14 @@ def render_settings_tab() -> None:
     st.caption(
         "Systempromptar för Utredning-sidans två lägen. Lämnas ett fält tomt "
         "används standardtexten. Ändringar gäller vid nästa fråga — i en pågående "
-        "OpenAI/DeepSeek-chatt i MCP-fliken först efter Ny konversation."
+        "OpenAI/DeepSeek-chatt i MCP-läget först efter Ny konversation."
     )
     sparade = load_prompts_form()
     falt = (
-        ("rag", "Fråga arkivet (RAG)", "Systemprompten som styr svaren i RAG-fliken.",
+        ("rag", "Fråga arkivet (RAG)", "Systemprompten som styr svaren i RAG-läget.",
          prompts.SYSTEM_PROMPT),
         ("mcp", "Utredningsläge (MCP)",
-         "Systemprompten som styr utredningsassistenten i MCP-fliken.",
+         "Systemprompten som styr utredningsassistenten i MCP-läget.",
          prompts.MCP_SYSTEM_PROMPT),
     )
     for nyckel, etikett, hjalp, standard in falt:
