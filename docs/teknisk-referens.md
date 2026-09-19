@@ -346,7 +346,8 @@ flowchart TD
 Klassisk *retrieval-augmented generation*: en fast pipeline i tre steg.
 
 1. **Vektorsökning** — frågan embedas lokalt med `intfloat/multilingual-e5-large`
-   och matchas mot LanceDB-indexet (top-20 kandidater).
+   och matchas mot LanceDB-indexet (top-50 kandidater som standard, ställbart 5–100
+   i sökinställningarna).
 2. **Hybrid + reranking (valfritt)** — `--hybrid` kombinerar vektor och BM25 (FTS)
    med *Reciprocal Rank Fusion* (k=60). Sedan omrankar
    `BAAI/bge-reranker-v2-m3` resultaten och plockar ut topp-6. BGE körs lokalt och

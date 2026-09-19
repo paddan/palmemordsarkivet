@@ -25,7 +25,7 @@ När du gör förändringar i projektet ska du **alltid** uppdatera den använda
 - `README.md` — presentationssida (svenska): vad projektet är, länkar vidare
 - `docs/kom-igang.md` — snabbstart (svenska): krav, installation, API-nyckel, kör pipelinen, ställ första frågan
 - `docs/teknisk-referens.md` — detaljerad dokumentation (svenska): flödesdiagram, alla steg/flaggor, state-db, kunskapsgraf, LLM-config, filöversikt, tester
-- `docs/jev-reranker-pilot.md` — pilotstudie (svenska): Jev mot BGE som reranker, mått, begränsningar och rekommendation
+- `docs/jev-reranker-pilot.md` — pilotstudie (svenska): Jev mot BGE som reranker, mått, begränsningar och rekommendation, samt uppföljningen som mätte kandidatlistans storlek och höjde `top_k` till 50
 - `AGENTS.md` — instruktioner för framtida Codex-sessioner
 
 ## Project Overview
@@ -233,6 +233,13 @@ RAG-lägets sökinställningar (reranker, top-K/top-N, facetter, fuzzy) ritas i 
 **hopfällbar** `Sökinställningar`-sektion i sidofältet (minimerad som standard), ovanför tokenräknaren, och
 bara när RAG-läget är
 valt (`_render_rag_settings`, vars val skickas in i `_render_rag_tab`);
+standarden är `top_k` 50 och `top_n` 6 — 50 och inte 20 eftersom mätningen i
+`docs/jev-reranker-pilot.md` visade att topp 6 rymde 38 av 60 belägg med 20
+kandidater och 44 med 50, och kandidaterna inte kostar några tokens (`top_n` styr
+vad som skickas till modellen). MCP-verktyget `search_archive` har medvetet kvar sin
+egen standard `TOP_K_DEFAULT = 20` i `src/rag/mcp_server.py`: mätningen gällde
+RAG-vägen, och i MCP-läget gör modellen flera sökningar per fråga — höj den inte utan
+en egen mätning;
 sidofältet har annars LLM-profil, kunskapsgrafens toggle (grafen kan byggas för
 båda lägena) och tokenräknaren, som är fäst i botten av sidofältet
 (`_SIDEBAR_BOTTOM_CSS`: `st-key-sidebar_scroll` scrollar för sig medan

@@ -35,7 +35,10 @@ _RERANKERS = {
 # växlade tillbaka till RAG.
 _RAG_SETTINGS_DEFAULTS: dict[str, Any] = {
     "reranker_choice": "BGE – lokal",
-    "rag_top_k": 20,
+    # 50 och inte 20: mätningen i docs/jev-reranker-pilot.md visade att topp 6
+    # rymde 38 av 60 belägg med 20 kandidater och 44 med 50. top_n styr vad som
+    # skickas till modellen, så fler kandidater kostar inga tokens.
+    "rag_top_k": 50,
     "rag_top_n": 6,
     "rag_facets": [],
     "rag_fuzzy_on": False,

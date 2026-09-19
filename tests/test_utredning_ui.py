@@ -112,6 +112,14 @@ def test_rag_laget_visar_sokinställningarna_i_sidofältet(sida: AppTest) -> Non
     assert "LLM-profil" in labels
 
 
+def test_top_k_startar_pa_50(sida: AppTest) -> None:
+    """Standarden är 50 efter mätningen i docs/jev-reranker-pilot.md: topp 6
+    rymde 38 av 60 belägg med 20 kandidater och 44 med 50. top_n styr vad som
+    skickas till modellen, så fler kandidater kostar inga tokens."""
+    assert _slider(sida, TOP_K).value == 50
+    assert _slider(sida, TOP_N).value == 6
+
+
 def test_mcp_laget_visar_inte_sokinställningarna(sida: AppTest) -> None:
     _run(sida, MCP)
     assert sida.chat_input, "MCP-kroppen ritades inte (tidig st.stop()?)"

@@ -4,7 +4,9 @@ Jev gav bättre källurval i detta lilla test, med nästan samma uppmätta svars
 
 > **Efter piloten:** Ett experimentellt Jev-val har lagts till i RAG-lägets
 > sökinställningar. BGE är fortfarande standard. Pilotens resultat och påståendet
-> ovan om oförändrad produktionskod beskriver själva mättillfället.
+> ovan om oförändrad produktionskod beskriver själva mättillfället. Kandidatlistans
+> storlek höjdes däremot från 20 till 50 efter en separat mätning — se
+> *Uppföljning 2026-09-19* nedan.
 >
 > Vid manuell användning i RAG-läget har BGE hittills gett bättre urval än Jev.
 > Det är en användarerfarenhet från enstaka frågor, inte en mätning, och den
@@ -66,6 +68,63 @@ Slutliga LLM-svar genererades inte. Testet mäter källurval, inte svarens fakti
 
 Rekommendation: behåll BGE som standard tills vidare. Nästa steg är ett valbart Jev-läge (infört i RAG-läget 2026-09-19) och en större, mänskligt granskad frågesamling med särskilt fokus på korrekt talare, tidpunkt och kandidattäckning.
 
+## Uppföljning 2026-09-19: kandidatlistans storlek
+
+Pilotens slutsats att en reranker inte kan återställa material som första söksteget
+missat ledde till en separat mätning på samma tio frågor och samma frysta kandidater.
+Bara listans storlek ändrades: `top_k` 20 → 50. Rerankrarna var desamma (lokal BGE
+respektive `typesafe/jev-1.13-20260917`), och frågan var om det som ligger på
+vektorplats 21–50 är värt att hämta hem.
+
+| Konfiguration | Belägg i topp 6 (av 60) | Korrigerat |
+|---|---:|---:|
+| Vektorsökning | 27 (45,0 %) | 27 |
+| BGE, 20 kandidater | 38 (63,3 %) | 38 |
+| BGE, 50 kandidater | 44 (73,3 %) | ~41 |
+| Jev, 20 kandidater | 46 (76,7 %) | 46 |
+| Jev, 50 kandidater | 55 (91,7 %) | ~51 |
+
+Jev med 50 kandidater var bättre än Jev med 20 på fem frågor och sämre på ingen;
+BGE med 50 var bättre på fem och sämre på en. Mårten Palme-frågan, där varken BGE
+eller Jev hade ett enda belägg bland de 20, fick 3–4 belägg med 50 kandidater.
+Det var alltså listan och inte rerankern som saknade material.
+
+De 23 respektive 24 passager som blev nya i topp 6 bedömdes blint av två nya
+bedömare. Båda kalibrerades mot pilotens etiketter på samma 23 stratifierade
+passager: exakt samstämmighet 78,3 % respektive 73,9 %, linjärt viktad kappa 0,946
+respektive 0,935, medelförskjutning +0,04 respektive 0,00, och ingen av dem
+nedgraderade något av pilotens nio belägg. I båda fallen kom 18 % av deras belägg
+från passager piloten kallat 0 eller 1, vilket är korrigeringsfaktorn bakom kolumnen
+ovan. Deras höga beläggandel på det nya materialet förklaras av urvalet: de nya
+passagerna är de en reranker valt till en topp 6, inte ett slumpurval ur alla 20.
+
+Två följder:
+
+- **`top_k` höjt till 50** i `src/Utredning.py` (`rag_top_k`). Kandidaterna kostar
+  inga tokens — `top_n` styr fortfarande vad som skickas till modellen. Lokal BGE
+  rangordnade 50 kandidater på 1,6–2,1 s per fråga i den här körningen, på en maskin
+  där cross-encodern kör på `mps:0`; samma 50 par tog 0,65 s när de kördes utan en
+  samtidig vektorsökning, eftersom encodern och embedding-modellen delar GPU. Siffran
+  är alltså maskinberoende och säger inget om CPU-only-hårdvara, där kostnaden skalar
+  med antalet par. Jevs merkostnad är däremot oberoende av maskin: 50 kandidater tog
+  ~5,0 s per fråga mot 2,0 s för 20, eftersom anropen är nätverksbundna (fyra
+  samtidiga, 0,0014 USD per fråga).
+  MCP-verktyget `search_archive` har kvar sin egen standard på 20
+  (`TOP_K_DEFAULT` i `src/rag/mcp_server.py`). Mätningen gällde RAG-vägen, och i
+  MCP-läget gör modellen flera sökningar per fråga, så den vägen ska mätas separat
+  innan den ändras.
+- **`top_n` lämnad på 6.** Pilotens etiketter visar hur bra materialet är per
+  rangplats: för Jev är plats 1–6 belägg i 76,7 % av fallen, plats 7–10 i 50,0 %,
+  plats 11–15 i 36,0 % och plats 16–20 i 12,0 %. Tio vore alltså det enda försvarbara
+  steget om fler utdrag ska skickas, och det fördubblar utdragsdelen av kontexten
+  (~990 → ~1 740 token per fråga). Ingen mätning visar att slutsvaren blir bättre av
+  det, så standarden står kvar.
+
+Begränsningar: tio egenvalda frågor, en körning per fråga, agentbedömningar och inte
+mänskligt validerat facit — samma förbehåll som piloten. 33 av Jev@50:s 55 belägg
+vilar på en annan bedömare än pilotens. Slutsvar genererades fortfarande inte, så
+mätningen gäller källurval.
+
 ## Reproducerbart underlag
 
 Underlaget ligger lokalt i `generated/experiments/jev-2026-09-19/` (gitignorerad katalog,
@@ -76,5 +135,7 @@ alltså inte med i repot). Detta dokument är kopian som versionshanteras.
 - `bge.json`, `jev.json`: fulla rangordningar, tider, Jev-modellversion och leverantörens kostnadsuppgifter.
 - `summary.json`: sammanställda mått per fråga och totalt.
 - `prepare.py`, `run_jev.py`, `evaluate.py`: tillfälliga experimentskript, inte produktionsentrypoints. `prepare.py` återskapar och skriver över sökunderlaget; `run_jev.py` gör nya externa anrop och kostar krediter. `evaluate.py` räknar om resultaten lokalt utan API-anrop.
+- `recall.py`, `topk50.py`, `compare50.py`, `compare_all.py`, `jev50.py`: uppföljningens skript. `recall.py` och `compare_all.py` räknar bara om befintliga etiketter lokalt; `topk50.py` gör en ny lokal sökning och rangordning (inget API); `jev50.py` gör 500 externa anrop och kostade 0,0141 USD.
+- `topk50.json`, `jev50.json`, `jev50-rapport.json`, `topk50-nytt-att-bedoma.json`, `jev50-nytt-att-bedoma.json`, `kalibrering-att-bedoma.json`, `labels-topk50-nytt.json`, `labels-jev50-nytt.json`, `labels-kalibrering.json`, `labels-kalibrering-c.json`: uppföljningens underlag och bedömningar.
 
 SHA-256 för fryst candidates.json: `a3875b1df605657ef021bf20303d0bbe3414f9643476572a298aa5144a3f09fa`.
