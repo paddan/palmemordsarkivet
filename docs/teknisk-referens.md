@@ -65,6 +65,28 @@ För utveckling/tester:
 
 ## Användning
 
+Diagrammet visar huvudstegen; OCR-steget omfattar även sammanslagning av
+sidtext och hantering av WPU-material.
+
+```mermaid
+flowchart TD
+    A["PDF:er från palmemordsarkivet.se och wpu.nu"] --> B["Ladda ner till lokalt arkiv"]
+    B --> C["OCR och maskeringsdetektering<br/>Tesseract, med valfri Surya-fallback"]
+    C --> D["Sammanfoga och normalisera text<br/>Bedöm kvalitet, kör vid behov Surya igen"]
+    D --> E{"LLM-korrigering vald?"}
+    E -->|Ja| F["LLM korrigerar lågkvalitativ OCR-text<br/>Kvaliteten bedöms igen"]
+    E -->|Nej| G["Dela texten i överlappande utdrag"]
+    F --> G
+    G --> H["Embedding-modell omvandlar<br/>utdragen till sökvektorer"]
+    H --> I[("LanceDB<br/>Text, vektorer och källreferenser")]
+    S[("SQLite: state.db<br/>Status och sidtext för återupptagning")] -.-> C
+    S -.-> D
+    S -.-> G
+```
+
+SQLite håller reda på vad som redan är gjort, så pipelinen kan återupptas
+och bara bearbeta det som behövs. LanceDB lagrar det sökbara indexet.
+
 Alla kommandon nedan skrivs som `.venv/bin/python scripts/X.py …`. Samma kommando
 går att skriva `./X.sh …` från projektroten: varje entrypoint har en tunn genväg
 med samma namn som bara vidarebefordrar argumenten — se
@@ -293,6 +315,31 @@ Båda kommandona är idempotenta.
 ```
 
 OAuth-token genereras med `claude setup-token` (engångsåtgärd).
+
+Diagrammet visar de två sätten att besvara en fråga. I RAG-läget hämtar
+programmet kontext före LLM-anropet. I MCP-läget styr LLM:en själv vilka
+sökningar och sidläsningar som behövs.
+
+```mermaid
+flowchart TD
+    Q["Din fråga"] --> Mode{"Valt sökläge"}
+    subgraph RAG["RAG: ett förutbestämt sökflöde"]
+        R1["Embedding av frågan"] --> R2["Sök relevanta utdrag i LanceDB"]
+        R2 --> R3["Välj de bästa utdragen<br/>Valfri omrankning med cross-encoder"]
+        R3 --> R4["Fråga och källutdrag skickas<br/>till vald LLM-profil"]
+    end
+    subgraph MCP["MCP: LLM:en söker i flera steg"]
+        M1["LLM:en planerar nästa steg"] --> M2{"Behövs mer underlag?"}
+        M2 -->|Ja| M3["search_archive: sök i arkivet<br/>get_page: läs en hel sida"]
+        M3 --> M4["Källtext tillbaka till LLM:en"]
+        M4 --> M1
+    end
+    Mode -->|RAG| R1
+    Mode -->|MCP| M1
+    R4 --> A["Svar med källhänvisningar"]
+    M2 -->|Nej| A
+    A --> P["Öppna original-PDF och kontrollera källan"]
+```
 
 #### RAG-läge (standard)
 

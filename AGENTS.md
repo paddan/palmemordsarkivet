@@ -24,7 +24,7 @@ När du gör förändringar i projektet ska du **alltid** uppdatera den använda
 
 - `README.md` — presentationssida (svenska): vad projektet är, länkar vidare
 - `docs/kom-igang.md` — snabbstart (svenska): krav, installation, API-nyckel, kör pipelinen, ställ första frågan
-- `docs/teknisk-referens.md` — detaljerad dokumentation (svenska): alla steg/flaggor, state-db, kunskapsgraf, LLM-config, filöversikt, tester
+- `docs/teknisk-referens.md` — detaljerad dokumentation (svenska): flödesdiagram, alla steg/flaggor, state-db, kunskapsgraf, LLM-config, filöversikt, tester
 - `docs/jev-reranker-pilot.md` — pilotstudie (svenska): Jev mot BGE som reranker, mått, begränsningar och rekommendation
 - `AGENTS.md` — instruktioner för framtida Codex-sessioner
 
