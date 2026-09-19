@@ -15,6 +15,15 @@ webgränssnitt där du kan ställa frågor om Palme-mordet — med källhänvisn
 tillbaka till original-PDF:erna. Som komplement kan materialet byggas upp som en
 kunskapsgraf och utforskas visuellt.
 
+![Utredning-sidan i webbgränssnittet: frågan "Hur många och vilka bevittnade
+mordet?" i RAG-läget, svaret med källhänvisningar till dokumentnummer och sida,
+sökinställningarna i sidofältet och räknaren för token och kostnad i botten](Palmemordsarkivet.png)
+
+*Utredning-sidan i RAG-läget: läget väljs högst upp, frågan ställs i mitten och
+svaret citerar källorna med dokumentnummer och sida. Sökvalen (reranker,
+top-K/top-N, facetter och fuzzy) ligger minimerade i sidofältet, och under dem
+står räknaren för token och kostnad.*
+
 ## Från PDF till sökbart arkiv
 
 Pipelinen förbereder materialet för sökning. Diagrammet visar huvudstegen;
