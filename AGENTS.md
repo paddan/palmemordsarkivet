@@ -57,6 +57,14 @@ src/
   karta.py             # Ren kartlogik: validering, popup-HTML och TimestampedGeoJson
   map_extract.py       # Ren parsing/platsmatchning för kartobservations-kandidater
   extract_map_observations.py # LLM-extraktion av person-position-tid-kandidater
+  backends.py          # Delad LLM-backend-katalog (Claude/OpenAI/DeepSeek/OpenRouter/Ollama/custom)
+  citations.py         # Citatuppslag: matcha [Nr X, sida Y] mot PDF:er och rendera länkar
+  config.py            # Delad LLM-konfiguration med flera namngivna profiler (generated/llm_config.json)
+  download_wpu.py      # Laddar ner PDF:er från wpu.nu till downloaded/wpu_files/
+  llm_config_cli.py    # CLI för att visa/ändra LLM-konfigurationen utan webbgränssnittet
+  llm_usage.py         # Token- och kostnadsräkning för LLM-anrop (Streamlit-fri)
+  merge_wpu.py         # Jämför wpu-text mot palme-text och behåller bästa versionen
+  ocr_db_helper.py     # CLI-hjälpare för ocr_tesseract.py — DB-operationer parallellsäkert
   pages/
     2_Utredningspärm.py # Sparade fråga/svar-spår, källbokmärken och anteckningar
     3_Graf.py          # Fristående grafsida
@@ -287,7 +295,34 @@ till Claude. Samma gäller ett okänt `backend_name` i profilen:
 `resolve_runtime_profile` höjer `ValueError` i stället för att välja katalogens
 första backend, och anroparen gör om det till ett begripligt fel. En tom
 `api_key_env` för en känd molnbackend använder dess
-katalogdefinierade standardvariabel.
+katalogdefinierade standardvariabel. Prisfälten (`input_price_usd`/
+`output_price_usd`/`cache_hit_price_usd`) hämtas automatiskt via
+`backends.fetch_model_pricing` när leverantörens `/v1/models` anger ett
+pricing-objekt (OpenRouter gör det, USD per token, omräknat till USD per 1M).
+Omräkningen sker med `Decimal` på rådata-strängen, inte `float(värde) *
+1_000_000` — den binära flyttalsmultiplikationen gav brus som
+`0.19999999999999998` i stället för `0.2` för vissa priser, och det bruset
+hade annars sparats rakt in i profilen. Formuläret visar då priset som
+skrivskyddad text i stället för de tre
+`number_input`-fälten. OpenAI och DeepSeek anger inget pris i `/v1/models`,
+så deras profiler faller tillbaka på manuell inmatning som tidigare. Samma
+fem minuters `st.cache_data`-cache (utan nyckelvärdet i cache-nyckeln) som
+modellistan. Texten byggs med `format_fetched_price` och måste escapa `$`
+(`\$`) innan den går till `st.caption` — två `$` i samma markdown-block blir
+annars LaTeX-matte hos Streamlit (samma gotcha som sidofältets
+kostnadsräknare). **Modell-rullistan** visar samma pris inline per rad
+(`format_model_option` som `st.selectbox`s `format_func`) — annars syns priset
+bara för den redan valda modellen och går inte att jämföra mellan modeller
+utan att klicka igenom dem en och en. `format_func` byter bara den visade
+etiketten; värdet `st.selectbox` returnerar (och som sparas i profilen) är
+fortfarande leverantörens rena modell-id, så `format_model_option` behöver
+ingen escaping — `st.selectbox`s rullista renderas som vanlig text, inte
+markdown. Båda formatterarna delar `format_price_usd`, som varken rundar eller
+visar onödiga nollor — `30.0` → `"30"`, `2.5` → `"2.5"`, `0.035` → `"0.035"`.
+Avrundning till två decimaler provades men förkastades: det gjorde
+`0.035` till `"0.04"`, vilket döljer verkliga skillnader för priser under ett
+öre (vanligt för cacherabatt). Formattern bygger på `str()`s egen kortaste
+rundtrippande decimalrepresentation och klipper bara ett rent heltals `.0`.
 
 **Redigerbara promptar (`src/prompts.py`)**: Systempromptarna för RAG- och
 MCP-läget kan ändras i Admin → Inställningar och lagras i

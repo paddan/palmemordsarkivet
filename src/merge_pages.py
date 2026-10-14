@@ -117,11 +117,16 @@ def merge_one(
         if not updates:
             return False
 
-        if txt_path.exists():
-            original = txt_path.read_text(encoding="utf-8", errors="replace")
+        # En 0-byte-fil har inget att slå ihop mot och behandlas därför som
+        # saknad: med create_missing byggs den från pdf_pages i stället för
+        # att merge_text tyst returnerar "" och kastar bort sidorna.
+        original = (
+            txt_path.read_text(encoding="utf-8", errors="replace")
+            if txt_path.exists() else ""
+        )
+        if original:
             merged = merge_text(original, updates)
         elif create_missing:
-            original = ""
             merged = text_from_pages(updates)
             if not merged:
                 return False

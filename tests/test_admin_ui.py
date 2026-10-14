@@ -13,6 +13,7 @@ from admin_ui import (
     UNCHANGED_CHOICE_LABEL,
     apply_llm_profile_form,
     choice_form_options,
+    format_fetched_price,
     format_job_status,
     group_admin_operations,
     llm_form_defaults,
@@ -437,6 +438,57 @@ def test_llm_profile_payload_stores_prices_and_drops_unset_ones() -> None:
     assert not [k for k in utan_priser if k.endswith("_price_usd")]
 
 
+def test_format_price_usd_strips_trailing_zero_decimals() -> None:
+    assert admin_ui.format_price_usd(30.0) == "30"
+    assert admin_ui.format_price_usd(0.0) == "0"
+
+
+def test_format_price_usd_keeps_nonzero_decimals_untouched() -> None:
+    assert admin_ui.format_price_usd(2.5) == "2.5"
+    assert admin_ui.format_price_usd(0.25) == "0.25"
+
+
+def test_format_price_usd_never_rounds_away_precision() -> None:
+    """Regression: avrundning till två decimaler gjorde 0.035 till 0.04 —
+    priser under ett öre (vanligt för cache-rabatt) måste visas exakt."""
+    assert admin_ui.format_price_usd(0.035) == "0.035"
+    assert admin_ui.format_price_usd(1.005) == "1.005"
+
+
+def test_format_fetched_price_lists_known_fields_in_order() -> None:
+    text = format_fetched_price(
+        {"input_price_usd": 2.5, "output_price_usd": 7.5, "cache_hit_price_usd": 0.25}
+    )
+    assert text == "Input 2.5 $/1M · Output 7.5 $/1M · Cache-träff 0.25 $/1M"
+
+
+def test_format_fetched_price_skips_missing_fields() -> None:
+    assert format_fetched_price({"input_price_usd": 2.5}) == "Input 2.5 $/1M"
+
+
+def test_format_model_option_appends_price_when_known() -> None:
+    pricing = {"openai/gpt-4o": {"input_price_usd": 2.5, "output_price_usd": 7.5}}
+    assert (
+        admin_ui.format_model_option("openai/gpt-4o", pricing)
+        == "openai/gpt-4o — in $2.5 / out $7.5 per 1M"
+    )
+
+
+def test_format_model_option_strips_trailing_zero_decimals() -> None:
+    pricing = {"openai/gpt-5.4-pro": {"input_price_usd": 30.0, "output_price_usd": 180.0}}
+    assert (
+        admin_ui.format_model_option("openai/gpt-5.4-pro", pricing)
+        == "openai/gpt-5.4-pro — in $30 / out $180 per 1M"
+    )
+
+
+def test_format_model_option_returns_plain_name_when_price_unknown() -> None:
+    assert admin_ui.format_model_option("gpt-4o", {}) == "gpt-4o"
+    assert admin_ui.format_model_option(CUSTOM_MODEL_LABEL, {"gpt-4o": {"input_price_usd": 1.0}}) == (
+        CUSTOM_MODEL_LABEL
+    )
+
+
 def test_apply_llm_profile_form_renames_and_sets_default_atomically() -> None:
     profiles = {
         "Standard": {"model": "claude-opus-4-8"},
@@ -617,6 +669,68 @@ def test_llm_settings_uses_provider_model_catalog_when_available(tmp_path, monke
         "framtida-modell",
         CUSTOM_MODEL_LABEL,
     ]
+
+
+def test_llm_settings_auto_fills_price_when_provider_reports_it(tmp_path, monkeypatch) -> None:
+    """OpenRouter anger pris per modell — formuläret ska visa det i stället för
+    att be användaren skriva in det manuellt."""
+    from streamlit.testing.v1 import AppTest
+
+    import backends
+    import config
+
+    config_file = tmp_path / "llm_config.json"
+    config_file.write_text(json.dumps({}), encoding="utf-8")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setattr(config, "CONFIG_FILE", config_file)
+    # monkeypatch (inte en rå tilldelning i AppTest-skriptet) återställer
+    # backends.fetch_model_pricing efter testet — annars läcker den hämtade
+    # prisfunktionen in i senare tester som kör i samma process.
+    monkeypatch.setattr(backends, "fetch_models", lambda base_url, api_key: ["openai/gpt-4o"])
+    monkeypatch.setattr(
+        backends, "fetch_model_pricing",
+        lambda base_url, api_key: {
+            "openai/gpt-4o": {
+                "input_price_usd": 2.5,
+                "output_price_usd": 7.5,
+                "cache_hit_price_usd": 0.25,
+            },
+        },
+    )
+    app = AppTest.from_string(
+        "from pathlib import Path\n"
+        "import admin_ui, config, streamlit as st\n"
+        "st.cache_data.clear()\n"
+        f"config.CONFIG_FILE = Path({str(config_file)!r})\n"
+        "admin_ui.render_llm_settings()\n"
+    )
+    app.run(timeout=20)
+    next(item for item in app.selectbox if item.label == "Tjänst").set_value("OpenRouter")
+    app.run(timeout=20)
+
+    model_select = next(item for item in app.selectbox if item.label == "Modell")
+    assert model_select.value == "openai/gpt-4o"
+    # Regression: priset ska synas i rullistans rader, inte bara i den
+    # hopfällda "Avancerade inställningar"-sektionen för den redan valda
+    # modellen — annars går det inte att jämföra modeller utan att klicka
+    # igenom dem en och en.
+    assert "openai/gpt-4o — in $2.5 / out $7.5 per 1M" in model_select.options
+    assert not [item for item in app.number_input if item.label == "Input ($/1M)"]
+    assert any(
+        "Pris hämtat automatiskt" in caption.value
+        # \$ — annars tolkar Streamlits markdown "$...$" som LaTeX-matte.
+        and "Input 2.5 \\$/1M" in caption.value
+        for caption in app.caption
+    )
+
+    next(button for button in app.button if button.label == "Spara ändringar").click()
+    app.run(timeout=20)
+
+    assert not app.exception
+    stored = json.loads(config_file.read_text(encoding="utf-8"))["profiles"]["Standard"]
+    assert stored["input_price_usd"] == 2.5
+    assert stored["output_price_usd"] == 7.5
+    assert stored["cache_hit_price_usd"] == 0.25
 
 
 def test_pipeline_form_reveals_default_llm_profile_only_when_enabled(

@@ -855,11 +855,24 @@ def render_llm_settings() -> None:
                 list[str], backends.fetch_models(base_url, os.environ.get(api_key_env, ""))
             )
 
+        @st.cache_data(ttl=300, show_spinner=False)
+        def _cached_provider_pricing(base_url: str, api_key_env: str) -> dict[str, dict]:
+            """Hämta prislista per modell utan att använda nyckelvärdet som cache-nyckel."""
+            return cast(
+                dict[str, dict],
+                backends.fetch_model_pricing(base_url, os.environ.get(api_key_env, "")),
+            )
+
         model_catalog = backends.available_models(
             {**backend, "base_url": selected_base_url},
             fetcher=lambda base_url, _api_key: _cached_provider_models(
                 base_url, selected_api_key_env
             ),
+        )
+        model_pricing = (
+            _cached_provider_pricing(selected_base_url, selected_api_key_env)
+            if selected_base_url
+            else {}
         )
         model_options, model_selection = llm_model_options(
             {"models": model_catalog}, saved_model
@@ -869,6 +882,7 @@ def render_llm_settings() -> None:
             model_options,
             index=model_options.index(model_selection),
             key=f"llm_model_choice_{profile_key}_{backend_name}",
+            format_func=lambda m: format_model_option(m, model_pricing),
         )
         if model_choice == CUSTOM_MODEL_LABEL:
             model = st.text_input(
@@ -876,8 +890,10 @@ def render_llm_settings() -> None:
                 value=saved_model if saved_model not in backend.get("models", []) else "",
                 key=f"llm_custom_model_{profile_key}_{backend_name}",
             )
+            fetched_price: dict = {}
         else:
             model = model_choice
+            fetched_price = model_pricing.get(model, {})
 
         credential_status = st.empty()
 
@@ -897,42 +913,55 @@ def render_llm_settings() -> None:
                 key=api_key_env_key,
                 help="Endast variabelns namn sparas, aldrig själva API-nyckeln.",
             )
-            st.caption(
-                "Priser (valfritt) — USD per 1M token. Används för kostnadsräkningen "
-                "i Utrednings sidofält och här intill; tomt ger \"kostnad okänd\"."
-            )
-            price_defaults = profile if profile.get("backend_name") == backend_name else {}
-            price_cols = st.columns(3)
-            input_price = price_cols[0].number_input(
-                "Input ($/1M)",
-                min_value=0.0,
-                value=float(price_defaults.get("input_price_usd") or 0.0),
-                step=0.01,
-                format="%.4f",
-                key=f"llm_input_price_{profile_key}_{backend_name}",
-                help="Pris för icke-cachade indata-token.",
-            )
-            output_price = price_cols[1].number_input(
-                "Output ($/1M)",
-                min_value=0.0,
-                value=float(price_defaults.get("output_price_usd") or 0.0),
-                step=0.01,
-                format="%.4f",
-                key=f"llm_output_price_{profile_key}_{backend_name}",
-                help="Pris för genererade token.",
-            )
-            cache_hit_price = price_cols[2].number_input(
-                "Cache-träff ($/1M)",
-                min_value=0.0,
-                value=float(price_defaults.get("cache_hit_price_usd") or 0.0),
-                step=0.01,
-                format="%.4f",
-                key=f"llm_cache_hit_price_{profile_key}_{backend_name}",
-                help=(
-                    "Pris för cachade indata-token (DeepSeek cachar automatiskt). "
-                    "Tomt = samma pris som Input."
-                ),
-            )
+            if fetched_price:
+                # Escapad $ — två $ i samma markdown-block blir annars LaTeX-matte
+                # hos Streamlit (samma gotcha som sidofältets kostnadsräknare).
+                escaped_price_text = format_fetched_price(fetched_price).replace("$", "\\$")
+                st.caption(
+                    f"✓ Pris hämtat automatiskt från {backend_name}: "
+                    f"{escaped_price_text}. Används för kostnadsräkningen i "
+                    "Utrednings sidofält och här intill."
+                )
+                input_price = fetched_price.get("input_price_usd", 0.0)
+                output_price = fetched_price.get("output_price_usd", 0.0)
+                cache_hit_price = fetched_price.get("cache_hit_price_usd", 0.0)
+            else:
+                st.caption(
+                    "Priser (valfritt) — USD per 1M token. Används för kostnadsräkningen "
+                    "i Utrednings sidofält och här intill; tomt ger \"kostnad okänd\"."
+                )
+                price_defaults = profile if profile.get("backend_name") == backend_name else {}
+                price_cols = st.columns(3)
+                input_price = price_cols[0].number_input(
+                    "Input ($/1M)",
+                    min_value=0.0,
+                    value=float(price_defaults.get("input_price_usd") or 0.0),
+                    step=0.01,
+                    format="%.4f",
+                    key=f"llm_input_price_{profile_key}_{backend_name}",
+                    help="Pris för icke-cachade indata-token.",
+                )
+                output_price = price_cols[1].number_input(
+                    "Output ($/1M)",
+                    min_value=0.0,
+                    value=float(price_defaults.get("output_price_usd") or 0.0),
+                    step=0.01,
+                    format="%.4f",
+                    key=f"llm_output_price_{profile_key}_{backend_name}",
+                    help="Pris för genererade token.",
+                )
+                cache_hit_price = price_cols[2].number_input(
+                    "Cache-träff ($/1M)",
+                    min_value=0.0,
+                    value=float(price_defaults.get("cache_hit_price_usd") or 0.0),
+                    step=0.01,
+                    format="%.4f",
+                    key=f"llm_cache_hit_price_{profile_key}_{backend_name}",
+                    help=(
+                        "Pris för cachade indata-token (DeepSeek cachar automatiskt). "
+                        "Tomt = samma pris som Input."
+                    ),
+                )
 
         # En tom override betyder inte att kända molntjänster blir nyckelfria:
         # runtime-konfigurationen faller då tillbaka till backend-katalogens env.
@@ -1007,6 +1036,52 @@ def llm_model_options(backend: Mapping[str, object], saved_model: str) -> tuple[
     options = [*models, CUSTOM_MODEL_LABEL]
     selected = saved_model if saved_model in models else CUSTOM_MODEL_LABEL
     return options, selected
+
+
+_FETCHED_PRICE_LABELS: tuple[tuple[str, str], ...] = (
+    ("input_price_usd", "Input"),
+    ("output_price_usd", "Output"),
+    ("cache_hit_price_usd", "Cache-träff"),
+)
+
+
+def format_price_usd(value: float) -> str:
+    """Formatera ett USD-pris utan att runda eller visa onödiga nollor.
+
+    30.0 → "30", 2.5 → "2.5", 0.035 → "0.035" — ``str()`` ger redan Pythons
+    kortaste decimalrepresentation som rundtrippar exakt, så den enda
+    efterbehandlingen som behövs är att klippa ett rent heltals ".0"."""
+    text = str(float(value))
+    return text[:-2] if text.endswith(".0") else text
+
+
+def format_fetched_price(pricing: Mapping[str, float]) -> str:
+    """Formatera ett hämtat prisobjekt (USD per 1M token) som kompakt text."""
+    return " · ".join(
+        f"{label} {format_price_usd(pricing[key])} $/1M"
+        for key, label in _FETCHED_PRICE_LABELS
+        if key in pricing
+    )
+
+
+def format_model_option(model: str, pricing: Mapping[str, Mapping[str, float]]) -> str:
+    """Formatera en modell-rad för rullistan, med pris inline när det är känt.
+
+    Håller valet (Streamlits ``format_func``) separat från det sparade
+    modellnamnet — rullistan visar en dekorerad etikett, men ``model``-värdet
+    som faktiskt sparas i profilen förblir leverantörens egna modell-id.
+    """
+    known = pricing.get(model)
+    if not known:
+        return model
+    input_price = known.get("input_price_usd")
+    output_price = known.get("output_price_usd")
+    if input_price is None or output_price is None:
+        return model
+    return (
+        f"{model} — in ${format_price_usd(input_price)} "
+        f"/ out ${format_price_usd(output_price)} per 1M"
+    )
 
 
 def llm_form_defaults(

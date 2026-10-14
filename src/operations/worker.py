@@ -37,10 +37,12 @@ class JobSink(ProgressSink):
         self._conn = conn
         self._job_id = job_id
         self._log_file = log_file
+        self._log_lock = threading.Lock()
 
     def write_log(self, message: str, level: str = "info") -> None:
-        self._log_file.write(f"{_now()} [{level}] {message}\n")
-        self._log_file.flush()
+        with self._log_lock:
+            self._log_file.write(f"{_now()} [{level}] {message}\n")
+            self._log_file.flush()
 
     def write_progress(self, update: ProgressUpdate) -> None:
         db.update_admin_job_progress(
@@ -53,9 +55,10 @@ class JobSink(ProgressSink):
         )
 
     def write_traceback(self, exc: BaseException) -> None:
-        self._log_file.write(f"{_now()} [error] Traceback:\n")
-        traceback.print_exception(type(exc), exc, exc.__traceback__, file=self._log_file)
-        self._log_file.flush()
+        with self._log_lock:
+            self._log_file.write(f"{_now()} [error] Traceback:\n")
+            traceback.print_exception(type(exc), exc, exc.__traceback__, file=self._log_file)
+            self._log_file.flush()
 
 
 def _heartbeat_loop(

@@ -1,10 +1,12 @@
 """Delad LLM-backend-katalog — en sanning för Utredning-sidan och llm_config_cli.
 
 Innehåller listan över valbara backends (Claude/OpenAI/DeepSeek/OpenRouter/Ollama/custom),
-modell-filtret och hjälpfunktioner för att hämta tillgängliga modeller från en
+modell-filtret och hjälpfunktioner för att hämta tillgängliga modeller — och,
+där leverantören anger det (t.ex. OpenRouter), deras pris — från en
 OpenAI-kompatibel /v1/models-endpoint. Konsumeras av:
 
 * ``Utredning.py`` — sidofältets backend-/modellval (cachar fetch via st.cache_data)
+* ``admin_ui.py`` — profilformulärets modell- och prisfält (``fetch_model_pricing``)
 * ``llm_config_cli.py`` — den interaktiva menyn (samma val utan webgränssnitt)
 """
 from __future__ import annotations
@@ -102,21 +104,20 @@ MODEL_SKIP_SUBSTRINGS = {
 }
 
 
-def fetch_models(base_url: str, api_key: str) -> list[str]:
-    """Hämta tillgängliga modeller från en OpenAI-kompatibel /v1/models-endpoint.
+def _get_json(url: str, headers: dict[str, str]) -> dict | None:
+    """GET url och tolka JSON-svaret, eller None vid fel.
 
-    Returnerar en sorterad lista med modell-id, eller [] vid fel/saknad endpoint.
-    Använder httpx om det finns, annars stdlib urllib.
+    Delas av fetch_models och fetch_model_pricing — båda läser samma
+    /v1/models-endpoint. Använder httpx om det finns, annars stdlib urllib.
     """
     import json as _json
+    from typing import cast
 
-    url = base_url.rstrip("/") + "/models"
-    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     try:
         import httpx
         resp = httpx.get(url, headers=headers, timeout=5.0)
         resp.raise_for_status()
-        data = resp.json()
+        return cast(dict, resp.json())
     except ImportError:
         import urllib.request
         req = urllib.request.Request(url)
@@ -124,12 +125,72 @@ def fetch_models(base_url: str, api_key: str) -> list[str]:
             req.add_header(k, v)
         try:
             with urllib.request.urlopen(req, timeout=5) as r:
-                data = _json.loads(r.read())
+                return cast(dict, _json.loads(r.read()))
         except Exception:
-            return []
+            return None
     except Exception:
+        return None
+
+
+def fetch_models(base_url: str, api_key: str) -> list[str]:
+    """Hämta tillgängliga modeller från en OpenAI-kompatibel /v1/models-endpoint.
+
+    Returnerar en sorterad lista med modell-id, eller [] vid fel/saknad endpoint.
+    """
+    url = base_url.rstrip("/") + "/models"
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    data = _get_json(url, headers)
+    if data is None:
         return []
     return sorted(m["id"] for m in data.get("data", []))
+
+
+# Pricing-nycklar i ett OpenRouter-liknande pricing-objekt (USD per token) →
+# motsvarande fält i en LLM-profil (USD per 1M token).
+_PRICING_FIELD_MAP = {
+    "prompt": "input_price_usd",
+    "completion": "output_price_usd",
+    "input_cache_read": "cache_hit_price_usd",
+}
+
+
+def fetch_model_pricing(base_url: str, api_key: str) -> dict[str, dict[str, float]]:
+    """Hämta pris per modell från /v1/models, omräknat till USD per 1M token.
+
+    Vissa OpenAI-kompatibla endpoints (t.ex. OpenRouter) anger ett pricing-objekt
+    per modell med USD per token. Leverantörer som inte gör det (OpenAI, DeepSeek)
+    eller modeller utan tolkningsbar prisdata utelämnas helt ur resultatet, så
+    Admin kan falla tillbaka på manuell inmatning för dem.
+    """
+    url = base_url.rstrip("/") + "/models"
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    data = _get_json(url, headers)
+    if data is None:
+        return {}
+
+    from decimal import Decimal, InvalidOperation
+
+    pricing: dict[str, dict[str, float]] = {}
+    for entry in data.get("data", []):
+        model_id = entry.get("id")
+        raw_pricing = entry.get("pricing")
+        if not model_id or not isinstance(raw_pricing, dict):
+            continue
+        parsed: dict[str, float] = {}
+        for raw_key, payload_key in _PRICING_FIELD_MAP.items():
+            value = raw_pricing.get(raw_key)
+            if value is None:
+                continue
+            try:
+                # Decimal på råsträngen i stället för float(value) * 1_000_000
+                # — den binära flyttalsmultiplikationen gav brus som
+                # 0.19999999999999998 i stället för 0.2 för vissa priser.
+                parsed[payload_key] = float(Decimal(str(value)) * 1_000_000)
+            except (TypeError, ValueError, InvalidOperation):
+                continue
+        if parsed:
+            pricing[model_id] = parsed
+    return pricing
 
 
 def available_models(backend: dict, api_key: str = "", fetcher=None) -> list[str]:

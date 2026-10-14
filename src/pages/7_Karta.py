@@ -424,11 +424,14 @@ source_matches = _karta.search_sources(_source_index(str(ROOT)), source_query)
 current_nr = str(st.session_state.get("karta_form_nr") or "").strip()
 keep_label = f"(behåll nuvarande: {current_nr or 'ingen'})"
 label_to_nr = {label: nr for nr, label in source_matches}
+source_pick_options = [keep_label] + [label for _nr, label in source_matches]
+if st.session_state.get("karta_source_pick") not in source_pick_options:
+    st.session_state["karta_source_pick"] = keep_label
 src_left, src_right = st.columns([3, 1])
 with src_left:
     source_pick = st.selectbox(
         f"Välj källa ({len(source_matches)} träffar)",
-        [keep_label] + [label for _nr, label in source_matches],
+        source_pick_options,
         key="karta_source_pick",
     )
 with src_right:

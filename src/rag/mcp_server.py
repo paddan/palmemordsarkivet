@@ -142,6 +142,10 @@ WEB_SEARCH_BUDGET_DEFAULT = 3
 # flyttas räknaren till sessionsstate i stället.
 _web_search_budget: int | None = None
 _web_searches_used = 0
+# Profilslagningen (llm_config.json) cachas per fråga: nollställs av
+# set_web_search_budget, som Utredning-sidan anropar en gång per fråga.
+_PROFILE_TARGET_UNSET = object()
+_profile_target_cache: dict[str, str] | None | object = _PROFILE_TARGET_UNSET
 # Nyckellös körning anropar verktyget i varje tur; raden ska finnas i errors.log
 # men bara en gång per process, annars dränks loggen av samma fel.
 _nyckel_loggad = False
@@ -428,10 +432,11 @@ def set_web_search_budget(budget: object | None = None) -> int:
     Anropas av Utredning-sidan när en fråga börjar. ``None`` betyder "läs ur
     miljön", vilket är hur Claude-vägens subprocess får sitt tak.
     """
-    global _web_search_budget, _web_searches_used
+    global _web_search_budget, _web_searches_used, _profile_target_cache
     källa = budget if budget is not None else os.environ.get(ENV_WEB_SEARCH_BUDGET)
     _web_search_budget = clamp_web_search_budget(källa)
     _web_searches_used = 0
+    _profile_target_cache = _PROFILE_TARGET_UNSET
     return _web_search_budget
 
 
@@ -508,9 +513,20 @@ def web_search_profile() -> str:
 
 
 def _profile_target() -> dict[str, str] | None:
-    """Leverantör, modell, nyckel och nyckelnamn för vald LLM-profil."""
+    """Leverantör, modell, nyckel och nyckelnamn för vald LLM-profil.
+
+    Resultatet cachas per fråga (nollställs av ``set_web_search_budget``, som
+    redan anropas en gång per fråga) — annars läser och parsar varje anrop om
+    ``generated/llm_config.json`` på nytt, och en enda sökning gör flera såna
+    anrop (web_search_provider, web_search_model, web_search_key_env och
+    search_web kallar alla på den här funktionen).
+    """
+    global _profile_target_cache
+    if _profile_target_cache is not _PROFILE_TARGET_UNSET:
+        return _profile_target_cache  # type: ignore[return-value]
     namn = web_search_profile()
     if not namn:
+        _profile_target_cache = None
         return None
     try:
         from config import load_all
@@ -518,24 +534,29 @@ def _profile_target() -> dict[str, str] | None:
         profiler = load_all().get("profiles") or {}
     except Exception as exc:  # pragma: no cover
         log_error("web_search", namn, f"kunde inte läsa profilerna: {type(exc).__name__}")
+        _profile_target_cache = None
         return None
     profil = profiler.get(namn)
     if not isinstance(profil, dict):
         log_error("web_search", namn, "profilen finns inte i llm_config.json")
+        _profile_target_cache = None
         return None
     löst = _resolve_profile(profil)
     if not löst:
+        _profile_target_cache = None
         return None
     provider = provider_from_endpoint(löst.get("base_url"), löst.get("kind"))
     if not provider:
         log_error("web_search", namn, "profilens leverantör har ingen sök-API")
+        _profile_target_cache = None
         return None
-    return {
+    _profile_target_cache = {
         "provider": provider,
         "model": str(löst.get("model") or ""),
         "key": str(löst.get("api_key") or ""),
         "key_env": str(löst.get("api_key_env") or PROVIDER_KEYS[provider]),
     }
+    return _profile_target_cache
 
 
 def set_web_search_provider(provider: object = None) -> str:

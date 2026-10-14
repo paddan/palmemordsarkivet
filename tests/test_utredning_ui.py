@@ -625,3 +625,103 @@ def test_sokmodellen_overlever_ett_varv_i_rag(sida: AppTest, monkeypatch) -> Non
     _run(sida, MCP)
 
     assert _selectbox(sida, SÖKMODELL).value == etikett
+
+
+def test_chat_turn_behaller_ursprunglig_profil_efter_byte(
+    sida: AppTest, monkeypatch,
+) -> None:
+    """En sparad tur i chatthistoriken ska komma ihåg vilken profil som
+    faktiskt genererade svaret, inte sidofältets nuvarande val. Regression:
+    svaret genererades med profil A, operatören bytte sedan till B utan att
+    ställa en ny fråga — turen ska fortfarande visa/spara A."""
+    monkeypatch.setattr("ask.search_hybrid", lambda *a, **k: [])
+    monkeypatch.setattr("ask.rerank", lambda q, found, n: found[:n])
+
+    class _FakeCompletionsA:
+        async def create(self, **kwargs):
+            return _FakeResponse(
+                _FakeChoice(_FakeMessage("Svar från profil A.", None), "stop")
+            )
+
+    class _FakeOpenAI:
+        def __init__(self, *a, **k) -> None:
+            self.chat = type("Chat", (), {"completions": _FakeCompletionsA()})()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a) -> None:
+            return None
+
+    monkeypatch.setattr("openai.AsyncOpenAI", _FakeOpenAI)
+    _med_profiler(
+        monkeypatch,
+        {
+            "A": {"model": "model-a", "backend_name": "Profil A"},
+            "B": {"model": "model-b", "backend_name": "Profil B"},
+        },
+    )
+    _run(sida, MCP)
+    sida.chat_input[0].set_value("Vem var ordförande?").run()
+    assert not sida.exception, sida.exception
+
+    assert sida.session_state.chat_history[-1]["model"] == "model-a"
+    assert sida.session_state.chat_history[-1]["backend_name"] == "Profil A"
+
+    # Byt profil i sidofältet UTAN att ställa en ny fråga.
+    _selectbox(sida, "LLM-profil").set_value("B").run()
+    assert not sida.exception, sida.exception
+
+    # Den redan sparade turen ska fortfarande peka på profilen som genererade
+    # den, inte det nya sidofältsvalet.
+    assert sida.session_state.chat_history[-1]["model"] == "model-a"
+    assert sida.session_state.chat_history[-1]["backend_name"] == "Profil A"
+
+
+def test_openai_chat_history_stays_bounded(sida: AppTest, monkeypatch) -> None:
+    """Regression: openai_chat_messages ska inte växa obegränsat i en lång
+    MCP-konversation med en OpenAI-kompatibel backend — annars växer kostnaden
+    och till sist nås modellens kontextgräns."""
+    monkeypatch.setattr("ask.search_hybrid", lambda *a, **k: [])
+    monkeypatch.setattr("ask.rerank", lambda q, found, n: found[:n])
+
+    class _FakeMessageObj:
+        def __init__(self, content):
+            self.content = content
+            self.tool_calls = None
+
+    class _FakeChoiceObj:
+        def __init__(self, content):
+            self.message = _FakeMessageObj(content)
+            self.finish_reason = "stop"
+
+    class _FakeResponseObj:
+        def __init__(self, content):
+            self.choices = [_FakeChoiceObj(content)]
+            self.usage = None
+
+    class _FakeCompletions:
+        async def create(self, **kwargs):
+            return _FakeResponseObj("Ett kort svar.")
+
+    class _FakeOpenAI:
+        def __init__(self, *a, **k) -> None:
+            self.chat = type("Chat", (), {"completions": _FakeCompletions()})()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a) -> None:
+            return None
+
+    monkeypatch.setattr("openai.AsyncOpenAI", lambda *a, **k: _FakeOpenAI())
+    _run(sida, MCP)
+
+    for i in range(25):
+        sida.chat_input[0].set_value(f"Fråga nummer {i}").run()
+        assert not sida.exception, sida.exception
+
+    messages = sida.session_state.openai_chat_messages
+    assert messages[0]["role"] == "system"
+    assert len(messages) < 25 * 2
+    assert len(sida.session_state.chat_history) == 25 * 2

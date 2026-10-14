@@ -72,16 +72,22 @@ def hunspell_known(words: list[str]) -> set[str]:
 
 
 def _load_state(path: Path) -> dict:
-    """Ladda inkrementell state: {mtimes: {filename: mtime}, counts: {word: n}}."""
+    """Ladda inkrementell state: {mtimes: {filename: mtime},
+    file_words: {filename: {word: count}}}.
+
+    Ordräkningar lagras per fil (inte bara som en global summa) så att en
+    borttagen fil kan tas bort ur cachen utan att tvinga en fullständig
+    omläsning av alla andra filer.
+    """
     if not path.exists():
-        return {"mtimes": {}, "counts": {}}
+        return {"mtimes": {}, "file_words": {}}
     try:
         data: dict = json.loads(path.read_text(encoding="utf-8"))
-        if isinstance(data.get("mtimes"), dict) and isinstance(data.get("counts"), dict):
+        if isinstance(data.get("mtimes"), dict) and isinstance(data.get("file_words"), dict):
             return data
     except Exception:
         pass
-    return {"mtimes": {}, "counts": {}}
+    return {"mtimes": {}, "file_words": {}}
 
 
 def _save_state(path: Path, state: dict) -> None:
@@ -117,23 +123,24 @@ def run_build_user_words(
         ctx.log(f"Saknar {text_dir}/", level="error")
         return 1
 
-    state = {"mtimes": {}, "counts": {}} if rebuild else _load_state(STATE_FILE)
+    state = {"mtimes": {}, "file_words": {}} if rebuild else _load_state(STATE_FILE)
     cached_mtimes: dict[str, float] = state["mtimes"]
-    cached_counts: dict[str, int] = state["counts"]
+    cached_file_words: dict[str, dict[str, int]] = state["file_words"]
 
-    counter: Counter[str] = Counter(cached_counts)
     n_cached = 0
     n_updated = 0
 
     all_files = sorted(text_dir.glob("*.txt"))
 
-    # Ta bort borttagna filer från cachen
+    # Ta bort borttagna filer ur cachen — bara deras eget bidrag, inte hela
+    # cachen. Tidigare nollställdes hela cachen så fort en enda fil försvann,
+    # vilket gjorde den "inkrementella" cachen verkningslös varje gång
+    # merge_wpu rensat bort en förlorarfil (sker rutinmässigt i varje full
+    # pipeline-körning).
     gone = set(cached_mtimes) - {f.name for f in all_files}
-    if gone:
-        for name in gone:
-            cached_mtimes.pop(name, None)
-        counter = Counter()
-        cached_mtimes.clear()
+    for name in gone:
+        cached_mtimes.pop(name, None)
+        cached_file_words.pop(name, None)
 
     total = len(all_files)
     label = f"Läser {total} filer…"
@@ -145,7 +152,12 @@ def run_build_user_words(
             mtime = f.stat().st_mtime
         except OSError:
             continue
-        if not rebuild and f.name in cached_mtimes and cached_mtimes[f.name] == mtime:
+        if (
+            not rebuild
+            and f.name in cached_mtimes
+            and cached_mtimes[f.name] == mtime
+            and f.name in cached_file_words
+        ):
             n_cached += 1
         else:
             try:
@@ -153,16 +165,22 @@ def run_build_user_words(
             except OSError as e:
                 log_error("build_user_words", f.name, str(e))
             else:
+                file_counts: Counter[str] = Counter()
                 for w in ALPHA_WORD_RE.findall(text):
-                    counter[w.lower()] += 1
+                    file_counts[w.lower()] += 1
+                cached_file_words[f.name] = dict(file_counts)
                 cached_mtimes[f.name] = mtime
                 n_updated += 1
+
+    counter: Counter[str] = Counter()
+    for word_counts in cached_file_words.values():
+        counter.update(word_counts)
 
     ctx.log(f"Läste {n_updated} nya/ändrade filer ({n_cached} cachade), "
             f"{len(counter)} unika ord.")
 
     state["mtimes"] = cached_mtimes
-    state["counts"] = dict(counter)
+    state["file_words"] = cached_file_words
     _save_state(STATE_FILE, state)
 
     use_hunspell = has_hunspell_swe()

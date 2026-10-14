@@ -538,7 +538,7 @@ kör `mcp_server.py` som subprocess och får värdena via miljövariablerna
 valt), medan OpenAI-vägen kör verktyget in-process och skickar in dem direkt.
 
 Startas `mcp_server.py` utan de variablerna — från Claude Desktop eller
-`scripts/ask.py --mcp` — finns ingen operatör, och då gäller modellens argument
+`src/rag/ask.py --mcp` — finns ingen operatör, och då gäller modellens argument
 och verktygets standardvärden. Ett okänt värde i `MCP_RERANKER` avbryter med ett
 tydligt fel i stället för att tyst falla tillbaka på BGE.
 
@@ -1045,7 +1045,20 @@ OpenAI-kompatibel endpoint anger profilen endast miljövariabelns namn i
 | `base_url` | Tomt för molntjänster; URL för lokal endpoint (`http://localhost:11434/v1` för Ollama) |
 | `backend_name` | Visningsnamn i gränssnittet (valfritt) |
 | `api_key_env` | Namnet på miljövariabeln som innehåller API-nyckeln; aldrig nyckelvärdet |
-| `input_price_usd` / `output_price_usd` / `cache_hit_price_usd` | Valfria priser i USD per 1M token för kostnadsräkningen. `cache_hit_price_usd` gäller cachade indata-token (DeepSeek cachar automatiskt); tomt = samma pris som `input_price_usd`. Utelämnade fält betyder "kostnad okänd" |
+| `input_price_usd` / `output_price_usd` / `cache_hit_price_usd` | Priser i USD per 1M token för kostnadsräkningen. `cache_hit_price_usd` gäller cachade indata-token (DeepSeek cachar automatiskt); tomt = samma pris som `input_price_usd`. Utelämnade fält betyder "kostnad okänd". Hämtas automatiskt (se nedan) för leverantörer vars `/v1/models` anger pris — annars valfri manuell inmatning |
+
+**Pris hämtas automatiskt när leverantören anger det.** OpenRouters `/v1/models`
+innehåller ett `pricing`-objekt (USD per token) per modell —
+`backends.fetch_model_pricing` räknar om det till USD per 1M token. Priset syns
+på två ställen i Admins profilformulär: dels inline i **Modell**-rullistan för
+varje modell (`openai/gpt-5.6-luna — in $0.2 / out $1.2 per 1M`, så
+modeller går att jämföra utan att klicka igenom dem en och en), dels som
+skrivskyddad text under "Avancerade inställningar" för den valda modellen i
+stället för de tre manuella prisfälten — och de hämtade värdena sparas rakt av.
+OpenAI och DeepSeek anger inget pris i sin `/v1/models`, så deras profiler (och
+ett eget inskrivet modellnamn) faller tillbaka på de tre manuella fälten precis
+som tidigare. Katalogen cachas tillsammans med modellistan i fem minuter
+(`st.cache_data`, nyckelvärdet ingår aldrig i cache-nyckeln).
 
 ### Token och kostnad per profil
 
@@ -1264,7 +1277,7 @@ per-dokumentresultat behålls; ett avbrutet jobb markeras aldrig `succeeded`.
 | `generated/llm_config.json` | Sparad LLM-konfiguration (backend, modell, URL) — se ovan |
 | `generated/prompts.json` | Sparade prompt-overrides (nycklarna `rag` och `mcp`) — se *Redigerbara promptar* ovan |
 | `src/config.py` | Läser/skriver `generated/llm_config.json` (delas av Utredning-sidan och llm_correct) |
-| `src/backends.py` | Delad backend-katalog (Claude/OpenAI/DeepSeek/OpenRouter/Ollama/custom) + `fetch_models`/`available_models` — delas av Utredning-sidan och `scripts/llm_config.py` |
+| `src/backends.py` | Delad backend-katalog (Claude/OpenAI/DeepSeek/OpenRouter/Ollama/custom) + `fetch_models`/`available_models`/`fetch_model_pricing` — delas av Utredning-sidan och `scripts/llm_config.py` |
 | `scripts/llm_config.py` → `src/llm_config_cli.py` | Visa/ändra `generated/llm_config.json` utan webgränssnittet (interaktiv meny i terminal) |
 | `src/citations.py` | Slår upp `[Nr X, sida Y]` (även `[Nr X, sida Y, Z]` och sida-lösa `[Nr X]`) och WPU-prefix som `[Pol-..., sida Y]` mot PDF:er och renderar citatlänkar; hanterar även WPU-stammar där dokument-ID och titel sitter ihop utan avskiljare |
 | `src/Utredning.py` | Streamlit-sida för frågor (RAG- och MCP-läget, valda med en segmenterad kontroll), token-/kostnadsräknare, svarsgraf, sparknapp, källbokmärken samt facett-/fuzzy-sökfilter i sidofältet |

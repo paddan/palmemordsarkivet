@@ -125,3 +125,85 @@ def test_pdf_patch_preserves_original_when_text_line_cannot_be_inserted(tiny_pdf
         update_pdf_text_layer(tiny_pdf, tiny_pdf, lines, dpi=72)
 
     assert tiny_pdf.read_bytes() == original
+
+
+# ---------------------------------------------------------------------------
+# detect_redactions_file (orkestrering: idempotens via markörfil, DB-synk)
+# ---------------------------------------------------------------------------
+
+
+def test_detect_redactions_file_returns_zero_when_txt_missing(tmp_path, monkeypatch):
+    monkeypatch.setenv("STATE_DB", str(tmp_path / "state.db"))
+    from ocr_pages import detect_redactions_file
+
+    pdf = tmp_path / "doc.pdf"
+    txt_file = tmp_path / "doc.txt"  # skapas aldrig
+    marker = tmp_path / "doc.redact"
+
+    assert detect_redactions_file(pdf, txt_file, marker) == 0
+
+
+def test_detect_redactions_file_existing_marker_syncs_db_and_is_consumed(
+    tmp_path, monkeypatch,
+):
+    # Idempotens: en markörfil från en tidigare, redan slutförd körning ska
+    # bara synka DB:n och sedan tas bort — inte köra om detekteringen.
+    monkeypatch.setenv("STATE_DB", str(tmp_path / "state.db"))
+    import db as state_db
+    from ocr_pages import detect_redactions_file
+
+    pdf = tmp_path / "doc.pdf"
+    txt_file = tmp_path / "doc.txt"
+    txt_file.write_text("Text med [MASKAD] redan infogat.", encoding="utf-8")
+    marker = tmp_path / "doc.redact"
+    marker.write_text("", encoding="utf-8")
+
+    n = detect_redactions_file(pdf, txt_file, marker)
+
+    assert n == 0
+    assert not marker.exists()
+
+    conn = state_db.connect()
+    row = conn.execute(
+        "SELECT redaction_checked_at, has_redactions FROM pdf_files WHERE pdf_stem=?",
+        ("doc",),
+    ).fetchone()
+    conn.close()
+    assert row is not None
+    assert row["redaction_checked_at"] is not None
+    assert row["has_redactions"] == 1
+
+
+def test_detect_redactions_file_detects_and_inserts_marker(tmp_path, monkeypatch):
+    # Regression: orkestreringen (inte bara detect_redactions_image i
+    # isolering) ska faktiskt infoga [MASKAD] i sidtexten och skriva filen,
+    # samt markera dokumentet i state.db.
+    monkeypatch.setenv("STATE_DB", str(tmp_path / "state.db"))
+    import db as state_db
+    import ocr_pages
+    from ocr_pages import detect_redactions_file
+
+    pdf = tmp_path / "doc.pdf"
+    txt_file = tmp_path / "doc.txt"
+    txt_file.write_text("Rad ett.\nRad två.\nRad tre.", encoding="utf-8")
+    marker = tmp_path / "doc.redact"
+
+    dark_image = _make_image(300, 400, dark_bands=[(100, 140, 1.0)])
+    monkeypatch.setattr(
+        ocr_pages, "render_pages", lambda pdf_path, dpi: iter([(1, dark_image)])
+    )
+
+    n = detect_redactions_file(pdf, txt_file, marker)
+
+    assert n == 1
+    assert "[MASKAD]" in txt_file.read_text(encoding="utf-8")
+    assert not marker.exists()
+
+    conn = state_db.connect()
+    row = conn.execute(
+        "SELECT redaction_checked_at, has_redactions FROM pdf_files WHERE pdf_stem=?",
+        ("doc",),
+    ).fetchone()
+    conn.close()
+    assert row is not None
+    assert row["has_redactions"] == 1

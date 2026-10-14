@@ -382,9 +382,25 @@ def test_openai_verktygsscheman_matchar_mcp_verktygen() -> None:
         if isinstance(node, ast.AnnAssign)
         and getattr(node.target, "id", "") == "OPENAI_TOOLS"
     )
-    namn = {post["function"]["name"] for post in ast.literal_eval(scheman)}
+    verktyg = ast.literal_eval(scheman)
+    namn = {post["function"]["name"] for post in verktyg}
 
     assert namn == {t.name for t in asyncio.run(mcp_server.mcp.list_tools())}
+
+    by_name = {post["function"]["name"]: post["function"] for post in verktyg}
+
+    sok = by_name["search_archive"]["parameters"]["properties"]
+    assert sok["top_k"]["default"] == mcp_server.TOP_K_DEFAULT
+    assert sok["top_n"]["default"] == mcp_server.TOP_N_DEFAULT
+    assert f"{mcp_server.TOP_K_MIN}–{mcp_server.TOP_K_MAX}" in sok["top_k"]["description"]
+    assert f"{mcp_server.TOP_N_MIN}–{mcp_server.TOP_N_MAX}" in sok["top_n"]["description"]
+
+    webb = by_name["web_search"]["parameters"]["properties"]
+    assert webb["max_results"]["default"] == mcp_server.MAX_RESULTS_DEFAULT
+    assert (
+        f"{mcp_server.MAX_RESULTS_MIN}–{mcp_server.MAX_RESULTS_MAX}"
+        in webb["max_results"]["description"]
+    )
 
 
 def test_mcp_svar_med_maskering_far_en_knuff_att_sla_upp(monkeypatch) -> None:
@@ -762,6 +778,40 @@ def test_vald_sokmodell_skickas_med_i_anropet(monkeypatch, tmp_path) -> None:
 
     assert anrop["json"]["model"] == "openai/gpt-4.1-nano"
     assert anrop["headers"]["Authorization"] == "Bearer test-nyckel"
+
+
+def test_profilslagningen_cachas_per_fraga(monkeypatch) -> None:
+    """En sökning slår upp profilen flera gånger (leverantör, modell, nyckel), men
+    llm_config.json ska läsas en gång per fråga. Ny fråga (set_web_search_budget)
+    nollställer cachen så ändrad konfiguration slår igenom direkt."""
+    import config
+
+    _bara_nycklar(monkeypatch, "openrouter")
+    antal = {"lästa": 0}
+    vald = {
+        "backend_name": "OpenRouter",
+        "model": "openai/gpt-4.1-nano",
+        "base_url": "https://openrouter.ai/api/v1",
+        "api_key_env": "OPENROUTER_API_KEY",
+    }
+
+    def las_konfig() -> dict:
+        antal["lästa"] += 1
+        return {"profiles": {"Billig": vald}, "default": "Billig"}
+
+    monkeypatch.setattr(config, "load_search_default", lambda: "")
+    monkeypatch.setattr(config, "load_all", las_konfig)
+
+    mcp_server.set_web_search_budget(3)
+    mcp_server.set_web_search_profile("Billig")
+    assert mcp_server.web_search_provider() == "openrouter"
+    assert mcp_server.web_search_model() == "openai/gpt-4.1-nano"
+    assert mcp_server.web_search_key_env("openrouter") == "OPENROUTER_API_KEY"
+    assert antal["lästa"] == 1
+
+    mcp_server.set_web_search_budget(3)
+    assert mcp_server.web_search_model() == "openai/gpt-4.1-nano"
+    assert antal["lästa"] == 2
 
 
 def test_search_profiles_speglar_konfigurationen(monkeypatch) -> None:

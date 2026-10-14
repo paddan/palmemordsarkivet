@@ -188,3 +188,18 @@ def test_merge_one_can_create_missing_txt_from_page_rows(
     assert row is not None
     assert row["merged_at"] is not None
     assert row["text_mtime"] == (txt_dir / "doc.txt").stat().st_mtime
+
+
+def test_merge_one_rebuilds_from_zero_byte_txt_with_create_missing(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    # En 0-byte text/<stem>.txt finns på disk men innehåller inget att slå
+    # ihop mot. Med create_missing=True ska den byggas från pdf_pages precis
+    # som när filen saknas helt — annars tappas OCR-sidorna tyst.
+    txt_dir = _setup(tmp_path, monkeypatch, original="")
+    assert (txt_dir / "doc.txt").stat().st_size == 0
+    _add_page("doc", 1, "Sida ett")
+    _add_page("doc", 3, "Sida tre")
+
+    assert merge_one("doc", txt_dir, create_missing=True) is True
+    assert (txt_dir / "doc.txt").read_text(encoding="utf-8") == "Sida ett\f\fSida tre"

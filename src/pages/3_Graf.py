@@ -71,15 +71,6 @@ def _search(q: str) -> list[dict]:
         return rows
 
 
-def _find_pdf(stem: str) -> Path | None:
-    """Hitta original-PDF för en dokumentnods stem. Föredrar ocr/ (sökbar)."""
-    for d in ("generated/ocr", "downloaded/files", "downloaded/wpu_files"):
-        p = ROOT / d / f"{stem}.pdf"
-        if p.is_file():
-            return p
-    return None
-
-
 with st.sidebar:
     st.header("Sök")
     query = st.text_input("Namn (del räcker)", placeholder="t.ex. Engström")
@@ -191,7 +182,7 @@ else:
                 if n is None:
                     continue
                 if n["type"] == "Dokument":
-                    pdf = _find_pdf(n.get("stem") or "")
+                    pdf = _casebook_ui.find_pdf(ROOT, n.get("stem") or "")
                     if pdf:
                         _casebook_ui.open_pdf_in_browser(pdf)
                 elif nid not in center_ids:

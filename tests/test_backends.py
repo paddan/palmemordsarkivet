@@ -83,3 +83,59 @@ def test_available_models_claude_uses_static_list_without_fetch(monkeypatch) -> 
     )
     models = backends.available_models(backends.BACKENDS["Claude"], api_key="")
     assert models == backends.BACKENDS["Claude"]["models"]
+
+
+def test_fetch_model_pricing_parses_openrouter_style_response(monkeypatch) -> None:
+    """OpenRouter anger USD per token; priskatalogen ska räkna om till USD per 1M."""
+    monkeypatch.setattr(
+        backends, "_get_json",
+        lambda url, headers: {
+            "data": [
+                {
+                    "id": "openai/gpt-4o",
+                    "pricing": {
+                        "prompt": "0.0000025",
+                        "completion": "0.0000075",
+                        "input_cache_read": "0.00000025",
+                    },
+                },
+            ],
+        },
+    )
+    pricing = backends.fetch_model_pricing("https://openrouter.ai/api/v1", "k")
+    assert pricing == {
+        "openai/gpt-4o": {
+            "input_price_usd": 2.5,
+            "output_price_usd": 7.5,
+            "cache_hit_price_usd": 0.25,
+        },
+    }
+
+
+def test_fetch_model_pricing_avoids_float_multiplication_noise(monkeypatch) -> None:
+    """Regression: float(value) * 1_000_000 gav 0.19999999999999998 i stället
+    för 0.2 för prompt-priset "0.0000002" — binär flyttalsmultiplikation av en
+    decimal sträng. Omräkningen måste ske med Decimal så priset blir exakt."""
+    monkeypatch.setattr(
+        backends, "_get_json",
+        lambda url, headers: {
+            "data": [{"id": "openai/gpt-4o", "pricing": {"prompt": "0.0000002"}}],
+        },
+    )
+    pricing = backends.fetch_model_pricing("https://openrouter.ai/api/v1", "k")
+    assert pricing["openai/gpt-4o"]["input_price_usd"] == 0.2
+    assert repr(pricing["openai/gpt-4o"]["input_price_usd"]) == "0.2"
+
+
+def test_fetch_model_pricing_ignores_models_without_pricing(monkeypatch) -> None:
+    """OpenAI/DeepSeeks /v1/models saknar ett pricing-fält helt — ska ge tom katalog."""
+    monkeypatch.setattr(
+        backends, "_get_json",
+        lambda url, headers: {"data": [{"id": "gpt-4o"}, {"id": "gpt-4o-mini", "pricing": None}]},
+    )
+    assert backends.fetch_model_pricing("https://api.openai.com/v1", "k") == {}
+
+
+def test_fetch_model_pricing_returns_empty_dict_on_fetch_failure(monkeypatch) -> None:
+    monkeypatch.setattr(backends, "_get_json", lambda url, headers: None)
+    assert backends.fetch_model_pricing("https://openrouter.ai/api/v1", "k") == {}

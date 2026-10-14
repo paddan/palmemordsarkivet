@@ -91,6 +91,43 @@ def test_every_operation_is_reachable_from_a_shell_shortcut() -> None:
     )
 
 
+# Script-filer som inte motsvarar en registrerad operation (CLI-verktyg,
+# devserver, testrunner) — stem.replace("_", "-") har inget motsvarande id.
+_NON_OPERATION_SCRIPTS = {"install", "jobs", "setup_tessdata", "test", "web"}
+
+
+def test_each_entrypoint_mentions_its_own_operation_id() -> None:
+    """Det tidigare testet kontrollerar bara att varje operation-id förekommer
+    NÅGONSTANS i scripts/ — ett scripts/X.py skulle kunna köra fel operation-id
+    så länge rätt id råkar nämnas i en annan fil, och testet skulle ändå
+    passera. Det här testet knyter varje entrypoint till SIN EGEN operation."""
+    from operations.registry import get_registry
+
+    registered = {definition.id for definition in get_registry().all_operations()}
+
+    for stem in _entrypoint_stems():
+        if stem in _NON_OPERATION_SCRIPTS:
+            continue
+        path = PROJECT_ROOT / "scripts" / f"{stem}.py"
+        mentioned = _mentioned_operation_ids(path)
+        if stem == "neo4j":
+            # Ett enda entrypoint kör tre parameterlösa operationer
+            # (start/status/stop) beroende på positionsargument.
+            forvantade = {"neo4j-start", "neo4j-status", "neo4j-stop"}
+            assert forvantade <= mentioned, (
+                f"scripts/{stem}.py nämner inte alla av {forvantade} "
+                f"(hittade: {sorted(mentioned & registered)})"
+            )
+            continue
+        forvantat_id = stem.replace("_", "-")
+        assert forvantat_id in registered, (
+            f"{forvantat_id!r} (från scripts/{stem}.py) finns inte i registret"
+        )
+        assert forvantat_id in mentioned, (
+            f"scripts/{stem}.py nämner inte sitt eget operation-id {forvantat_id!r}"
+        )
+
+
 def test_web_shell_shortcut_forwards_to_python_entrypoint() -> None:
     path = PROJECT_ROOT / "web.sh"
 

@@ -252,29 +252,13 @@ def build_nr_to_pdf() -> dict[str, Path]:
     return mapping
 
 
-def find_pdf(source_txt: str) -> Path | None:
-    """Hitta original-PDF för en chunk. Föredrar ocr/ (sökbar)."""
-    stem = source_txt[:-4] if source_txt.endswith(".txt") else source_txt
-    for d in ("generated/ocr", "downloaded/files", "downloaded/wpu_files"):
-        p = ROOT / d / f"{stem}.pdf"
-        if p.is_file():
-            return p
-    return None
-
-
-def find_txt(source_txt: str) -> Path | None:
-    """Hitta extraherad textfil för en chunk."""
-    stem = source_txt[:-4] if source_txt.endswith(".txt") else source_txt
-    p = ROOT / "generated" / "text" / f"{stem}.txt"
-    return p if p.is_file() else None
-
-
 casebook_conn = _casebook_ui.state_conn()
 
 
 @st.cache_data(show_spinner=False)
 def _load_facets() -> dict:
-    """Entitetsfacetter ur kunskapsgrafen (doc_entities). Cachas per session."""
+    """Entitetsfacetter ur kunskapsgrafen (doc_entities). Cachas processvitt
+    (delat mellan samtidiga Streamlit-sessioner)."""
     facets: dict = _facets.entity_facets(_casebook_ui.state_conn())
     return facets
 
@@ -526,6 +510,8 @@ def _render_mcp_settings(profiles: dict | None = None) -> dict[str, Any]:
             sokmodell_etiketter.append(etikett)
         if sokmodell_etiketter:
             _aterstall_sokval("mcp_web_search_profile", sokmodell_etiketter[0])
+            if st.session_state["mcp_web_search_profile"] not in sokmodell_etiketter:
+                st.session_state["mcp_web_search_profile"] = sokmodell_etiketter[0]
             sokmodell_etikett = st.selectbox(
                 "Sökmodell",
                 sokmodell_etiketter,
@@ -910,10 +896,15 @@ ss = st.session_state
 ss.setdefault("question", "")
 ss.setdefault("hits", None)
 ss.setdefault("answer", "")
+# Profilen/modellen som faktiskt genererade `answer` — skilt från sidofältets
+# nuvarande `llm_profile`-val, som kan ha bytts sedan svaret skapades.
+ss.setdefault("answer_backend_name", "")
+ss.setdefault("answer_model", "")
 # MCP-chatt: history-lista med {"role", "text", "sources"} och resume-id för Claude.
 ss.setdefault("chat_history", [])
 ss.setdefault("mcp_session_id", None)
 ss.setdefault("openai_chat_messages", [])
+ss.setdefault("openai_turn_starts", [])
 ss.setdefault("answer_centers", [])
 
 def _mcp_tool_label(name: str, inp: dict) -> str:
@@ -1493,7 +1484,7 @@ def _render_graph_panel(nodes: list[dict], state_key: str,
         st.caption("Dokument")
         links = []
         for n in doc_nodes:
-            pdf = find_pdf(n["stem"])
+            pdf = _casebook_ui.find_pdf(ROOT, n["stem"])
             label = _html.escape(str(n["namn"]))
             links.append(_citations.pdf_anchor(pdf, label, title=n["stem"])
                          if pdf else label)
@@ -1540,7 +1531,7 @@ def _render_cytoscape_graph(nodes: list[dict], edges: list[dict],
         if n is None:
             continue
         if n["type"] == "Dokument":
-            pdf = find_pdf(n.get("stem") or "")
+            pdf = _casebook_ui.find_pdf(ROOT, n.get("stem") or "")
             if pdf:
                 _casebook_ui.open_pdf_in_browser(pdf)
         elif nid not in expanded_norms:
@@ -1693,8 +1684,8 @@ def _render_chat_turn(turn: dict, turn_idx: int) -> None:
                 question=prev_q,
                 answer=turn["text"],
                 mode="mcp",
-                backend_name=backend_name,
-                model=backend["model"],
+                backend_name=turn.get("backend_name") or backend_name,
+                model=turn.get("model") or backend["model"],
                 sources=turn.get("sources") or [],
                 centers=centers,
                 key=f"chat_casebook_{turn_idx}",
@@ -1702,6 +1693,31 @@ def _render_chat_turn(turn: dict, turn_idx: int) -> None:
         srcs = turn.get("sources") or []
         if srcs:
             _render_chat_sources(srcs, f"chat_pdf_{turn_idx}")
+
+
+MAX_OPENAI_HISTORY_TURNS = 20
+
+
+def _trim_openai_chat_history(ss) -> None:
+    """Håll ss.openai_chat_messages begränsad till systempromten plus de
+    senaste MAX_OPENAI_HISTORY_TURNS turerna.
+
+    Utan detta växer meddelandelistan (och kostnaden) obegränsat för
+    OpenAI-kompatibla backends, som saknar Claude-vägens serverside
+    `resume`-kompaktering — en lång utredningssession skulle till sist nå
+    modellens kontextgräns. Trunkeringen sker alltid vid en tur-gräns (där en
+    ny `role: user`-rad börjar), aldrig mitt i en assistant/tool-sekvens, så
+    OpenAI:s krav på att varje `tool`-meddelande följer sin
+    `assistant(tool_calls)`-rad aldrig bryts.
+    """
+    starts = ss.openai_turn_starts
+    if len(starts) <= MAX_OPENAI_HISTORY_TURNS:
+        return
+    cutoff = starts[-MAX_OPENAI_HISTORY_TURNS]
+    system_msg = ss.openai_chat_messages[0]
+    ss.openai_chat_messages = [system_msg] + ss.openai_chat_messages[cutoff:]
+    removed = cutoff - 1
+    ss.openai_turn_starts = [s - removed for s in starts[-MAX_OPENAI_HISTORY_TURNS:]]
 
 
 def _render_mcp_tab(settings: dict[str, Any]) -> None:
@@ -1719,6 +1735,7 @@ def _render_mcp_tab(settings: dict[str, Any]) -> None:
             st.session_state.chat_history = []
             st.session_state.mcp_session_id = None
             st.session_state.openai_chat_messages = []
+            st.session_state.openai_turn_starts = []
             # Rensa graf-state per tur så en ny konversations tur N inte ärver
             # utfällda noder från den gamla.
             for k in [k for k in st.session_state if k.startswith("turn_")]:
@@ -1753,6 +1770,8 @@ def _render_mcp_tab(settings: dict[str, Any]) -> None:
                     "text": answer,
                     "sources": extract_cited_sources(answer),
                     "centers": centers,
+                    "backend_name": backend_name,
+                    "model": backend["model"],
                 }
             )
             st.rerun()
@@ -1766,6 +1785,7 @@ def _render_mcp_tab(settings: dict[str, Any]) -> None:
                 ss.openai_chat_messages.append(
                     {"role": "system", "content": mcp_prompt()}
                 )
+            ss.openai_turn_starts.append(len(ss.openai_chat_messages))
             ss.openai_chat_messages.append({"role": "user", "content": chat_q})
             ss.chat_history.append({"role": "user", "text": chat_q, "sources": []})
             with st.chat_message("user"):
@@ -1787,8 +1807,11 @@ def _render_mcp_tab(settings: dict[str, Any]) -> None:
                     "text": answer,
                     "sources": extract_cited_sources(answer),
                     "centers": centers,
+                    "backend_name": backend_name,
+                    "model": backend["model"],
                 }
             )
+            _trim_openai_chat_history(ss)
             st.rerun()
 
 
@@ -1883,6 +1906,8 @@ def _render_rag_tab(settings: dict[str, Any]) -> None:
         _src_slot = st.empty()
         _stream_slot.markdown(_THINKING_HTML, unsafe_allow_html=True)
         ss.answer = asyncio.run(stream_to_string(hits, q, backend, _stream_slot))
+        ss.answer_backend_name = backend_name
+        ss.answer_model = backend["model"]
         with _src_slot.container():
             _render_rag_sources(hits, "sub")
         ss.answer_centers = []
@@ -1895,8 +1920,8 @@ def _render_rag_tab(settings: dict[str, Any]) -> None:
             question=q,
             answer=ss.answer,
             mode="rag",
-            backend_name=backend_name,
-            model=backend["model"],
+            backend_name=ss.answer_backend_name,
+            model=ss.answer_model,
             sources=hits,
             centers=ss.answer_centers,
             key="rag_current",
@@ -1916,8 +1941,8 @@ def _render_rag_tab(settings: dict[str, Any]) -> None:
             question=ss.question,
             answer=ss.answer,
             mode="rag",
-            backend_name=backend_name,
-            model=backend["model"],
+            backend_name=ss.answer_backend_name,
+            model=ss.answer_model,
             sources=ss.hits,
             centers=ss.answer_centers,
             key="rag_cached",
