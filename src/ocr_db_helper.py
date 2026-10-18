@@ -49,19 +49,11 @@ def main() -> None:
 
     if cmd == "check-done":
         stem = sys.argv[2]
-        row = conn.execute(
-            "SELECT tesseract_done_at FROM pdf_files WHERE pdf_stem=? AND tesseract_done_at IS NOT NULL",
-            (stem,),
-        ).fetchone()
-        sys.exit(0 if row else 1)
+        sys.exit(0 if db.is_tesseract_done(conn, stem) else 1)
 
     elif cmd == "check-failed":
         stem = sys.argv[2]
-        row = conn.execute(
-            "SELECT tesseract_failed FROM pdf_files WHERE pdf_stem=? AND tesseract_failed=1",
-            (stem,),
-        ).fetchone()
-        sys.exit(0 if row else 1)
+        sys.exit(0 if db.is_tesseract_failed(conn, stem) else 1)
 
     elif cmd == "mark-done":
         stem, pdf_path = sys.argv[2], sys.argv[3]
@@ -101,25 +93,16 @@ def main() -> None:
         print(count)
 
     elif cmd == "list-done":
-        rows = conn.execute(
-            "SELECT pdf_stem FROM pdf_files WHERE tesseract_done_at IS NOT NULL"
-        ).fetchall()
-        for r in rows:
-            print(r["pdf_stem"])
+        for stem in db.list_tesseract_done_stems(conn):
+            print(stem)
 
     elif cmd == "list-failed":
-        rows = conn.execute(
-            "SELECT pdf_stem FROM pdf_files WHERE tesseract_failed=1"
-        ).fetchall()
-        for r in rows:
-            print(r["pdf_stem"])
+        for stem in db.list_tesseract_failed_stems(conn):
+            print(stem)
 
     elif cmd == "list-blacklisted":
-        rows = conn.execute(
-            "SELECT pdf_stem FROM pdf_files WHERE tesseract_blacklisted_at IS NOT NULL"
-        ).fetchall()
-        for r in rows:
-            print(r["pdf_stem"])
+        for stem in db.list_tesseract_blacklisted_stems(conn):
+            print(stem)
 
     else:
         print(f"okänt kommando: {cmd}", file=sys.stderr)

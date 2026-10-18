@@ -13,6 +13,8 @@ import sqlite3
 from html import escape
 from urllib.parse import quote
 
+import db as state_db
+
 MASK_TOKEN = "[MASKAD]"
 _MASK_RE = re.compile(re.escape(MASK_TOKEN))
 _WS_RE = re.compile(r"\s+")
@@ -136,10 +138,7 @@ def documents_by_redaction(conn: sqlite3.Connection) -> list[dict]:
 
     Returnerar dictar med ``pdf_stem``, ``redactions`` (totalt antal) och
     ``pages_with_redactions``."""
-    rows = conn.execute(
-        "SELECT pdf_stem, page_num, text FROM pdf_pages WHERE text LIKE ?",
-        (f"%{MASK_TOKEN}%",),
-    )
+    rows = state_db.list_pages_matching_text(conn, f"%{MASK_TOKEN}%")
     agg: dict[str, dict] = {}
     for row in rows:
         n = count_redactions(row["text"])
@@ -162,10 +161,7 @@ def page_redactions(
 ) -> list[dict]:
     """Per-sida maskeringar för ett dokument: ``page_num``, ``redactions``,
     ``snippets`` — bara sidor som faktiskt har minst en maskering."""
-    rows = conn.execute(
-        "SELECT page_num, text FROM pdf_pages WHERE pdf_stem=? ORDER BY page_num",
-        (pdf_stem,),
-    )
+    rows = state_db.list_page_texts_for_stem(conn, pdf_stem)
     out: list[dict] = []
     for row in rows:
         n = count_redactions(row["text"])

@@ -20,8 +20,10 @@ import re
 import sys
 import time
 from contextlib import suppress
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import requests
 from tenacity import (
@@ -205,8 +207,12 @@ def sniff_extension(path: Path) -> str:
                 if ext == ".jpeg":
                     ext = ".jpg"
                 return ext
-        except Exception:
-            pass
+        except Exception as exc:
+            log_error(
+                "download",
+                path.name,
+                f"filetype kunde inte identifiera filen, faller tillbaka på signaturer: {type(exc).__name__}: {exc}",
+            )
     try:
         with path.open("rb") as f:
             head = f.read(32)
@@ -230,42 +236,87 @@ def _ctx(context):
     return ensure_terminal_context(None)
 
 
-def run_download(*, out: Path, sheet_id: str, limit: int, dry_run: bool = False,
-                 rebuild: bool = False, context=None) -> int:
-    """Ladda ned arkivets PDF:er till ``out``. Idempotent via state.db.
+@dataclass
+class _Nedladdningslage:
+    """Räknare och manifest som följer en körning av ``run_download``."""
 
-    ``dry_run`` listar bara vad som skulle hämtas. ``rebuild`` ignorerar
-    manifestet och hämtar om filerna — även sådana som saknas på disk eller
-    tidigare stämplats som permanent misslyckade.
-    """
-    ctx = _ctx(context)
-    if not dry_run:
-        out.mkdir(parents=True, exist_ok=True)
+    total: int
+    t0: float
+    n_done: int
+    manifest_ids: set[str]
+    perm_failed_ids: set[str]
+    manifest_sha1s: dict[str, str]
+    existing_stems: set[str]
+    n_new: int = 0
+    n_fail: int = 0
+    n_dup: int = 0
+    bytes_total: int = 0
+    failed: list[tuple[str, str, str]] = field(default_factory=list)
 
-    conn = state_db.connect()
-    state_db.init_schema(conn)
-    source = "wpu" if out.name == "wpu_files" else "files"
 
+def _formatera_varaktighet(secs: float) -> str:
+    """Formatera en varaktighet i sekunder som ``1h02m`` eller ``3m07s``."""
+    secs = int(secs)
+    h, rem = divmod(secs, 3600)
+    m, s = divmod(rem, 60)
+    return f"{h}h{m:02d}m" if h else f"{m}m{s:02d}s"
+
+
+def _logga_framsteg(
+    lage: _Nedladdningslage, ctx: Any, tag: str, prefix: str, extra: str = ""
+) -> None:
+    """Rapportera framsteg med procent, återstående tid och beräknad klar tid."""
+    i = lage.n_done + lage.n_new + lage.n_fail + lage.n_dup
+    pct = 100 * i / lage.total if lage.total else 0
+    elapsed = time.monotonic() - lage.t0
+    rate = lage.n_new / elapsed if elapsed > 0 and lage.n_new else 0
+    remaining = lage.total - i
+    if rate > 0:
+        eta_secs = remaining / rate
+        finish = datetime.now() + timedelta(seconds=eta_secs)
+        today = datetime.now().date()
+        finish_s = finish.strftime(
+            "%H:%M" if finish.date() == today else "%m-%d %H:%M"
+        )
+        eta_s = f" kvar {_formatera_varaktighet(eta_secs)}, klar {finish_s}"
+    else:
+        eta_s = ""
+    mb = lage.bytes_total / 1_048_576
+    ctx.progress(i, lage.total, f"{tag} {prefix[:80]}")
+    ctx.log(
+        f"[{i:>5}/{lage.total} {pct:5.1f}%] {tag} {prefix[:80]}"
+        f"  ({mb:.1f} MB{eta_s}){extra}"
+    )
+
+
+def _hamta_kalkylrader(sheet_id: str, out: Path, ctx: Any) -> list[list[str]]:
+    """Hämta arkets CSV från Google Sheets och dela upp den i rader."""
     csv_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv"
     ctx.log(f"Laddar ned palmemordsarkivet-PDF:er → {out}/")
     ctx.log("Hämtar kalkylbladet…")
     r = requests.get(csv_url, timeout=60)
     r.raise_for_status()
     r.encoding = "utf-8"
+    return list(csv.reader(io.StringIO(r.text)))
 
-    rows = list(csv.reader(io.StringIO(r.text)))
+
+def _bygg_nedladdningslista(rows: list[list[str]], ctx: Any) -> list[tuple[str, str]] | None:
+    """Plocka ut ``(filnamn, drive-id)`` för varje rad med en giltig länk.
+
+    Returnerar ``None`` och loggar ett fel om länkkolumnen saknas i arket.
+    """
     header_idx = next(
         (i for i, row in enumerate(rows) if LINK_COLUMN in row), None
     )
     if header_idx is None:
         ctx.log(f"Kunde inte hitta kolumnen {LINK_COLUMN!r}", level="error")
-        return 1
+        return None
 
     header = rows[header_idx]
     link_col = header.index(LINK_COLUMN)
     name_cols = {col: header.index(col) for col, _ in NAME_COLUMNS if col in header}
 
-    todo = []
+    todo: list[tuple[str, str]] = []
     for row in rows[header_idx + 1 :]:
         if len(row) <= link_col:
             continue
@@ -277,16 +328,18 @@ def run_download(*, out: Path, sheet_id: str, limit: int, dry_run: bool = False,
             for col, idx in name_cols.items()
         }
         todo.append((build_filename(values), file_id))
+    return todo
 
-    ctx.log(f"Hittade {len(todo)} filer")
-    if limit:
-        todo = todo[:limit]
-        ctx.log(f"Test-läge: begränsar till {limit} filer")
 
-    download_rows = list(conn.execute(
-        "SELECT drive_id, sha1, filename, note FROM downloads WHERE source=?",
-        (source,),
-    ))
+def _las_manifest(
+    conn, source: str, out: Path, rebuild: bool, ctx: Any
+) -> tuple[set[str], set[str], dict[str, str], set[str]]:
+    """Läs manifestet från state.db och befintliga filstammar i ``out``.
+
+    Returnerar drive-id:n, permanent misslyckade drive-id:n, sha1 → filnamn och
+    befintliga filstammar. ``rebuild`` tömmer manifestet och filstammarna.
+    """
+    download_rows = state_db.list_downloads_for_source(conn, source)
     manifest_ids = {
         r["drive_id"] for r in download_rows
         if r["drive_id"] is not None and not _is_retryable_failure_note(r["note"])
@@ -316,9 +369,142 @@ def run_download(*, out: Path, sheet_id: str, limit: int, dry_run: bool = False,
         ctx.log("Ladda ned igen: manifestet ignoreras — alla filer hämtas om.")
         manifest_ids = set()
         existing_stems = set()
+    return manifest_ids, perm_failed_ids, manifest_sha1s, existing_stems
 
-    session = requests.Session()
-    failed = []
+
+def _hamta_fil(
+    conn,
+    source: str,
+    out: Path,
+    prefix: str,
+    file_id: str,
+    session: requests.Session,
+    lage: _Nedladdningslage,
+    ctx: Any,
+) -> None:
+    """Hämta en PDF till en temporär fil och spara den under sitt namn, eller registrera felet.
+
+    Dubbletter (samma sha1 som en tidigare fil) tas bort och noteras i state.db.
+    Permanenta fel stämplas så att filen hoppas över vid nästa körning.
+    """
+    tmp = out / f"_tmp_{file_id}"
+    try:
+        sha1 = drive_download(file_id, tmp, session)
+        size = tmp.stat().st_size
+        lage.bytes_total += size
+
+        # Dubblett-check: samma sha1 finns redan under annat namn
+        if sha1 in lage.manifest_sha1s:
+            other = lage.manifest_sha1s[sha1]
+            ctx.log(f"  [dubblett] {prefix} == {other} (sha1={sha1[:10]})")
+            log_error("download", prefix, f"duplicate sha1 of {other}")
+            tmp.unlink()
+            # Notera ändå i state.db så vi inte kör om
+            state_db.record_download(
+                conn, source=source, drive_id=file_id,
+                filename=other, sha1=sha1, bytes_=size,
+                note=f"dup-of:{other}",
+            )
+            lage.manifest_ids.add(file_id)
+            lage.n_dup += 1
+        else:
+            ext = sniff_extension(tmp) or ".bin"
+            dst = out / f"{prefix}{ext}"
+            i = 2
+            while dst.exists():
+                dst = out / f"{prefix} ({i}){ext}"
+                i += 1
+            tmp.rename(dst)
+            lage.existing_stems.add(dst.with_suffix("").name)
+            state_db.record_download(
+                conn, source=source, drive_id=file_id,
+                filename=dst.name, sha1=sha1, bytes_=size,
+            )
+            state_db.upsert_pdf_file(
+                conn, pdf_stem=dst.stem, source=source,
+                pdf_path=str(dst),
+            )
+            lage.manifest_ids.add(file_id)
+            lage.manifest_sha1s[sha1] = dst.name
+            lage.n_new += 1
+    except Exception as e:
+        lage.n_fail += 1
+        err_str = str(e)
+        ctx.log(f"  FEL: {err_str}", level="error")
+        log_error("download", prefix, err_str)
+        lage.failed.append((prefix, file_id, err_str))
+        if tmp.exists():
+            with suppress(OSError):
+                tmp.unlink()
+        # Permanenta fel registreras i state.db så att filen hoppas över
+        # vid nästa körning. HTML-svar från Drive är avsiktligt retrybara:
+        # de kan vara rate-limit lika gärna som borttagna filer.
+        note = _permanent_failure_note(e)
+        if note:
+            state_db.record_download(
+                conn, source=source, drive_id=file_id,
+                filename=prefix, note=note,
+            )
+            lage.manifest_ids.add(file_id)
+
+
+def _avsluta_nedladdning(
+    lage: _Nedladdningslage, todo: list[tuple[str, str]], ctx: Any
+) -> int:
+    """Logga sammanfattningen och returnera exitkoden: 2 om någon fil misslyckades."""
+    n_perm_skip = sum(1 for _, fid in todo if fid in lage.perm_failed_ids)
+    n_already = lage.n_done - n_perm_skip
+
+    summary_parts = []
+    if lage.n_new:
+        summary_parts.append(f"{lage.n_new} nya")
+    if lage.n_dup:
+        summary_parts.append(f"{lage.n_dup} dubbletter")
+    if n_already:
+        summary_parts.append(f"{n_already} redan hämtade")
+    if n_perm_skip:
+        summary_parts.append(f"{n_perm_skip} permanent misslyckade (skippas)")
+
+    if lage.failed:
+        ctx.log(f"\n{len(lage.failed)} filer misslyckades:", level="error")
+        for prefix, fid, err in lage.failed:
+            ctx.log(f"  {fid}  {prefix}: {err}", level="error")
+        if summary_parts:
+            ctx.log(f"Övrigt: {', '.join(summary_parts)}.")
+        return 2
+    ctx.log(f"Klart. {', '.join(summary_parts)}." if summary_parts else "Klart.")
+    return 0
+
+
+def run_download(*, out: Path, sheet_id: str, limit: int, dry_run: bool = False,
+                 rebuild: bool = False, context=None) -> int:
+    """Ladda ned arkivets PDF:er till ``out``. Idempotent via state.db.
+
+    ``dry_run`` listar bara vad som skulle hämtas. ``rebuild`` ignorerar
+    manifestet och hämtar om filerna — även sådana som saknas på disk eller
+    tidigare stämplats som permanent misslyckade.
+    """
+    ctx = _ctx(context)
+    if not dry_run:
+        out.mkdir(parents=True, exist_ok=True)
+
+    conn = state_db.connect()
+    state_db.init_schema(conn)
+    source = "wpu" if out.name == "wpu_files" else "files"
+
+    rows = _hamta_kalkylrader(sheet_id, out, ctx)
+    todo = _bygg_nedladdningslista(rows, ctx)
+    if todo is None:
+        return 1
+
+    ctx.log(f"Hittade {len(todo)} filer")
+    if limit:
+        todo = todo[:limit]
+        ctx.log(f"Test-läge: begränsar till {limit} filer")
+
+    manifest_ids, perm_failed_ids, manifest_sha1s, existing_stems = _las_manifest(
+        conn, source, out, rebuild, ctx
+    )
     total = len(todo)
     n_done = sum(
         1 for prefix, fid in todo
@@ -337,135 +523,31 @@ def run_download(*, out: Path, sheet_id: str, limit: int, dry_run: bool = False,
             ctx.log(f"  [skulle hämtas] {prefix}")
         return 0
 
-    n_new = 0
-    n_fail = 0
-    n_dup = 0
-    bytes_total = 0
-    t0 = time.monotonic()
-
-    def fmt_dur(secs: float) -> str:
-        secs = int(secs)
-        h, rem = divmod(secs, 3600)
-        m, s = divmod(rem, 60)
-        return f"{h}h{m:02d}m" if h else f"{m}m{s:02d}s"
-
-    def progress(tag: str, prefix: str, extra: str = "") -> None:
-        i = n_done + n_new + n_fail + n_dup
-        pct = 100 * i / total if total else 0
-        elapsed = time.monotonic() - t0
-        rate = n_new / elapsed if elapsed > 0 and n_new else 0
-        remaining = total - i
-        if rate > 0:
-            eta_secs = remaining / rate
-            finish = datetime.now() + timedelta(seconds=eta_secs)
-            today = datetime.now().date()
-            finish_s = finish.strftime(
-                "%H:%M" if finish.date() == today else "%m-%d %H:%M"
-            )
-            eta_s = f" kvar {fmt_dur(eta_secs)}, klar {finish_s}"
-        else:
-            eta_s = ""
-        mb = bytes_total / 1_048_576
-        ctx.progress(i, total, f"{tag} {prefix[:80]}")
-        ctx.log(
-            f"[{i:>5}/{total} {pct:5.1f}%] {tag} {prefix[:80]}"
-            f"  ({mb:.1f} MB{eta_s}){extra}"
-        )
-
+    lage = _Nedladdningslage(
+        total=total,
+        t0=time.monotonic(),
+        n_done=n_done,
+        manifest_ids=manifest_ids,
+        perm_failed_ids=perm_failed_ids,
+        manifest_sha1s=manifest_sha1s,
+        existing_stems=existing_stems,
+    )
+    session = requests.Session()
     for prefix, file_id in todo:
         ctx.check_cancelled()
         # Idempotency 1: manifestet (drive_id)
-        if file_id in manifest_ids:
+        if file_id in lage.manifest_ids:
             continue
         # Idempotency 2: filnamns-stem (pre-manifest)
-        if prefix in existing_stems:
+        if prefix in lage.existing_stems:
             continue
 
-        progress("[hämtar]   ", prefix, f"  id={file_id}")
-        tmp = out / f"_tmp_{file_id}"
-        try:
-            sha1 = drive_download(file_id, tmp, session)
-            size = tmp.stat().st_size
-            bytes_total += size
-
-            # Dubblett-check: samma sha1 finns redan under annat namn
-            if sha1 in manifest_sha1s:
-                other = manifest_sha1s[sha1]
-                ctx.log(f"  [dubblett] {prefix} == {other} (sha1={sha1[:10]})")
-                log_error("download", prefix, f"duplicate sha1 of {other}")
-                tmp.unlink()
-                # Notera ändå i state.db så vi inte kör om
-                state_db.record_download(
-                    conn, source=source, drive_id=file_id,
-                    filename=other, sha1=sha1, bytes_=size,
-                    note=f"dup-of:{other}",
-                )
-                manifest_ids.add(file_id)
-                n_dup += 1
-            else:
-                ext = sniff_extension(tmp) or ".bin"
-                dst = out / f"{prefix}{ext}"
-                i = 2
-                while dst.exists():
-                    dst = out / f"{prefix} ({i}){ext}"
-                    i += 1
-                tmp.rename(dst)
-                existing_stems.add(dst.with_suffix("").name)
-                state_db.record_download(
-                    conn, source=source, drive_id=file_id,
-                    filename=dst.name, sha1=sha1, bytes_=size,
-                )
-                state_db.upsert_pdf_file(
-                    conn, pdf_stem=dst.stem, source=source,
-                    pdf_path=str(dst),
-                )
-                manifest_ids.add(file_id)
-                manifest_sha1s[sha1] = dst.name
-                n_new += 1
-        except Exception as e:
-            n_fail += 1
-            err_str = str(e)
-            ctx.log(f"  FEL: {err_str}", level="error")
-            log_error("download", prefix, err_str)
-            failed.append((prefix, file_id, err_str))
-            if tmp.exists():
-                with suppress(OSError):
-                    tmp.unlink()
-            # Permanenta fel registreras i state.db så att filen hoppas över
-            # vid nästa körning. HTML-svar från Drive är avsiktligt retrybara:
-            # de kan vara rate-limit lika gärna som borttagna filer.
-            note = _permanent_failure_note(e)
-            if note:
-                state_db.record_download(
-                    conn, source=source, drive_id=file_id,
-                    filename=prefix, note=note,
-                )
-                manifest_ids.add(file_id)
+        _logga_framsteg(lage, ctx, "[hämtar]   ", prefix, f"  id={file_id}")
+        _hamta_fil(conn, source, out, prefix, file_id, session, lage, ctx)
         # Liten paus för att undvika throttling
         time.sleep(0.1)
 
-    n_perm_skip = sum(1 for _, fid in todo if fid in perm_failed_ids)
-    n_already = n_done - n_perm_skip
-
-    summary_parts = []
-    if n_new:
-        summary_parts.append(f"{n_new} nya")
-    if n_dup:
-        summary_parts.append(f"{n_dup} dubbletter")
-    if n_already:
-        summary_parts.append(f"{n_already} redan hämtade")
-    if n_perm_skip:
-        summary_parts.append(f"{n_perm_skip} permanent misslyckade (skippas)")
-
-    if failed:
-        ctx.log(f"\n{len(failed)} filer misslyckades:", level="error")
-        for prefix, fid, err in failed:
-            ctx.log(f"  {fid}  {prefix}: {err}", level="error")
-        if summary_parts:
-            ctx.log(f"Övrigt: {', '.join(summary_parts)}.")
-        return 2
-    ctx.log(f"Klart. {', '.join(summary_parts)}." if summary_parts else "Klart.")
-    return 0
+    return _avsluta_nedladdning(lage, todo, ctx)
 
 
 def main() -> int:

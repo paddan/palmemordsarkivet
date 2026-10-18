@@ -207,3 +207,74 @@ def test_detect_redactions_file_detects_and_inserts_marker(tmp_path, monkeypatch
     conn.close()
     assert row is not None
     assert row["has_redactions"] == 1
+
+
+def test_detect_redactions_file_logs_unreadable_ocr_pdf_and_continues(
+    tmp_path, monkeypatch,
+):
+    # En OCR-PDF som inte går att öppna ska loggas, men detekteringen fortsätter
+    # utan textlager och markerar dokumentet som kontrollerat.
+    monkeypatch.setenv("STATE_DB", str(tmp_path / "state.db"))
+    import db as state_db
+    import ocr_pages
+    from ocr_pages import detect_redactions_file
+
+    pdf = tmp_path / "doc.pdf"
+    txt_file = tmp_path / "doc.txt"
+    txt_file.write_text("Rad ett.\nRad två.", encoding="utf-8")
+    marker = tmp_path / "doc.redact"
+    ocr_pdf = tmp_path / "ocr_doc.pdf"
+    ocr_pdf.write_bytes(b"inte en pdf")
+
+    dark_image = _make_image(300, 400, dark_bands=[(100, 140, 1.0)])
+    monkeypatch.setattr(
+        ocr_pages, "render_pages", lambda pdf_path, dpi: iter([(1, dark_image)])
+    )
+    rader: list[tuple] = []
+    monkeypatch.setattr(ocr_pages, "log_error", lambda *a: rader.append(a))
+
+    n = detect_redactions_file(pdf, txt_file, marker, ocr_pdf=ocr_pdf)
+
+    assert n == 1
+    assert "[MASKAD]" in txt_file.read_text(encoding="utf-8")
+    assert any(
+        r[0] == "ocr_pages.detect_redactions" and r[1] == "ocr_doc.pdf" for r in rader
+    )
+    conn = state_db.connect()
+    row = conn.execute(
+        "SELECT redaction_checked_at FROM pdf_files WHERE pdf_stem=?", ("doc",),
+    ).fetchone()
+    conn.close()
+    assert row is not None and row["redaction_checked_at"] is not None
+
+
+def test_detect_redactions_file_logs_db_sync_failure_and_consumes_marker(
+    tmp_path, monkeypatch,
+):
+    # Om DB-synken av en befintlig markör misslyckas ska felet loggas, markören
+    # tas ändå bort (kontrollflödet oförändrat) och funktionen returnerar 0.
+    monkeypatch.setenv("STATE_DB", str(tmp_path / "state.db"))
+    import sqlite3
+
+    import ocr_pages
+    from ocr_pages import detect_redactions_file
+
+    pdf = tmp_path / "doc.pdf"
+    txt_file = tmp_path / "doc.txt"
+    txt_file.write_text("Text.", encoding="utf-8")
+    marker = tmp_path / "doc.redact"
+    marker.write_text("", encoding="utf-8")
+
+    def _trasig_connect():
+        raise sqlite3.OperationalError("databasen är låst")
+
+    monkeypatch.setattr(ocr_pages.state_db, "connect", _trasig_connect)
+    rader: list[tuple] = []
+    monkeypatch.setattr(ocr_pages, "log_error", lambda *a: rader.append(a))
+
+    assert detect_redactions_file(pdf, txt_file, marker) == 0
+    assert not marker.exists()
+    assert len(rader) == 1
+    assert rader[0][0] == "ocr_pages.detect_redactions"
+    assert rader[0][1] == "doc.pdf"
+    assert "OperationalError: databasen är låst" in rader[0][2]

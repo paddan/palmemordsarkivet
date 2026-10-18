@@ -11,13 +11,16 @@ from db import (
     approve_map_observation_candidate,
     clear_ocr_failures,
     clear_tesseract_blacklisted,
+    clear_wpu_decisions,
     connect,
     delete_casebook_entry,
+    delete_ingest,
     delete_llm_usage,
     delete_map_observation,
     delete_map_place,
     delete_source_annotation,
     delete_source_bookmark,
+    delete_wpu_decisions,
     files_needing_ingest,
     files_needing_normalize,
     files_needing_quality,
@@ -31,13 +34,25 @@ from db import (
     is_downloaded,
     is_ocr_fully_failed,
     is_tesseract_blacklisted,
+    is_tesseract_done,
+    is_tesseract_failed,
     list_casebook_entries,
+    list_downloads_for_source,
+    list_ingested_mtimes,
     list_map_observation_candidates,
     list_map_observations,
     list_map_places,
+    list_ocr_page_texts,
     list_page_stems,
+    list_page_texts_for_stem,
+    list_pages_matching_text,
     list_source_annotations,
     list_source_bookmarks,
+    list_tesseract_blacklisted_stems,
+    list_tesseract_done_stems,
+    list_tesseract_failed_stems,
+    list_worst_quality,
+    list_wpu_decisions_with_ocr,
     llm_corrected,
     mark_llm_corrected,
     mark_merged,
@@ -1297,3 +1312,100 @@ def test_list_page_stems_returns_documents_with_pages(tmp_path):
 
     assert list_page_stems(conn) == ["a", "b"]
     assert list_page_stems(_fresh(tmp_path / "tom")) == []
+
+
+def test_tesseract_status_queries(tmp_path):
+    conn = _fresh(tmp_path)
+    upsert_pdf_file(conn, pdf_stem="ok", source="files", pdf_path="x")
+    upsert_pdf_file(conn, pdf_stem="bad", source="files", pdf_path="y")
+    upsert_pdf_file(conn, pdf_stem="black", source="files", pdf_path="z")
+    mark_tesseract_done(conn, "ok", pdf_path="x", source="files")
+    mark_tesseract_failed(conn, "bad", pdf_path="y", source="files")
+    mark_tesseract_blacklisted(conn, "black")
+    assert is_tesseract_done(conn, "ok")
+    assert not is_tesseract_done(conn, "bad")
+    assert is_tesseract_failed(conn, "bad")
+    assert not is_tesseract_failed(conn, "ok")
+    assert list_tesseract_done_stems(conn) == ["ok"]
+    assert list_tesseract_failed_stems(conn) == ["bad"]
+    assert list_tesseract_blacklisted_stems(conn) == ["black"]
+
+
+def test_list_downloads_for_source(tmp_path):
+    conn = _fresh(tmp_path)
+    record_download(conn, source="files", drive_id="abc",
+                    filename="a.pdf", sha1="s1", bytes_=1, note="failed:x")
+    record_download(conn, source="wpu", url="https://wpu.nu/x",
+                    filename="b.pdf", sha1="s2", bytes_=2)
+    rows = list_downloads_for_source(conn, "files")
+    assert len(rows) == 1
+    assert rows[0]["drive_id"] == "abc"
+    assert rows[0]["sha1"] == "s1"
+    assert rows[0]["filename"] == "a.pdf"
+    assert rows[0]["note"] == "failed:x"
+    assert list_downloads_for_source(conn, "okänd") == []
+
+
+def test_page_text_queries(tmp_path):
+    conn = _fresh(tmp_path)
+    upsert_pdf_file(conn, pdf_stem="s1", source="files", pdf_path="x")
+    record_page(conn, pdf_stem="s1", page_num=2, engine="tesseract",
+                text="Hej [MASKAD] här", score=80.0)
+    record_page(conn, pdf_stem="s1", page_num=1, engine="surya",
+                text=None, score=None)
+    record_page(conn, pdf_stem="s2", page_num=1, engine="tesseract",
+                text="inget", score=50.0)
+
+    all_rows = list_page_texts_for_stem(conn, "s1")
+    assert [r["page_num"] for r in all_rows] == [1, 2]
+    assert all_rows[0]["text"] is None
+
+    ocr_rows = list_ocr_page_texts(conn, "s1")
+    assert [r["page_num"] for r in ocr_rows] == [2]
+    assert ocr_rows[0]["text"] == "Hej [MASKAD] här"
+
+    matches = list_pages_matching_text(conn, "%[MASKAD]%")
+    assert [(r["pdf_stem"], r["page_num"]) for r in matches] == [("s1", 2)]
+
+
+def test_list_worst_quality_orders_by_score(tmp_path):
+    conn = _fresh(tmp_path)
+    for stem, score in [("a", 70.0), ("b", 20.0), ("c", 45.0)]:
+        upsert_pdf_file(conn, pdf_stem=stem, source="files", pdf_path="x")
+        mark_merged(conn, stem, text_mtime=1.0)
+        record_quality(conn, pdf_stem=stem, score=score, chars=10,
+                       text_mtime=1.0, extras={})
+    rows = list_worst_quality(conn, 2)
+    assert [r["pdf_stem"] for r in rows] == ["b", "c"]
+
+
+def test_ingest_mtimes_and_delete(tmp_path):
+    conn = _fresh(tmp_path)
+    upsert_pdf_file(conn, pdf_stem="s1", source="files", pdf_path="x")
+    record_ingest(conn, pdf_stem="s1", text_mtime=5.0, chunks=2)
+    rows = list_ingested_mtimes(conn)
+    assert [(r["pdf_stem"], r["text_mtime"]) for r in rows] == [("s1", 5.0)]
+    delete_ingest(conn, "s1")
+    conn.commit()
+    assert get_ingested_mtime(conn, "s1") is None
+
+
+def test_wpu_decisions_with_ocr_delete_and_clear(tmp_path):
+    conn = _fresh(tmp_path)
+    upsert_pdf_file(conn, pdf_stem="w1", source="wpu", pdf_path="x")
+    upsert_pdf_file(conn, pdf_stem="w2", source="wpu", pdf_path="y")
+    mark_tesseract_done(conn, "w2", pdf_path="y", source="wpu")
+    mark_wpu_decided(conn, "w1")
+    mark_wpu_decided(conn, "w2")
+    rows = {r["pdf_stem"]: r["tesseract_done_at"]
+            for r in list_wpu_decisions_with_ocr(conn)}
+    assert set(rows) == {"w1", "w2"}
+    assert rows["w1"] is None
+    assert rows["w2"] is not None
+
+    delete_wpu_decisions(conn, ["w1"])
+    assert not wpu_decided(conn, "w1")
+    assert wpu_decided(conn, "w2")
+
+    clear_wpu_decisions(conn)
+    assert not wpu_decided(conn, "w2")

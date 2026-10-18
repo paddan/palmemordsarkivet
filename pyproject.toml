@@ -23,10 +23,10 @@ dependencies = [
 
 [project.optional-dependencies]
 surya = [
-    "surya-ocr",
+    "surya-ocr>=0.17,<0.18",
     "transformers<5",
-    "pymupdf",
-    "pypdfium2",
+    "pymupdf>=1,<2",
+    "pypdfium2>=4.28,<5",
 ]
 dev = [
     "pytest",
@@ -35,13 +35,13 @@ dev = [
 ]
 web = [
     "streamlit>=1.57,<2",
-    "openai",
-    "folium",
-    "streamlit-folium",
+    "openai>=2,<3",
+    "folium>=0.20,<0.21",
+    "streamlit-folium>=0.27,<0.28",
 ]
 graph = [
-    "neo4j",
-    "st-link-analysis",
+    "neo4j>=6,<7",
+    "st-link-analysis>=0.4,<0.5",
 ]
 
 [tool.ruff]
@@ -65,7 +65,6 @@ py-modules = [
     "casebook_ui",
     "citations",
     "config",
-    "db",
     "download",
     "download_wpu",
     "quality",
@@ -81,6 +80,13 @@ py-modules = [
     "karta",
     "map_extract",
     "extract_map_observations",
+    "admin_ui",
+    "compare",
+    "facets",
+    "llm_usage",
+    "prompts",
+    "redactions",
+    "search_fuzzy",
 ]
 
 [tool.setuptools.package-dir]
@@ -88,4 +94,4 @@ py-modules = [
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["rag*", "graph*", "operations*"]
+include = ["db*", "rag*", "graph*", "operations*"]

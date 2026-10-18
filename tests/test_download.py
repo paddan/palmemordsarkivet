@@ -166,3 +166,27 @@ def test_download_rebuild_fetches_again_and_ignores_the_manifest(tmp_path, monke
     # --rebuild hämtar om även det som ligger på disk och i manifestet.
     assert download.run_download(out=out, sheet_id="x", limit=0, rebuild=True) == 0
     assert calls == ["AAA111", "BBB222", "AAA111", "BBB222"]
+
+
+def test_sniff_extension_logs_filetype_failure_and_falls_back(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # Ett fel i filetype ska loggas men inte stoppa signatur-fallbacken.
+    import download
+
+    class _Trasig:
+        @staticmethod
+        def guess(_path: str):
+            raise RuntimeError("trasig filetype")
+
+    rader: list[tuple] = []
+    monkeypatch.setattr(download, "_filetype", _Trasig)
+    monkeypatch.setattr(download, "log_error", lambda *a: rader.append(a))
+    p = tmp_path / "dok.bin"
+    p.write_bytes(b"%PDF-1.4\n" + b"\x00" * 16)
+
+    assert sniff_extension(p) == ".pdf"
+    assert len(rader) == 1
+    assert rader[0][0] == "download"
+    assert rader[0][1] == "dok.bin"
+    assert "RuntimeError: trasig filetype" in rader[0][2]

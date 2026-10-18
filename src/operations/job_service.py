@@ -1,6 +1,6 @@
 """Skapa, starta, inspektera och stoppa bakgrundsjobb.
 
-Håller sig till ``src/db.py`` för all SQL och till ``operations.models`` för
+Håller sig till ``src/db/`` för all SQL och till ``operations.models`` för
 parameterdefinitioner. Både CLI:n och adminsidan använder dessa funktioner, så
 beteendet är identiskt oavsett gränssnitt.
 """

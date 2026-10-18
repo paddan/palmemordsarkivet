@@ -55,16 +55,16 @@ def _p(name: str, flags: str, kind: ParameterKind, default, help_: str, **kw) ->
     return ParameterDefinition(name, (flags,), kind, default, help_, **kw)
 
 
-def _register_builtin_operations() -> None:
-    from . import adapters
-    from . import neo4j as neo4j_mod
-    from .ocr import OcrOptions, run_ocr
-    from .pipeline import PipelineOptions, run_pipeline
-    from .tesseract import TesseractOptions, run_tesseract
+def _validate_merge_pages(params) -> None:
+    """Kräv exakt en av --stem och --all för merge-pages."""
+    if bool(params.get("stem")) == bool(params.get("all")):
+        raise ValueError("Ange exakt en av --stem och --all")
 
-    def validate_merge_pages(params) -> None:
-        if bool(params.get("stem")) == bool(params.get("all")):
-            raise ValueError("Ange exakt en av --stem och --all")
+
+def _register_pipeline_operations() -> None:
+    """Registrera pipeline-operationerna (hela pipelinen och nedladdningarna)."""
+    from . import adapters
+    from .pipeline import PipelineOptions, run_pipeline
 
     _registry.register(OperationDefinition(
         id="run-pipeline", label="Full pipeline", group="Pipeline",
@@ -112,6 +112,13 @@ def _register_builtin_operations() -> None:
         admin_visible=False, mutating=True, confirmation=None,
         run=adapters.download_wpu_adapter,
     ))
+
+
+def _register_ocr_operations() -> None:
+    """Registrera OCR-operationerna för Tesseract, redaktioner och sammanslagning."""
+    from . import adapters
+    from .ocr import OcrOptions, run_ocr
+    from .tesseract import TesseractOptions, run_tesseract
 
     _registry.register(OperationDefinition(
         id="ocr", label="Full OCR", group="OCR",
@@ -192,7 +199,7 @@ def _register_builtin_operations() -> None:
         ),
         admin_visible=True, mutating=True, confirmation=None,
         run=adapters.merge_pages_adapter,
-        validate=validate_merge_pages,
+        validate=_validate_merge_pages,
     ))
 
     _registry.register(OperationDefinition(
@@ -211,6 +218,11 @@ def _register_builtin_operations() -> None:
         admin_visible=True, mutating=True, confirmation=None,
         run=adapters.merge_wpu_adapter,
     ))
+
+
+def _register_quality_llm_operations() -> None:
+    """Registrera användarordlistan och LLM-korrigeringen av OCR-text."""
+    from . import adapters
 
     _registry.register(OperationDefinition(
         id="build-user-words", label="Användarordlista", group="Kvalitet",
@@ -247,6 +259,11 @@ def _register_builtin_operations() -> None:
         run=adapters.llm_correct_adapter,
     ))
 
+
+def _register_page_ocr_operations() -> None:
+    """Registrera OCR per sida."""
+    from . import adapters
+
     _registry.register(OperationDefinition(
         id="ocr-pages", label="Sid-OCR", group="OCR",
         description="OCR per sida (Tesseract/Surya/vision).",
@@ -267,6 +284,11 @@ def _register_builtin_operations() -> None:
         run=adapters.ocr_pages_adapter,
     ))
 
+
+def _register_graph_operations() -> None:
+    """Registrera grafens laddning, granskning och synk mot Neo4j."""
+    from . import adapters
+
     _registry.register(OperationDefinition(
         id="load-graph", label="Ladda grafdata", group="Extraktion och graf",
         description="Ladda doc_entities till Neo4j.",
@@ -285,6 +307,7 @@ def _register_builtin_operations() -> None:
         parameters=(), admin_visible=True, mutating=True, confirmation=None,
         run=adapters.graph_review_adapter,
     ))
+
     _registry.register(OperationDefinition(
         id="graph-review-llm", label="LLM-granska grafkvalitet",
         group="Extraktion och graf",
@@ -296,6 +319,7 @@ def _register_builtin_operations() -> None:
         admin_visible=True, mutating=True, confirmation=None,
         run=adapters.graph_review_llm_adapter,
     ))
+
     _registry.register(OperationDefinition(
         id="graph-sync", label="Verifiera och uppdatera graf", group="Extraktion och graf",
         description="Jämför Neo4j med granskat underlag. Förhandsvisning som standard.",
@@ -313,6 +337,11 @@ def _register_builtin_operations() -> None:
         confirmation="Med Applicera uppdateringen ersätts importerade grafkanter med granskat underlag.",
         run=adapters.graph_sync_adapter,
     ))
+
+
+def _register_quality_operations() -> None:
+    """Registrera kvalitetsbedömning och normalisering."""
+    from . import adapters
 
     _registry.register(OperationDefinition(
         id="quality", label="Kvalitetsbedömning", group="Kvalitet",
@@ -346,6 +375,11 @@ def _register_builtin_operations() -> None:
         run=adapters.normalize_adapter,
     ))
 
+
+def _register_index_operations() -> None:
+    """Registrera LanceDB-ingest."""
+    from . import adapters
+
     _registry.register(OperationDefinition(
         id="ingest", label="LanceDB-ingest", group="Index",
         description="Indexera text till LanceDB.",
@@ -367,6 +401,11 @@ def _register_builtin_operations() -> None:
         admin_visible=True, mutating=True, confirmation=None,
         run=adapters.ingest_adapter,
     ))
+
+
+def _register_extraction_operations() -> None:
+    """Registrera LLM-extraktionerna av kartobservationer och entiteter."""
+    from . import adapters
 
     _registry.register(OperationDefinition(
         id="extract-map-observations", label="Kartobservationsförslag", group="Extraktion och graf",
@@ -406,6 +445,11 @@ def _register_builtin_operations() -> None:
         run=adapters.extract_entities_adapter,
     ))
 
+
+def _register_llm_config_operations() -> None:
+    """Registrera LLM-inställningarna från CLI:t."""
+    from . import adapters
+
     _registry.register(OperationDefinition(
         id="llm-config", label="LLM-inställningar", group="LLM-inställningar",
         description="Visa/ändra provider, modell och base URL.",
@@ -419,24 +463,45 @@ def _register_builtin_operations() -> None:
         run=adapters.llm_config_adapter,
     ))
 
+
+def _register_neo4j_operations() -> None:
+    """Registrera Neo4j-livscykeln (status, start och stopp)."""
+    from . import neo4j as neo4j_mod
+
     _registry.register(OperationDefinition(
         id="neo4j-status", label="Neo4j-status", group="Extraktion och graf",
         description="Visa Neo4j-containerstatus.",
         parameters=(), admin_visible=True, mutating=False, confirmation=None,
         run=lambda ctx, params: neo4j_mod.neo4j_status(ctx),
     ))
+
     _registry.register(OperationDefinition(
         id="neo4j-start", label="Neo4j-start", group="Extraktion och graf",
         description="Starta lokal Neo4j-container.",
         parameters=(), admin_visible=True, mutating=True, confirmation=None,
         run=lambda ctx, params: neo4j_mod.neo4j_start(ctx),
     ))
+
     _registry.register(OperationDefinition(
         id="neo4j-stop", label="Neo4j-stop", group="Extraktion och graf",
         description="Stoppa lokal Neo4j-container.",
         parameters=(), admin_visible=True, mutating=True, confirmation=None,
         run=lambda ctx, params: neo4j_mod.neo4j_stop(ctx),
     ))
+
+
+def _register_builtin_operations() -> None:
+    """Registrera alla inbyggda operationer i samma ordning som tidigare."""
+    _register_pipeline_operations()
+    _register_ocr_operations()
+    _register_quality_llm_operations()
+    _register_page_ocr_operations()
+    _register_graph_operations()
+    _register_quality_operations()
+    _register_index_operations()
+    _register_extraction_operations()
+    _register_llm_config_operations()
+    _register_neo4j_operations()
 
 
 _register_builtin_operations()

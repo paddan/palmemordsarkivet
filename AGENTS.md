@@ -30,7 +30,7 @@ När du gör förändringar i projektet ska du **alltid** uppdatera den använda
 
 ## Project Overview
 
-**palmemordsarkivet** laddar ner, OCR-processar och gör 3 762 palme-PDF:er + 7 155 wpu-PDF:er (~47 000 sidor, 8 665 sökbara dokument efter merge) från palmemordsarkivet.se och wpu.nu sökbara via RAG + Codex Opus 4.7, med Streamlit-flikarna Utredning, Utredningspärm, Graf, Maskeringar, Jämförelse och Karta. Alla kommentarer och docstrings är på svenska.
+**palmemordsarkivet** laddar ner, OCR-processar och gör 3 762 palme-PDF:er + 7 155 wpu-PDF:er (~47 000 sidor, 8 665 sökbara dokument efter merge) från palmemordsarkivet.se och wpu.nu sökbara via RAG + Claude (eller annan vald LLM-backend), med Streamlit-flikarna Utredning, Utredningspärm, Graf, Maskeringar, Jämförelse och Karta. Alla kommentarer och docstrings är på svenska.
 
 Pipeline: download → OCR (Tesseract + optional Surya) → detect redactions → normalize → quality scoring → LanceDB ingest → RAG query → Streamlit UI.
 
@@ -38,12 +38,12 @@ Pipeline: download → OCR (Tesseract + optional Surya) → detect redactions �
 
 ```
 src/
-  db.py                # SQLite-state: versionsstyrt schema + CRUD + delta-queries för pipeline + utredningspärm
-  download.py          # Google Drive PDF downloader (state via db.py)
+  db/                  # SQLite-state (paket): _schema (schema/migrationer/connect), pipeline, casebook, karta, jobs, graph, usage; __init__ re-exporterar allt som db.X
+  download.py          # Google Drive PDF downloader (state via db)
   quality.py           # OCR quality scoring (0–100 heuristics + optional hunspell)
   ocr_pages.py         # Per-page OCR pipeline (Tesseract/Surya) + redaktionsdetektering
   normalize_text.py    # Rule-based OCR normalization (ligatures, whitespace). Inkrementellt via state.db.
-  llm_correct.py       # LLM post-correction av dåliga OCR-sidor via Codex Haiku
+  llm_correct.py       # LLM post-correction av dåliga OCR-sidor via vald LLM-profil (standard Claude Haiku)
   merge_pages.py       # Slå ihop per-sida-text från state.db → text/<stem>.txt
   build_user_words.py  # Generera Tesseract user-words från OCR-text
   errors_log.py        # Centraliserad felloggning (tab-separerad)
@@ -73,7 +73,7 @@ src/
     7_Karta.py         # Karta över mordkvällens observationer med formulär och tidslinje
   rag/
     ingest.py          # LanceDB vector index builder
-    ask.py             # RAG query + Codex integration
+    ask.py             # RAG query + LLM-integration (Claude/OpenAI-kompatibla)
   graph/
     extract_entities.py # Per-sida entitets-/relationsextraktion via LLM → doc_entities i state.db
     review.py            # Ren kvalitetskontroll + applicering av manuella beslut
@@ -189,11 +189,17 @@ och genvägarna är **samma mängd** i båda riktningarna; Admin-formuläret,
 CLI-flaggorna och hjälptexterna genereras ur samma definition och bevakas av
 `tests/test_admin_ui.py` och `tests/test_operation_registry.py`.
 
+**Ny toppnivåmodul i `src/`** måste läggas till i `py-modules` i `pyproject.toml`
+(`tests/test_packaging.py` kräver att mängderna är lika). All SQLite-SQL bor i
+paketet `src/db/` — `tests/test_sql_boundary.py` underkänner `.execute(` någon
+annanstans, och nya db-funktioner måste re-exporteras i `src/db/__init__.py`.
+CI (`.github/workflows/ci.yml`) kör `scripts/test.py --static` på Python 3.11.
+
 Env-variabler: `CLAUDE_CODE_OAUTH_TOKEN` (Pro/Max, räknas mot prenumeration) eller `ANTHROPIC_API_KEY`. Valfritt: `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, `OPENROUTER_API_KEY` (backend-katalogen i `src/backends.py` styr vilka modeller som listas).
 
 **Jobbinvarianter (bakgrundsjobb/admin):**
 
-- Endast ett aktivt skrivande jobb åt gången — `admin_jobs.active_slot` är atomisk via partiellt unikt index; all jobb-SQL ligger i `src/db.py`.
+- Endast ett aktivt skrivande jobb åt gången — `admin_jobs.active_slot` är atomisk via partiellt unikt index; all jobb-SQL ligger i `src/db/` (`jobs.py`).
 - Workern startas fristående (`start_new_session=True`) och överlever webbläsare/Streamlit-omstarter. Heartbeat skrivs var 5:e sekund; heartbeat äldre än 15 s utan levande process → `interrupted`.
 - Hemliga parametrar (API-nycklar, token, lösenord) sparas aldrig i `params_json` eller loggar; bakgrundsjobb läser dem ur processmiljön, och kommandorader redigeras före loggning.
 - Jobbloggar: `generated/admin_jobs/<job-id>.log` (append-only, tidsstämplad).
@@ -555,7 +561,7 @@ kvalitetspoäng, LLM-korrigeringar och ingest-tracking. Utredningspärmen
 lever också här i `casebook_entries` och `source_bookmarks`. Karta-flikens
 granskningskö använder `map_observation_candidates` och
 `map_observation_extractions` (per-sida-markör även när inga kandidater hittas).
-Schemat är versionsstyrt i `src/db.py`: `init_schema` skapar färsk databas,
+Schemat är versionsstyrt i `src/db/_schema.py`: `init_schema` skapar färsk databas,
 kör pending migrations mot äldre databaser, uppdaterar `schema_version` och
 `PRAGMA user_version`, och vägrar databaser från nyare kodversioner.
 Inkrementell logik
@@ -564,7 +570,7 @@ bygger på att jämföra `pdf_files.text_mtime` mot `normalized_at`/`scored_at`/
 fler Tesseract-försök; `scripts/ocr.py` försöker Surya-fallback innan en fil betraktas
 som slutligt OCR-misslyckad. `surya_failed_at` markerar att även Surya inte fick
 fram text, och då hoppar `merge_wpu` sådana textlösa wpu-filer tyst. Modulen
-`src/db.py` exponerar alla CRUD- och delta-queries; konsumenter skriver aldrig
+`src/db/` (re-exporterat via `db/__init__.py`) exponerar alla CRUD- och delta-queries; konsumenter skriver aldrig
 egen SQL.
 
 **Utredningspärm → Graf**: sparade svar i Utredningspärmen visas kollapsade.

@@ -85,8 +85,15 @@ def _load_state(path: Path) -> dict:
         data: dict = json.loads(path.read_text(encoding="utf-8"))
         if isinstance(data.get("mtimes"), dict) and isinstance(data.get("file_words"), dict):
             return data
-    except Exception:
-        pass
+        log_error(
+            "build_user_words", path.name,
+            "cache-JSON har fel form (saknar mtimes/file_words), bygger om cachen",
+        )
+    except (OSError, ValueError, AttributeError) as exc:
+        log_error(
+            "build_user_words", path.name,
+            f"cache-JSON kunde inte läsas, bygger om cachen: {type(exc).__name__}: {exc}",
+        )
     return {"mtimes": {}, "file_words": {}}
 
 

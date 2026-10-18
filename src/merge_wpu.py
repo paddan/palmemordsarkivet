@@ -71,20 +71,12 @@ def cleanup_phantom_decisions(conn, text_dir: Path) -> int:
     även när OCR inte hunnit producera texten. Idempotent — säker att köra
     varje gång.
     """
-    rows = conn.execute(
-        """SELECT w.pdf_stem, p.tesseract_done_at
-           FROM wpu_decisions AS w
-           LEFT JOIN pdf_files AS p ON p.pdf_stem = w.pdf_stem"""
-    ).fetchall()
+    rows = state_db.list_wpu_decisions_with_ocr(conn)
     bogus = [r["pdf_stem"] for r in rows
              if not (text_dir / f"{r['pdf_stem']}.txt").exists()
              and r["tesseract_done_at"] is None]
     if bogus:
-        conn.executemany(
-            "DELETE FROM wpu_decisions WHERE pdf_stem=?",
-            [(s,) for s in bogus],
-        )
-        conn.commit()
+        state_db.delete_wpu_decisions(conn, bogus)
     return len(bogus)
 
 
@@ -237,8 +229,7 @@ def run_merge_wpu(
     init_conn = state_db.connect()
     state_db.init_schema(init_conn)
     if rebuild and not dry_run:
-        init_conn.execute("DELETE FROM wpu_decisions")
-        init_conn.commit()
+        state_db.clear_wpu_decisions(init_conn)
     elif not dry_run:
         removed = cleanup_phantom_decisions(init_conn, text_dir)
         if removed:

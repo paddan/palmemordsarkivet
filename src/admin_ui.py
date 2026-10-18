@@ -10,6 +10,7 @@ from __future__ import annotations
 import html
 import json
 import re
+import sqlite3
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -681,32 +682,39 @@ def render_settings_tab() -> None:
                 st.rerun()
 
 
-def render_llm_settings() -> None:
-    """Rendera namngivna LLM-konfigurationer som ett sammanhållet formulär.
+def _ladda_llm_profiler_state() -> tuple[dict[str, dict], str]:
+    """Hämta profiler och standardnamn till session state första gången sidan ritas.
 
-    Man lägger till/redigerar namngivna konfigurationer och väljer sedan vilken
-    som ska användas per sida/operation. Sparas till generated/llm_config.json.
-    API-nycklar visas eller lagras inte — endast om miljövariabeln är tillgänglig.
+    Returnerar profil-dicten (som ändras på plats vid borttagning) och standardnamnet.
     """
-    import os
-
     import streamlit as st
 
-    import backends
     import config as llm_config
-    import db
-    import llm_usage
-
-    conn = db.connect()
-    db.init_schema(conn)
 
     if "llm_profiles" not in st.session_state:
         all_cfg = llm_config.load_all()
         st.session_state["llm_profiles"] = all_cfg["profiles"]
         st.session_state["llm_default"] = all_cfg["default"]
-
     profiles: dict[str, dict] = st.session_state["llm_profiles"]
     default_name: str = st.session_state["llm_default"]
+    return profiles, default_name
+
+
+def _synka_llm_urval(profiles: dict[str, dict], default_name: str) -> None:
+    """Applicera väntande val och se till att det valda namnet finns bland profilerna."""
+    import streamlit as st
+
+    # Pending-val (från lägg till/ta bort) appliceras innan selectboxen renderas.
+    pending = st.session_state.pop("llm_pending_selection", None)
+    if pending in profiles:
+        st.session_state["llm_selected"] = pending
+    if "llm_selected" not in st.session_state or st.session_state["llm_selected"] not in profiles:
+        st.session_state["llm_selected"] = default_name
+
+
+def _render_llm_rubrik() -> None:
+    """Rita rubriken, beskrivningen och eventuellt flashmeddelande från föregående sparning."""
+    import streamlit as st
 
     st.subheader("LLM-konfigurationer")
     st.caption(
@@ -718,311 +726,536 @@ def render_llm_settings() -> None:
     if flash:
         st.success(flash)
 
-    profile_names = list(profiles.keys())
 
-    # Pending-val (från lägg till/ta bort) appliceras innan selectboxen renderas.
-    pending = st.session_state.pop("llm_pending_selection", None)
-    if pending in profiles:
-        st.session_state["llm_selected"] = pending
-    if "llm_selected" not in st.session_state or st.session_state["llm_selected"] not in profiles:
-        st.session_state["llm_selected"] = default_name
+def _llm_formulardata(
+    profiles: dict[str, dict], selected: str, creating: bool
+) -> tuple[str, dict]:
+    """Returnera formulärets nyckelprefix och profilen som formuläret ska visa."""
+    import streamlit as st
+
+    import config as llm_config
+
+    profile_key = (
+        f"new_{st.session_state.get('llm_new_version', 0)}"
+        if creating
+        else selected
+    )
+    profile = dict(llm_config._DEFAULTS) if creating else profiles[selected]
+    return profile_key, profile
+
+
+def _render_llm_profilval(
+    conn: sqlite3.Connection, profiles: dict[str, dict], default_name: str, creating: bool
+) -> tuple[str, str]:
+    """Rita väljaren med knapparna Ny och Ta bort och returnera valt namn och standardnamn.
+
+    Borttagning ändrar profilerna på plats och kör om sidan, så standardnamnet
+    returneras alltid i det skick som gäller efter körningen.
+    """
+    import streamlit as st
+
+    import config as llm_config
+    import db
+
+    profile_names = list(profiles.keys())
+    # vertical_alignment="bottom" lägger knapparna i nivå med dropdownen
+    # i stället för med dess etikett.
+    select_col, new_col, delete_col = st.columns([5, 1, 1], vertical_alignment="bottom")
+    selected = select_col.selectbox(
+        "Konfiguration",
+        profile_names,
+        key="llm_selected",
+        disabled=creating,
+        format_func=lambda name: f"{name} (standard)" if name == default_name else name,
+    )
+    if new_col.button("Ny", key="llm_new", use_container_width=True):
+        st.session_state["llm_new_version"] = (
+            st.session_state.get("llm_new_version", 0) + 1
+        )
+        st.session_state["llm_creating"] = True
+        st.rerun()
+    if delete_col.button(
+        "Ta bort",
+        key="llm_del",
+        disabled=creating or len(profiles) <= 1,
+        use_container_width=True,
+    ):
+        if len(profiles) <= 1:
+            # Kan bara nås programmatiskt (knappen är inaktiverad när bara en
+            # profil finns) — men next(iter(...)) nedan skulle krascha här.
+            st.error("Den sista konfigurationen kan inte tas bort.")
+            st.stop()
+        del profiles[selected]
+        next_name = next(iter(profiles))
+        if selected == default_name:
+            default_name = next_name
+        llm_config.save_profiles(profiles, default_name)
+        # Räknaren hör till profilen; annars ärver en ny profil med samma
+        # namn den borttagnas token och kostnader.
+        db.delete_llm_usage(conn, selected)
+        st.session_state["llm_profiles"] = profiles
+        st.session_state["llm_default"] = default_name
+        st.session_state["llm_pending_selection"] = next_name
+        st.session_state["llm_flash"] = f"'{selected}' borttagen."
+        st.rerun()
+    return selected, default_name
+
+
+def _render_llm_namn_fält(
+    profile_key: str,
+    selected: str,
+    default_name: str,
+    creating: bool,
+) -> tuple[str, bool]:
+    """Rita namnfältet och kryssrutan för standardkonfiguration."""
+    import streamlit as st
+
+    name = st.text_input(
+        "Namn",
+        value="" if creating else selected,
+        key=f"llm_name_{profile_key}",
+        placeholder="Exempel: DeepSeek snabb",
+    )
+    make_default = st.checkbox(
+        "Använd som standardkonfiguration",
+        value=not creating and selected == default_name,
+        key=f"llm_make_default_{profile_key}",
+        disabled=not creating and selected == default_name,
+        help=(
+            "Standardkonfigurationen kan inte avmarkeras. Välj en annan "
+            "konfiguration och markera den i stället."
+            if not creating and selected == default_name
+            else None
+        ),
+    )
+    return name, make_default
+
+
+def _render_llm_anvandning(conn: sqlite3.Connection, selected: str) -> None:
+    """Visa ackumulerade token och kostnader för profilen (state.db).
+
+    Samma siffra som Utrednings sidofält visar.
+    """
+    import streamlit as st
+
+    import db
+    import llm_usage
+
+    usage = db.get_llm_usage(conn, selected)
+    rad = llm_usage.format_summary(llm_usage.totals_from_row(usage))
+    senast = f" · senast {usage['last_model']}" if usage["last_model"] else ""
+    st.caption(f"Ackumulerat: {rad}{senast}")
+
+
+def _render_llm_tjanst(profile: dict, profile_key: str) -> tuple[str, dict, dict]:
+    """Rita väljaren för tjänst och returnera tjänstens namn, katalogpost och fältstandarder."""
+    import streamlit as st
+
+    import backends
+
+    keys = list(backends.BACKENDS.keys())
+    saved_name = profile.get("backend_name", keys[0])
+    backend_name = st.selectbox(
+        "Tjänst",
+        keys,
+        index=keys.index(saved_name) if saved_name in keys else 0,
+        key=f"llm_backend_{profile_key}",
+    )
+    backend = backends.BACKENDS[backend_name]
+    field_defaults = llm_form_defaults(profile, backend_name, backend)
+    return backend_name, backend, field_defaults
+
+
+def _render_llm_webbsok_standard(
+    backend_name: str,
+    backend: dict,
+    field_defaults: dict,
+    selected: str,
+    profile_key: str,
+    creating: bool,
+) -> tuple[bool, str]:
+    """Rita kryssrutan för webbsökens standardprofil.
+
+    Förstahandsvalet: samma form som "Använd som standardkonfiguration" — en
+    kryssruta per profil, applicerad när formuläret sparas. Bara profiler vars
+    leverantör har en sök-API kan väljas; DeepSeek, Ollama och custom-endpoints har ingen.
+    Returnerar kryssrutans värde och den sparade standarden.
+    """
+    import streamlit as st
+
+    import backends
+    import config as llm_config
+
+    sparad_sok_standard = llm_config.load_search_default()
+    sokbar = backends.provider_from_endpoint(
+        field_defaults["base_url"], backend["kind"]
+    ) is not None
+    make_web_search_default = st.checkbox(
+        "Använd som standard för webbsök",
+        value=not creating and selected == sparad_sok_standard,
+        key=f"llm_web_search_default_{profile_key}",
+        disabled=not sokbar,
+        help=(
+            "Profilen ligger då först och är förvald i **Sökmodell** i "
+            "utredningslägets sökinställningar. Det är här man pekar ut en billig "
+            "konfiguration för sökningarna — sökträffarna kommer från sökmotorn, "
+            "inte från modellen. "
+            + ("" if sokbar else
+               f"**{backend_name}** har ingen sök-API, så den kan inte vara "
+               "förstahandsval för webbsök.")
+        ),
+    )
+    return make_web_search_default, sparad_sok_standard
+
+
+def _render_llm_modell(
+    backend: dict,
+    backend_name: str,
+    profile_key: str,
+    field_defaults: dict,
+    base_url_key: str,
+    api_key_env_key: str,
+) -> tuple[str, dict]:
+    """Rita modellväljaren och returnera modellnamnet och hämtad prisinfo (tom om ingen).
+
+    Modellkatalogen och priserna hämtas med fem minuters cache; nyckelvärdet
+    används aldrig som cache-nyckel.
+    """
+    import os
+
+    import streamlit as st
+
+    import backends
+
+    saved_model = field_defaults["model"]
+    selected_base_url = str(
+        st.session_state.get(base_url_key, field_defaults["base_url"])
+    )
+    selected_api_key_env = str(
+        st.session_state.get(api_key_env_key, field_defaults["api_key_env"])
+    ).strip()
+
+    @st.cache_data(ttl=300, show_spinner=False)
+    def _cached_provider_models(base_url: str, api_key_env: str) -> list[str]:
+        """Hämta modellkatalog utan att använda nyckelvärdet som cache-nyckel."""
+        return cast(
+            list[str], backends.fetch_models(base_url, os.environ.get(api_key_env, ""))
+        )
+
+    @st.cache_data(ttl=300, show_spinner=False)
+    def _cached_provider_pricing(base_url: str, api_key_env: str) -> dict[str, dict]:
+        """Hämta prislista per modell utan att använda nyckelvärdet som cache-nyckel."""
+        return cast(
+            dict[str, dict],
+            backends.fetch_model_pricing(base_url, os.environ.get(api_key_env, "")),
+        )
+
+    model_catalog = backends.available_models(
+        {**backend, "base_url": selected_base_url},
+        fetcher=lambda base_url, _api_key: _cached_provider_models(
+            base_url, selected_api_key_env
+        ),
+    )
+    model_pricing = (
+        _cached_provider_pricing(selected_base_url, selected_api_key_env)
+        if selected_base_url
+        else {}
+    )
+    model_options, model_selection = llm_model_options(
+        {"models": model_catalog}, saved_model
+    )
+    model_choice = st.selectbox(
+        "Modell",
+        model_options,
+        index=model_options.index(model_selection),
+        key=f"llm_model_choice_{profile_key}_{backend_name}",
+        format_func=lambda m: format_model_option(m, model_pricing),
+    )
+    if model_choice == CUSTOM_MODEL_LABEL:
+        model = st.text_input(
+            "Eget modellnamn",
+            value=saved_model if saved_model not in backend.get("models", []) else "",
+            key=f"llm_custom_model_{profile_key}_{backend_name}",
+        )
+        return model, {}
+    return model_choice, model_pricing.get(model_choice, {})
+
+
+def _render_llm_priser(
+    profile: dict,
+    profile_key: str,
+    backend_name: str,
+    fetched_price: dict,
+) -> tuple[float, float, float]:
+    """Visa hämtade priser eller rita de tre manuella prisfälten.
+
+    Returnerar input-, output- och cache-träffpriset i USD per 1M token.
+    """
+    import streamlit as st
+
+    if fetched_price:
+        # Escapad $ — två $ i samma markdown-block blir annars LaTeX-matte
+        # hos Streamlit (samma gotcha som sidofältets kostnadsräknare).
+        escaped_price_text = format_fetched_price(fetched_price).replace("$", "\\$")
+        st.caption(
+            f"✓ Pris hämtat automatiskt från {backend_name}: "
+            f"{escaped_price_text}. Används för kostnadsräkningen i "
+            "Utrednings sidofält och här intill."
+        )
+        return (
+            fetched_price.get("input_price_usd", 0.0),
+            fetched_price.get("output_price_usd", 0.0),
+            fetched_price.get("cache_hit_price_usd", 0.0),
+        )
+
+    st.caption(
+        "Priser (valfritt) — USD per 1M token. Används för kostnadsräkningen "
+        "i Utrednings sidofält och här intill; tomt ger \"kostnad okänd\"."
+    )
+    price_defaults = profile if profile.get("backend_name") == backend_name else {}
+    price_cols = st.columns(3)
+    input_price = price_cols[0].number_input(
+        "Input ($/1M)",
+        min_value=0.0,
+        value=float(price_defaults.get("input_price_usd") or 0.0),
+        step=0.01,
+        format="%.4f",
+        key=f"llm_input_price_{profile_key}_{backend_name}",
+        help="Pris för icke-cachade indata-token.",
+    )
+    output_price = price_cols[1].number_input(
+        "Output ($/1M)",
+        min_value=0.0,
+        value=float(price_defaults.get("output_price_usd") or 0.0),
+        step=0.01,
+        format="%.4f",
+        key=f"llm_output_price_{profile_key}_{backend_name}",
+        help="Pris för genererade token.",
+    )
+    cache_hit_price = price_cols[2].number_input(
+        "Cache-träff ($/1M)",
+        min_value=0.0,
+        value=float(price_defaults.get("cache_hit_price_usd") or 0.0),
+        step=0.01,
+        format="%.4f",
+        key=f"llm_cache_hit_price_{profile_key}_{backend_name}",
+        help=(
+            "Pris för cachade indata-token (DeepSeek cachar automatiskt). "
+            "Tomt = samma pris som Input."
+        ),
+    )
+    return input_price, output_price, cache_hit_price
+
+
+def _render_llm_avancerat(
+    profile: dict,
+    profile_key: str,
+    backend_name: str,
+    backend: dict,
+    field_defaults: dict,
+    base_url_key: str,
+    api_key_env_key: str,
+    fetched_price: dict,
+) -> tuple[str, str, float, float, float]:
+    """Rita de avancerade inställningarna: endpoint, nyckelvariabel och priser.
+
+    Returnerar base URL, miljövariabelns namn och de tre priserna.
+    """
+    import streamlit as st
+
+    with st.expander(
+        "Avancerade inställningar",
+        expanded=bool(backend.get("configurable")),
+    ):
+        base_url = st.text_input(
+            "Base URL",
+            value=field_defaults["base_url"],
+            key=base_url_key,
+            help="Endpoint för OpenAI-kompatibla tjänster; lämnas tom för Claude.",
+        )
+        api_key_env = st.text_input(
+            "Miljövariabel för API-nyckel",
+            value=field_defaults["api_key_env"],
+            key=api_key_env_key,
+            help="Endast variabelns namn sparas, aldrig själva API-nyckeln.",
+        )
+        input_price, output_price, cache_hit_price = _render_llm_priser(
+            profile, profile_key, backend_name, fetched_price
+        )
+    return base_url, api_key_env, input_price, output_price, cache_hit_price
+
+
+def _visa_llm_nyckelstatus(
+    placeholder: Any, api_key_env: str, backend: dict
+) -> None:
+    """Visa om API-nyckelns miljövariabel finns i processmiljön.
+
+    En tom override betyder inte att kända molntjänster blir nyckelfria:
+    runtime-konfigurationen faller då tillbaka till backend-katalogens env.
+    """
+    import os
+
+    env_key = api_key_env.strip() or str(backend.get("env") or "").strip()
+    if env_key:
+        available = bool(os.environ.get(env_key))
+        status = "är tillgänglig" if available else "saknas i processmiljön"
+        placeholder.caption(
+            f"{'✓' if available else '⚠'} API-nyckeln `{env_key}` {status}."
+        )
+    else:
+        placeholder.caption("✓ Ingen API-nyckel krävs av den valda tjänsten.")
+
+
+def _render_llm_spara(
+    conn: sqlite3.Connection,
+    profiles: dict[str, dict],
+    default_name: str,
+    selected: str,
+    creating: bool,
+    name: str,
+    make_default: bool,
+    make_web_search_default: bool,
+    sparad_sok_standard: str,
+    backend_name: str,
+    backend: dict,
+    model: str,
+    base_url: str,
+    api_key_env: str,
+    prices: tuple[float, float, float],
+) -> None:
+    """Rita spara- och avbrytknapparna och spara formuläret när Spara trycks.
+
+    Namnbyte flyttar räknaren, och en ogiltig profil visas som fel utan att sparas.
+    """
+    import streamlit as st
+
+    import config as llm_config
+    import db
+
+    input_price, output_price, cache_hit_price = prices
+    profile_key = f"new_{st.session_state.get('llm_new_version', 0)}" if creating else selected
+    save_col, cancel_col = st.columns([3, 1])
+    save_label = "Skapa konfiguration" if creating else "Spara ändringar"
+    if save_col.button(save_label, key=f"llm_save_{profile_key}", type="primary"):
+        payload = llm_profile_payload(
+            backend_name=backend_name,
+            provider=backend["kind"],
+            model=model,
+            base_url=base_url,
+            api_key_env=api_key_env,
+            input_price_usd=input_price,
+            output_price_usd=output_price,
+            cache_hit_price_usd=cache_hit_price,
+        )
+        try:
+            updated, updated_default = apply_llm_profile_form(
+                profiles,
+                selected_name=None if creating else selected,
+                entered_name=name,
+                payload=payload,
+                default_name=default_name,
+                make_default=make_default,
+            )
+        except ValueError as exc:
+            st.error(str(exc))
+        else:
+            saved_name = name.strip()
+            llm_config.save_profiles(
+                updated,
+                updated_default,
+                web_search_default=apply_web_search_default_form(
+                    saved_name=saved_name,
+                    selected_name=None if creating else selected,
+                    checked=make_web_search_default,
+                    current=sparad_sok_standard,
+                ),
+            )
+            if not creating and saved_name != selected:
+                # Räknaren följer med vid namnbyte i stället för att lämnas kvar.
+                db.rename_llm_usage(conn, selected, saved_name)
+            st.session_state["llm_profiles"] = updated
+            st.session_state["llm_default"] = updated_default
+            st.session_state["llm_creating"] = False
+            st.session_state["llm_pending_selection"] = saved_name
+            st.session_state["llm_flash"] = f"'{saved_name}' sparad."
+            st.rerun()
+    if creating and cancel_col.button("Avbryt", key=f"llm_cancel_{profile_key}"):
+        st.session_state["llm_creating"] = False
+        st.rerun()
+
+
+def render_llm_settings() -> None:
+    """Rendera namngivna LLM-konfigurationer som ett sammanhållet formulär.
+
+    Man lägger till/redigerar namngivna konfigurationer och väljer sedan vilken
+    som ska användas per sida/operation. Sparas till generated/llm_config.json.
+    API-nycklar visas eller lagras inte — endast om miljövariabeln är tillgänglig.
+    """
+    import streamlit as st
+
+    import db
+
+    conn = db.connect()
+    db.init_schema(conn)
+
+    profiles, default_name = _ladda_llm_profiler_state()
+
+    _render_llm_rubrik()
+    _synka_llm_urval(profiles, default_name)
     creating = bool(st.session_state.get("llm_creating", False))
 
     with st.container(border=True):
-        # vertical_alignment="bottom" lägger knapparna i nivå med dropdownen
-        # i stället för med dess etikett.
-        select_col, new_col, delete_col = st.columns([5, 1, 1], vertical_alignment="bottom")
-        selected = select_col.selectbox(
-            "Konfiguration",
-            profile_names,
-            key="llm_selected",
-            disabled=creating,
-            format_func=lambda name: f"{name} (standard)" if name == default_name else name,
-        )
-        if new_col.button("Ny", key="llm_new", use_container_width=True):
-            st.session_state["llm_new_version"] = (
-                st.session_state.get("llm_new_version", 0) + 1
-            )
-            st.session_state["llm_creating"] = True
-            st.rerun()
-        if delete_col.button(
-            "Ta bort",
-            key="llm_del",
-            disabled=creating or len(profiles) <= 1,
-            use_container_width=True,
-        ):
-            if len(profiles) <= 1:
-                # Kan bara nås programmatiskt (knappen är inaktiverad när bara en
-                # profil finns) — men next(iter(...)) nedan skulle krascha här.
-                st.error("Den sista konfigurationen kan inte tas bort.")
-                st.stop()
-            del profiles[selected]
-            next_name = next(iter(profiles))
-            if selected == default_name:
-                default_name = next_name
-            llm_config.save_profiles(profiles, default_name)
-            # Räknaren hör till profilen; annars ärver en ny profil med samma
-            # namn den borttagnas token och kostnader.
-            db.delete_llm_usage(conn, selected)
-            st.session_state["llm_profiles"] = profiles
-            st.session_state["llm_default"] = default_name
-            st.session_state["llm_pending_selection"] = next_name
-            st.session_state["llm_flash"] = f"'{selected}' borttagen."
-            st.rerun()
+        selected, default_name = _render_llm_profilval(conn, profiles, default_name, creating)
 
-        profile_key = (
-            f"new_{st.session_state.get('llm_new_version', 0)}"
-            if creating
-            else selected
+        profile_key, profile = _llm_formulardata(profiles, selected, creating)
+        name, make_default = _render_llm_namn_fält(
+            profile_key, selected, default_name, creating
         )
-        profile = dict(llm_config._DEFAULTS) if creating else profiles[selected]
-        name = st.text_input(
-            "Namn",
-            value="" if creating else selected,
-            key=f"llm_name_{profile_key}",
-            placeholder="Exempel: DeepSeek snabb",
-        )
-        make_default = st.checkbox(
-            "Använd som standardkonfiguration",
-            value=not creating and selected == default_name,
-            key=f"llm_make_default_{profile_key}",
-            disabled=not creating and selected == default_name,
-            help=(
-                "Standardkonfigurationen kan inte avmarkeras. Välj en annan "
-                "konfiguration och markera den i stället."
-                if not creating and selected == default_name
-                else None
-            ),
-        )
-
         if not creating:
-            # Ackumulerade token/kostnader för profilen (state.db), samma siffra
-            # som Utrednings sidofält visar.
-            usage = db.get_llm_usage(conn, selected)
-            rad = llm_usage.format_summary(llm_usage.totals_from_row(usage))
-            senast = f" · senast {usage['last_model']}" if usage["last_model"] else ""
-            st.caption(f"Ackumulerat: {rad}{senast}")
+            _render_llm_anvandning(conn, selected)
 
-        keys = list(backends.BACKENDS.keys())
-        saved_name = profile.get("backend_name", keys[0])
-        backend_name = st.selectbox(
-            "Tjänst",
-            keys,
-            index=keys.index(saved_name) if saved_name in keys else 0,
-            key=f"llm_backend_{profile_key}",
-        )
-        backend = backends.BACKENDS[backend_name]
-        field_defaults = llm_form_defaults(profile, backend_name, backend)
-
-        # Förstahandsval för webbsök: samma form som "Använd som
-        # standardkonfiguration" — en kryssruta per profil, applicerad när
-        # formuläret sparas. Bara profiler vars leverantör har en sök-API kan
-        # väljas; DeepSeek, Ollama och custom-endpoints har ingen.
-        sparad_sok_standard = llm_config.load_search_default()
-        sokbar = backends.provider_from_endpoint(
-            field_defaults["base_url"], backend["kind"]
-        ) is not None
-        make_web_search_default = st.checkbox(
-            "Använd som standard för webbsök",
-            value=not creating and selected == sparad_sok_standard,
-            key=f"llm_web_search_default_{profile_key}",
-            disabled=not sokbar,
-            help=(
-                "Profilen ligger då först och är förvald i **Sökmodell** i "
-                "utredningslägets sökinställningar. Det är här man pekar ut en billig "
-                "konfiguration för sökningarna — sökträffarna kommer från sökmotorn, "
-                "inte från modellen. "
-                + ("" if sokbar else
-                   f"**{backend_name}** har ingen sök-API, så den kan inte vara "
-                   "förstahandsval för webbsök.")
-            ),
+        backend_name, backend, field_defaults = _render_llm_tjanst(profile, profile_key)
+        make_web_search_default, sparad_sok_standard = _render_llm_webbsok_standard(
+            backend_name, backend, field_defaults, selected, profile_key, creating
         )
 
-        saved_model = field_defaults["model"]
         base_url_key = f"llm_base_url_{profile_key}_{backend_name}"
         api_key_env_key = f"llm_api_key_env_{profile_key}_{backend_name}"
-        selected_base_url = str(
-            st.session_state.get(base_url_key, field_defaults["base_url"])
+        model, fetched_price = _render_llm_modell(
+            backend, backend_name, profile_key, field_defaults, base_url_key, api_key_env_key
         )
-        selected_api_key_env = str(
-            st.session_state.get(api_key_env_key, field_defaults["api_key_env"])
-        ).strip()
-
-        @st.cache_data(ttl=300, show_spinner=False)
-        def _cached_provider_models(base_url: str, api_key_env: str) -> list[str]:
-            """Hämta modellkatalog utan att använda nyckelvärdet som cache-nyckel."""
-            return cast(
-                list[str], backends.fetch_models(base_url, os.environ.get(api_key_env, ""))
-            )
-
-        @st.cache_data(ttl=300, show_spinner=False)
-        def _cached_provider_pricing(base_url: str, api_key_env: str) -> dict[str, dict]:
-            """Hämta prislista per modell utan att använda nyckelvärdet som cache-nyckel."""
-            return cast(
-                dict[str, dict],
-                backends.fetch_model_pricing(base_url, os.environ.get(api_key_env, "")),
-            )
-
-        model_catalog = backends.available_models(
-            {**backend, "base_url": selected_base_url},
-            fetcher=lambda base_url, _api_key: _cached_provider_models(
-                base_url, selected_api_key_env
-            ),
-        )
-        model_pricing = (
-            _cached_provider_pricing(selected_base_url, selected_api_key_env)
-            if selected_base_url
-            else {}
-        )
-        model_options, model_selection = llm_model_options(
-            {"models": model_catalog}, saved_model
-        )
-        model_choice = st.selectbox(
-            "Modell",
-            model_options,
-            index=model_options.index(model_selection),
-            key=f"llm_model_choice_{profile_key}_{backend_name}",
-            format_func=lambda m: format_model_option(m, model_pricing),
-        )
-        if model_choice == CUSTOM_MODEL_LABEL:
-            model = st.text_input(
-                "Eget modellnamn",
-                value=saved_model if saved_model not in backend.get("models", []) else "",
-                key=f"llm_custom_model_{profile_key}_{backend_name}",
-            )
-            fetched_price: dict = {}
-        else:
-            model = model_choice
-            fetched_price = model_pricing.get(model, {})
 
         credential_status = st.empty()
 
-        with st.expander(
-            "Avancerade inställningar",
-            expanded=bool(backend.get("configurable")),
-        ):
-            base_url = st.text_input(
-                "Base URL",
-                value=field_defaults["base_url"],
-                key=base_url_key,
-                help="Endpoint för OpenAI-kompatibla tjänster; lämnas tom för Claude.",
-            )
-            api_key_env = st.text_input(
-                "Miljövariabel för API-nyckel",
-                value=field_defaults["api_key_env"],
-                key=api_key_env_key,
-                help="Endast variabelns namn sparas, aldrig själva API-nyckeln.",
-            )
-            if fetched_price:
-                # Escapad $ — två $ i samma markdown-block blir annars LaTeX-matte
-                # hos Streamlit (samma gotcha som sidofältets kostnadsräknare).
-                escaped_price_text = format_fetched_price(fetched_price).replace("$", "\\$")
-                st.caption(
-                    f"✓ Pris hämtat automatiskt från {backend_name}: "
-                    f"{escaped_price_text}. Används för kostnadsräkningen i "
-                    "Utrednings sidofält och här intill."
-                )
-                input_price = fetched_price.get("input_price_usd", 0.0)
-                output_price = fetched_price.get("output_price_usd", 0.0)
-                cache_hit_price = fetched_price.get("cache_hit_price_usd", 0.0)
-            else:
-                st.caption(
-                    "Priser (valfritt) — USD per 1M token. Används för kostnadsräkningen "
-                    "i Utrednings sidofält och här intill; tomt ger \"kostnad okänd\"."
-                )
-                price_defaults = profile if profile.get("backend_name") == backend_name else {}
-                price_cols = st.columns(3)
-                input_price = price_cols[0].number_input(
-                    "Input ($/1M)",
-                    min_value=0.0,
-                    value=float(price_defaults.get("input_price_usd") or 0.0),
-                    step=0.01,
-                    format="%.4f",
-                    key=f"llm_input_price_{profile_key}_{backend_name}",
-                    help="Pris för icke-cachade indata-token.",
-                )
-                output_price = price_cols[1].number_input(
-                    "Output ($/1M)",
-                    min_value=0.0,
-                    value=float(price_defaults.get("output_price_usd") or 0.0),
-                    step=0.01,
-                    format="%.4f",
-                    key=f"llm_output_price_{profile_key}_{backend_name}",
-                    help="Pris för genererade token.",
-                )
-                cache_hit_price = price_cols[2].number_input(
-                    "Cache-träff ($/1M)",
-                    min_value=0.0,
-                    value=float(price_defaults.get("cache_hit_price_usd") or 0.0),
-                    step=0.01,
-                    format="%.4f",
-                    key=f"llm_cache_hit_price_{profile_key}_{backend_name}",
-                    help=(
-                        "Pris för cachade indata-token (DeepSeek cachar automatiskt). "
-                        "Tomt = samma pris som Input."
-                    ),
-                )
+        base_url, api_key_env, input_price, output_price, cache_hit_price = _render_llm_avancerat(
+            profile,
+            profile_key,
+            backend_name,
+            backend,
+            field_defaults,
+            base_url_key,
+            api_key_env_key,
+            fetched_price,
+        )
+        _visa_llm_nyckelstatus(credential_status, api_key_env, backend)
 
-        # En tom override betyder inte att kända molntjänster blir nyckelfria:
-        # runtime-konfigurationen faller då tillbaka till backend-katalogens env.
-        env_key = api_key_env.strip() or str(backend.get("env") or "").strip()
-        if env_key:
-            available = bool(os.environ.get(env_key))
-            status = "är tillgänglig" if available else "saknas i processmiljön"
-            credential_status.caption(
-                f"{'✓' if available else '⚠'} API-nyckeln `{env_key}` {status}."
-            )
-        else:
-            credential_status.caption("✓ Ingen API-nyckel krävs av den valda tjänsten.")
-
-        save_col, cancel_col = st.columns([3, 1])
-        save_label = "Skapa konfiguration" if creating else "Spara ändringar"
-        if save_col.button(save_label, key=f"llm_save_{profile_key}", type="primary"):
-            payload = llm_profile_payload(
-                backend_name=backend_name,
-                provider=backend["kind"],
-                model=model,
-                base_url=base_url,
-                api_key_env=api_key_env,
-                input_price_usd=input_price,
-                output_price_usd=output_price,
-                cache_hit_price_usd=cache_hit_price,
-            )
-            try:
-                updated, updated_default = apply_llm_profile_form(
-                    profiles,
-                    selected_name=None if creating else selected,
-                    entered_name=name,
-                    payload=payload,
-                    default_name=default_name,
-                    make_default=make_default,
-                )
-            except ValueError as exc:
-                st.error(str(exc))
-            else:
-                saved_name = name.strip()
-                llm_config.save_profiles(
-                    updated,
-                    updated_default,
-                    web_search_default=apply_web_search_default_form(
-                        saved_name=saved_name,
-                        selected_name=None if creating else selected,
-                        checked=make_web_search_default,
-                        current=sparad_sok_standard,
-                    ),
-                )
-                if not creating and saved_name != selected:
-                    # Räknaren följer med vid namnbyte i stället för att lämnas kvar.
-                    db.rename_llm_usage(conn, selected, saved_name)
-                st.session_state["llm_profiles"] = updated
-                st.session_state["llm_default"] = updated_default
-                st.session_state["llm_creating"] = False
-                st.session_state["llm_pending_selection"] = saved_name
-                st.session_state["llm_flash"] = f"'{saved_name}' sparad."
-                st.rerun()
-        if creating and cancel_col.button("Avbryt", key=f"llm_cancel_{profile_key}"):
-            st.session_state["llm_creating"] = False
-            st.rerun()
+        _render_llm_spara(
+            conn,
+            profiles,
+            default_name,
+            selected,
+            creating,
+            name,
+            make_default,
+            make_web_search_default,
+            sparad_sok_standard,
+            backend_name,
+            backend,
+            model,
+            base_url,
+            api_key_env,
+            (input_price, output_price, cache_hit_price),
+        )
 
 
 def llm_model_options(backend: Mapping[str, object], saved_model: str) -> tuple[list[str], str]:

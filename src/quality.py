@@ -344,11 +344,7 @@ def run_quality(
                 ctx.log(f"  {float(r['score']):5.1f}  [{r.get('source', '?'):10}] {swe:10}  {r['file'][:90]}")
         else:
             ctx.log(f"\nVärsta {top} (från quality-tabellen):")
-            for r in conn.execute(
-                "SELECT pdf_stem, source_type, score, pct_swe FROM quality "
-                "ORDER BY score ASC LIMIT ?",
-                (top,),
-            ):
+            for r in state_db.list_worst_quality(conn, top):
                 pct = r["pct_swe"]
                 swe = f"swe={float(pct):.0%}" if pct is not None else "swe=?"
                 src = r["source_type"] or "?"

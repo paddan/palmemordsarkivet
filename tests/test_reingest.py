@@ -362,3 +362,56 @@ def test_run_ingest_keeps_explicit_model_name(tmp_path, monkeypatch) -> None:
 
     assert rc == 0
     assert seen["model"] == "custom/embedding-modell"
+
+
+class _RecorderContext:
+    """Minimal kontext som sparar loggrader för assertions."""
+
+    def __init__(self) -> None:
+        self.rader: list[tuple[str, str]] = []
+
+    def log(self, message: str, level: str = "info") -> None:
+        self.rader.append((level, message))
+
+    def check_cancelled(self) -> None:
+        return None
+
+    def progress(self, *args, **kwargs) -> None:
+        return None
+
+
+def test_corrupt_unusable_mtimes_file_is_logged_and_ingest_continues(
+    tmp_path, monkeypatch,
+) -> None:
+    import ingest as ingest_module
+
+    class _Stub:
+        def __init__(self, name: str) -> None:
+            pass
+
+        def encode(self, *args, **kwargs):
+            return None
+
+    monkeypatch.setattr(ingest_module, "SentenceTransformer", _Stub)
+    monkeypatch.setenv("STATE_DB", str(tmp_path / "state.db"))
+    text_dir = tmp_path / "text"
+    text_dir.mkdir()
+    (tmp_path / "unusable_mtimes.json").write_text("{ trasig", encoding="utf-8")
+    ctx = _RecorderContext()
+
+    rc = ingest_module.run_ingest(
+        rebuild=False,
+        limit=None,
+        text_dir=text_dir,
+        db_dir=tmp_path / "lancedb",
+        chunk_chars=800,
+        chunk_overlap=150,
+        model_name="test-modell",
+        unusable_list=tmp_path / "unusable.txt",
+        reindex_since=None,
+        context=ctx,
+    )
+
+    assert rc == 0
+    varningar = [msg for level, msg in ctx.rader if level == "warning"]
+    assert any("unusable_mtimes.json" in m and "JSONDecodeError" in m for m in varningar)

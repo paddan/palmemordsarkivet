@@ -75,11 +75,7 @@ def text_from_pages(page_updates: dict[int, str]) -> str:
 def find_updates(conn: sqlite3.Connection, pdf_stem: str) -> dict[int, str]:
     """Hämta alla OCR-sidor för stem från pdf_pages-tabellen som dict {sidnr: text}."""
     out: dict[int, str] = {}
-    for row in conn.execute(
-        "SELECT page_num, text FROM pdf_pages WHERE pdf_stem=? AND text IS NOT NULL "
-        "ORDER BY page_num",
-        (pdf_stem,),
-    ):
+    for row in state_db.list_ocr_page_texts(conn, pdf_stem):
         out[row["page_num"]] = row["text"]
     return out
 
@@ -176,9 +172,7 @@ def run_merge_pages(
     if merge_all:
         conn = state_db.connect()
         state_db.init_schema(conn)
-        stems = sorted({r["pdf_stem"] for r in conn.execute(
-            "SELECT DISTINCT pdf_stem FROM pdf_pages"
-        )})
+        stems = state_db.list_page_stems(conn)
         updated = 0
         total = len(stems)
         label = f"Slår ihop {total} dokument…"

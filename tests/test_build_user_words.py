@@ -118,3 +118,27 @@ def test_merges_with_existing_user_words(tmp_path: Path, monkeypatch) -> None:
     words = set(out.read_text(encoding="utf-8").split())
     assert "befintligtord" in words
     assert "alfabet" in words
+
+
+def test_corrupt_state_cache_is_logged_and_rebuilt(tmp_path: Path, monkeypatch) -> None:
+    # Trasig cache-JSON ska inte krascha körningen; cachen byggs om och felet loggas.
+    state_file = tmp_path / "state.json"
+    monkeypatch.setattr(build_user_words, "STATE_FILE", state_file)
+    monkeypatch.setattr(build_user_words, "has_hunspell_swe", lambda: False)
+    rader: list[tuple] = []
+    monkeypatch.setattr(build_user_words, "log_error", lambda *a: rader.append(a))
+    state_file.write_text("{ inte giltig json", encoding="utf-8")
+
+    text_dir = tmp_path / "text"
+    text_dir.mkdir()
+    (text_dir / "a.txt").write_text("alfabet " * 31, encoding="utf-8")
+    out = tmp_path / "out.txt"
+
+    rc = _run(text_dir, out, tmp_path / "uw.txt")
+
+    assert rc == 0
+    assert "alfabet" in set(out.read_text(encoding="utf-8").split())
+    assert len(rader) == 1
+    assert rader[0][0] == "build_user_words"
+    assert rader[0][1] == "state.json"
+    assert "JSONDecodeError" in rader[0][2]

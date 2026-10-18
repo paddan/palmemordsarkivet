@@ -27,7 +27,7 @@ Inspektera med t.ex. `sqlite3 generated/db/state.db`. Tabellerna:
 - `map_observation_extractions` — per-sida-markör för kartobservations-extraktionen. Även sidor där LLM:en hittar noll kandidater markeras här så omkörningar inte skickar samma tomma sida igen
 - `llm_usage` — ackumulerade token och kostnader per LLM-profil (en rad per profil, `calls`/`input_tokens`/`output_tokens`/`cache_hit_tokens`/`cost_usd`/`cost_partial`/`last_model`). Räknas upp av Utredningssidans anrop och visas både i sidofältet och i Admin → Inställningar
 
-Schemat är versionsstyrt i `src/db.py`. `init_schema(conn)` skapar en färsk
+Schemat är versionsstyrt i `src/db/_schema.py`. `init_schema(conn)` skapar en färsk
 databas direkt, migrerar äldre databaser via pending migrations och skriver
 aktuell version både till tabellen `schema_version` och `PRAGMA user_version`.
 Om databasen har högre version än koden stödjer avbryts initieringen med fel,
@@ -703,7 +703,7 @@ Varje källkort (i Utredning, Jämförelse och Maskeringar) har en hopfällbar
 **✏️ Anteckna**-ruta för fritextanteckningar. Till skillnad från bokmärken kan
 en källa/sida ha flera anteckningar; de sparas i `source_annotations` och
 samlas på en egen flik (**Anteckningar**) i Utredningspärmen där de kan läsas,
-öppna matchande PDF och tas bort. CRUD ligger i `src/db.py`
+öppna matchande PDF och tas bort. CRUD ligger i `src/db/casebook.py`
 (`record_source_annotation`, `list_source_annotations`,
 `update_source_annotation`, `delete_source_annotation`).
 
@@ -1130,8 +1130,8 @@ worker-process och fortsätter även om webbläsaren eller Streamlit stängs.
 
 ### Jobbmodell (`admin_jobs` i `state.db`)
 
-- Tabellen skapas av schema-migration 7 i `src/db.py`; all jobb-SQL ligger i
-  `src/db.py` (konsumenter skriver aldrig egen SQL).
+- Tabellen skapas av schema-migration 7 i `src/db/_schema.py`; all jobb-SQL ligger i
+  `src/db/jobs.py` (konsumenter skriver aldrig egen SQL).
 - Statusar: `queued` → `running` → `succeeded`/`failed`, eller via
   `cancel_requested` → `cancelled`; kraschade/omstartade jobb markeras
   `interrupted`.
@@ -1305,7 +1305,7 @@ per-dokumentresultat behålls; ett avbrutet jobb markeras aldrig `succeeded`.
 | `*.sh` i projektroten | Tunna genvägar till `scripts/*.py` (`./ingest.sh` = `.venv/bin/python scripts/ingest.py`); en per entrypoint, ingen egen flaggparsning eller logik |
 | `src/operations/` | Delat operationslager: modeller, registry, CLI, `job_service`/`worker`, OCR/redactions/pipeline/neo4j-orkestrering |
 | `src/admin_ui.py` + `src/pages/8_Admin.py` | Lokal Streamlit-adminsida: bakgrundsjobb, operationer och LLM-inställningar |
-| `src/db.py` | SQLite-state: versionsstyrt schema + CRUD + delta-queries, inklusive `admin_jobs`, grafbeslut/LLM-förslag, utredningspärm, källbokmärken och anteckningar |
+| `src/db/` | SQLite-state (paket; `__init__` re-exporterar allt som `db.X`, `tests/test_sql_boundary.py` förbjuder SQL utanför paketet): versionsstyrt schema + CRUD + delta-queries, inklusive `admin_jobs`, grafbeslut/LLM-förslag, utredningspärm, källbokmärken och anteckningar |
 | `tests/fixtures/state_db_v4.sql` + `tests/fixtures/state_db_v5_missing_surya.sql` | Gamla state-db-fixtures som verifierar schema-migreringar |
 | `tessdata/swe.user-words` | Palme-specifika ord (committat) |
 | `tessdata/tesseract.config` | `preserve_interword_spaces 1` (committat) |
@@ -1346,6 +1346,18 @@ Utredning-sidan headless med Streamlits AppTest och kontrollerar lägesvalet
 varv i det andra läget och att tokenpanelen finns i båda lägena) med fejkad vektor-db, modell och
 state-db.
 Fixturen som genererar en mini-PDF med pymupdf skipas gracefully om pymupdf inte är installerat.
+
+Tre strukturtester vaktar arkitekturen: `tests/test_packaging.py` kräver att
+`py-modules` i `pyproject.toml` är exakt mängden `src/*.py` på toppnivå (en ny
+modul måste alltså läggas till där, annars saknas den vid `pip install .`),
+`tests/test_sql_boundary.py` underkänner `.execute(` utanför `src/db/` och
+`tests/test_db_package.py` kontrollerar att varje `db.X` som används i `src/`
+och `scripts/` finns på paketet.
+
+**CI**: `.github/workflows/ci.yml` kör `scripts/test.py --static` på Ubuntu med
+Python 3.11 vid push och pull request mot `main`. Den installerar `.[dev,web]`
+plus `pymupdf` och CPU-versionen av PyTorch; `graph`- och `surya`-extras behövs
+inte eftersom testerna mockar dem.
 
 ## Loggning
 

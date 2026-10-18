@@ -1,0 +1,70 @@
+# CI för palmemordsarkivet: pytest + ruff + mypy via scripts/test.py --static.
+# Körs på push och pull request mot main. Inga hemligheter behövs: testerna
+# mockar LLM-anrop, Neo4j, LanceDB och sentence-transformers.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Läsbehörighet räcker — CI skriver aldrig till repot.
+permissions:
+  contents: read
+
+# Avbryt äldre körningar på samma ref (t.ex. nya commits på samma PR).
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Tester och statiska kontroller
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Hämta koden
+        uses: actions/checkout@v4
+
+      # Python 3.11 matchar requires-python i pyproject.toml. Pip-cachen nyckelas
+      # på pyproject.toml så att den återanvänds mellan körningar.
+      - name: Installera Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      # scripts/test.py letar efter ruff och mypy i .venv/bin, så vi skapar
+      # samma .venv som utvecklingsmiljön använder. Ingen surya (GPU, tungt):
+      # testerna kräver den inte.
+      - name: Skapa .venv
+        run: python -m venv .venv
+
+      # PyTorch hämtas från CPU-indexet i stället för PyPI, som annars drar
+      # in flera GB CUDA-paket. sentence-transformers importeras av modulerna
+      # och behöver torch, men testerna kör inte modeller.
+      - name: Installera PyTorch (CPU)
+        run: |
+          .venv/bin/python -m pip install --upgrade pip
+          .venv/bin/python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+      # Extras: dev (pytest, ruff, mypy) och web (streamlit, openai, folium,
+      # streamlit-folium) — testerna importerar dem direkt, bl.a. via
+      # streamlit.testing.v1.AppTest. graph (neo4j, st-link-analysis) utelämnas:
+      # neo4j mockas i testerna och st_link_analysis importeras i try/except i
+      # Utredning.py. pymupdf ligger i extra surya i pyproject, men är bara en
+      # vanlig wheel; utan den skippas test_detect_redactions PDF-testet och
+      # conftest.tiny_pdf tyst, så vi installerar den separat.
+      - name: Installera projektet
+        run: .venv/bin/python -m pip install -e ".[dev,web]" pymupdf
+
+      # Inga systemverktyg behövs: tesseract och hunspell anropas bara via
+      # mockar eller har en Python-fallback (verifierat lokalt med PATH utan
+      # Homebrew-verktyg, alla 873 tester gröna).
+
+      - name: Pytest, ruff och mypy
+        run: .venv/bin/python scripts/test.py --static

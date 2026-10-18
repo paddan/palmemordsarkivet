@@ -388,7 +388,10 @@ def test_utredning_mcp_controls_live_in_the_sidebar_only_in_mcp_mode() -> None:
     project_root = Path(__file__).resolve().parents[1]
     text = (project_root / "src" / "Utredning.py").read_text(encoding="utf-8")
 
-    settings = text.split("def _render_mcp_settings(", 1)[1].split("\ndef ", 1)[0]
+    # Sökinställningarna är uppdelade i hjälpare före _render_mcp_settings; de
+    # fyra funktionerna ligger tillsammans i samma block.
+    mcp_block = text.split("def _render_mcp_rerank(", 1)[1].split("\ndef ", 4)
+    settings = "\ndef ".join(mcp_block[:4])
     assert 'st.expander("Sökinställningar", expanded=False)' in settings
     for label in ("Reranker", "Hämta top-K kandidater", "Skicka top-N till AI",
                   "Tillåt webbsök", "Sökmodell",

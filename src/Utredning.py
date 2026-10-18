@@ -409,6 +409,179 @@ def _render_rag_settings() -> dict[str, Any]:
     }
 
 
+def _render_mcp_rerank() -> tuple[str, int, int]:
+    """Rita rerankerväljaren och top-K/top-N-rattarna; returnerar valen.
+
+    Valen gäller per verktygsanrop och går före modellens egna argument.
+    """
+    _aterstall_sokval("mcp_reranker_choice")
+    reranker_label = st.selectbox(
+        "Reranker",
+        list(_RERANKERS),
+        key="mcp_reranker_choice",
+        on_change=_spara_sokval,
+        args=("mcp_reranker_choice",),
+        help=(
+            "En reranker sorterar om kandidaterna i **varje** sökning modellen gör. "
+            "BGE körs lokalt och är standard. Jev är ett experimentellt "
+            "OpenRouter-läge som kräver nätverk och OPENROUTER_API_KEY, debiterar "
+            "per anrop och tar ~5 s per sökning vid 50 kandidater. Ingen behåller "
+            "sökordningen. Modellens egna argument för reranker, top-K och top-N "
+            "ignoreras när du väljer här."
+        ),
+    )
+    reranker_mode = _RERANKERS[reranker_label]
+    if reranker_mode == "jev" and not os.environ.get("OPENROUTER_API_KEY"):
+        st.warning("Jev kräver att OPENROUTER_API_KEY är satt i miljön.")
+    _aterstall_sokval("mcp_top_k")
+    top_k = st.slider(
+        "Hämta top-K kandidater",
+        5,
+        50,
+        key="mcp_top_k",
+        on_change=_spara_sokval,
+        args=("mcp_top_k",),
+        help="Antal kandidater per sökning som vald reranker får välja bland. "
+        "Taket är 50 eftersom verktyget search_archive annonserar 5–50 för "
+        "modellen.",
+    )
+    _aterstall_sokval("mcp_top_n")
+    top_n = st.slider(
+        "Skicka top-N till AI",
+        1,
+        15,
+        key="mcp_top_n",
+        on_change=_spara_sokval,
+        args=("mcp_top_n",),
+        help="Antal utdrag per sökning som går till modellen. Modellen kan göra "
+        "flera sökningar i samma fråga, så håll N lågt — varje sökning lägger "
+        "sina utdrag till modellens kontext.",
+    )
+    return reranker_mode, top_k, top_n
+
+
+def _render_mcp_sokmodell(profiles: dict | None, web_search: bool) -> str:
+    """Rita väljaren för sökmodell bland operatörens LLM-profiler och returnera profilens namn.
+
+    Förstahandsvalet står först och är förvalt. Saknas sökbara profiler visas en
+    inaktiverad ruta och ett tomt namn returneras.
+    """
+    import mcp_server  # noqa: PLC0415
+    # Ett val: bland operatörens egna LLM-profiler. Profilens leverantör
+    # bestämmer sök-API:et och profilens modell gör sök-anropet, så man slipper
+    # välja både API och modell. DeepSeek, Ollama och custom-endpoints har
+    # ingen sök-API och listas därför inte.
+    valbara_profiler = mcp_server.search_profiles(profiles or {}, BACKENDS)
+    standard_profil = _llm_config.load_search_default()
+    if not any(val["name"] == standard_profil for val in valbara_profiler):
+        # Inget (eller ett dött) förstahandsval: standardkonfigurationen om den
+        # kan söka, annars första sökbara profilen. Ingen "auto" — valet ska
+        # vara ett namn man känner igen.
+        standard_konfig = str(_llm_config.load_all().get("default") or "")
+        standard_profil = next(
+            (val["name"] for val in valbara_profiler if val["name"] == standard_konfig),
+            valbara_profiler[0]["name"] if valbara_profiler else "",
+        )
+    # Förstahandsvalet står först och är förvalt.
+    ordning = sorted(valbara_profiler, key=lambda val: (val["name"] != standard_profil,))
+    profil_etikett: dict[str, str] = {}
+    sokmodell_etiketter: list[str] = []
+    for val in ordning:
+        etikett = f"{val['name']} — {_WEB_SEARCH_LABELS[val['provider']]}, {val['model']}"
+        if not os.environ.get(val["key_env"]):
+            etikett += f" ({val['key_env']} saknas)"
+        profil_etikett[etikett] = val["name"]
+        sokmodell_etiketter.append(etikett)
+    if sokmodell_etiketter:
+        _aterstall_sokval("mcp_web_search_profile", sokmodell_etiketter[0])
+        if st.session_state["mcp_web_search_profile"] not in sokmodell_etiketter:
+            st.session_state["mcp_web_search_profile"] = sokmodell_etiketter[0]
+        sokmodell_etikett = st.selectbox(
+            "Sökmodell",
+            sokmodell_etiketter,
+            key="mcp_web_search_profile",
+            on_change=_spara_sokval,
+            args=("mcp_web_search_profile",),
+            disabled=not web_search,
+            help=(
+                "Vilken av dina konfigurerade LLM-profiler som gör sökningen. "
+                "Profilens leverantör avgör sök-API:et (OpenRouter använder sitt "
+                "`web`-plugin, OpenAI sitt `web_search`-verktyg i Responses-API:et, "
+                "Anthropic `web_search` i Messages-API:et) och profilens modell "
+                "gör själva anropet. En billig profil räcker: sökträffarna kommer "
+                "från sökmotorn, inte från modellen. Förstahandsvalet ställs in i "
+                "**Admin → Inställningar → LLM-konfigurationer**."
+            ),
+        )
+        vald_profil = profil_etikett.get(sokmodell_etikett, "")
+        vald_nyckel = next(
+            (val["key_env"] for val in valbara_profiler if val["name"] == vald_profil), ""
+        )
+        if web_search and vald_nyckel and not os.environ.get(vald_nyckel):
+            # Annars blir ett påslaget webbsök tyst dött: verktyget svarar med en
+            # feltext som modellen kan välja att inte nämna.
+            st.warning(
+                f"Webbsök via **{vald_profil}** kräver att `{vald_nyckel}` är satt "
+                "i miljön. Modellen får verktyget, men varje anrop svarar att "
+                "nyckeln saknas."
+            )
+    else:
+        st.selectbox(
+            "Sökmodell",
+            ["Ingen konfigurerad LLM kan söka"],
+            disabled=True,
+            help=(
+                "Webbsök kräver en LLM-konfiguration vars leverantör har en "
+                "sök-API (OpenRouter, OpenAI eller Anthropic). Lägg till en sådan "
+                "i Admin → Inställningar → LLM-konfigurationer."
+            ),
+        )
+        vald_profil = ""
+    return vald_profil
+
+
+def _render_mcp_webbsok(profiles: dict | None) -> tuple[bool, str, int]:
+    """Rita påslagningen för webbsök, sökmodellen och budgeten; returnerar valen."""
+    _aterstall_sokval("mcp_web_search")
+    web_search = st.toggle(
+        "Tillåt webbsök",
+        key="mcp_web_search",
+        on_change=_spara_sokval,
+        args=("mcp_web_search",),
+        help=(
+            "Ger modellen verktyget **web_search**, som söker utanför arkivet. "
+            "Avstängt som standard. Det används när modellen är osäker eller "
+            "materialet inte ger ett entydigt svar, för att kontrollera firmor, "
+            "adresser och samtida företeelser även när arkivet svarar, och för "
+            "nulägesfrågor (\"i dag\", \"numera\") som ligger efter materialets "
+            "tid. Modellen ska märka varje sådan uppgift som "
+            "**[webbkälla: domän, titel](url)** i stället för [Nr X, sida Y]. "
+            "Sökningen görs av sökmodellen nedan och kostar en sökavgift per "
+            "anrop; kostnaden bokförs i tokenräknaren när leverantören "
+            "rapporterar den."
+        ),
+    )
+    vald_profil = _render_mcp_sokmodell(profiles, web_search)
+    _aterstall_sokval("mcp_web_search_budget")
+    web_search_budget = st.slider(
+        "Högst antal webbsökningar per fråga",
+        MIN_WEB_SEARCH_BUDGET,
+        MAX_WEB_SEARCH_BUDGET,
+        key="mcp_web_search_budget",
+        on_change=_spara_sokval,
+        args=("mcp_web_search_budget",),
+        disabled=not web_search,
+        help=(
+            "Tak för antalet **betalda** webbsökningar i en fråga (~$0,007 per "
+            "sökning hos OpenRouter). Nås taket tas verktyget bort för resten av "
+            "frågan — modellen sammanfattar då med det underlag den har. Sättet "
+            "att bara begränsa kostnaden; arkivsökningarna är gratis och styrs av "
+            "verktygsomgångarna i stället."
+        ),
+    )
+    return web_search, vald_profil, web_search_budget
+
+
 def _render_mcp_settings(profiles: dict | None = None) -> dict[str, Any]:
     """Utredningslägets sökval (reranker, top-K/N, webbsök, budget) i sidofältet.
 
@@ -419,157 +592,9 @@ def _render_mcp_settings(profiles: dict | None = None) -> dict[str, Any]:
     Inställningarna går före modellens egna argument — se
     :func:`mcp_server.resolve_search_policy`.
     """
-    import mcp_server  # noqa: PLC0415
     with st.expander("Sökinställningar", expanded=False):
-        _aterstall_sokval("mcp_reranker_choice")
-        reranker_label = st.selectbox(
-            "Reranker",
-            list(_RERANKERS),
-            key="mcp_reranker_choice",
-            on_change=_spara_sokval,
-            args=("mcp_reranker_choice",),
-            help=(
-                "En reranker sorterar om kandidaterna i **varje** sökning modellen gör. "
-                "BGE körs lokalt och är standard. Jev är ett experimentellt "
-                "OpenRouter-läge som kräver nätverk och OPENROUTER_API_KEY, debiterar "
-                "per anrop och tar ~5 s per sökning vid 50 kandidater. Ingen behåller "
-                "sökordningen. Modellens egna argument för reranker, top-K och top-N "
-                "ignoreras när du väljer här."
-            ),
-        )
-        reranker_mode = _RERANKERS[reranker_label]
-        if reranker_mode == "jev" and not os.environ.get("OPENROUTER_API_KEY"):
-            st.warning("Jev kräver att OPENROUTER_API_KEY är satt i miljön.")
-        _aterstall_sokval("mcp_top_k")
-        top_k = st.slider(
-            "Hämta top-K kandidater",
-            5,
-            50,
-            key="mcp_top_k",
-            on_change=_spara_sokval,
-            args=("mcp_top_k",),
-            help="Antal kandidater per sökning som vald reranker får välja bland. "
-            "Taket är 50 eftersom verktyget search_archive annonserar 5–50 för "
-            "modellen.",
-        )
-        _aterstall_sokval("mcp_top_n")
-        top_n = st.slider(
-            "Skicka top-N till AI",
-            1,
-            15,
-            key="mcp_top_n",
-            on_change=_spara_sokval,
-            args=("mcp_top_n",),
-            help="Antal utdrag per sökning som går till modellen. Modellen kan göra "
-            "flera sökningar i samma fråga, så håll N lågt — varje sökning lägger "
-            "sina utdrag till modellens kontext.",
-        )
-        _aterstall_sokval("mcp_web_search")
-        web_search = st.toggle(
-            "Tillåt webbsök",
-            key="mcp_web_search",
-            on_change=_spara_sokval,
-            args=("mcp_web_search",),
-            help=(
-                "Ger modellen verktyget **web_search**, som söker utanför arkivet. "
-                "Avstängt som standard. Det används när modellen är osäker eller "
-                "materialet inte ger ett entydigt svar, för att kontrollera firmor, "
-                "adresser och samtida företeelser även när arkivet svarar, och för "
-                "nulägesfrågor (\"i dag\", \"numera\") som ligger efter materialets "
-                "tid. Modellen ska märka varje sådan uppgift som "
-                "**[webbkälla: domän, titel](url)** i stället för [Nr X, sida Y]. "
-                "Sökningen görs av sökmodellen nedan och kostar en sökavgift per "
-                "anrop; kostnaden bokförs i tokenräknaren när leverantören "
-                "rapporterar den."
-            ),
-        )
-        # Ett val: bland operatörens egna LLM-profiler. Profilens leverantör
-        # bestämmer sök-API:et och profilens modell gör sök-anropet, så man slipper
-        # välja både API och modell. DeepSeek, Ollama och custom-endpoints har
-        # ingen sök-API och listas därför inte.
-        valbara_profiler = mcp_server.search_profiles(profiles or {}, BACKENDS)
-        standard_profil = _llm_config.load_search_default()
-        if not any(val["name"] == standard_profil for val in valbara_profiler):
-            # Inget (eller ett dött) förstahandsval: standardkonfigurationen om den
-            # kan söka, annars första sökbara profilen. Ingen "auto" — valet ska
-            # vara ett namn man känner igen.
-            standard_konfig = str(_llm_config.load_all().get("default") or "")
-            standard_profil = next(
-                (val["name"] for val in valbara_profiler if val["name"] == standard_konfig),
-                valbara_profiler[0]["name"] if valbara_profiler else "",
-            )
-        # Förstahandsvalet står först och är förvalt.
-        ordning = sorted(valbara_profiler, key=lambda val: (val["name"] != standard_profil,))
-        profil_etikett: dict[str, str] = {}
-        sokmodell_etiketter: list[str] = []
-        for val in ordning:
-            etikett = f"{val['name']} — {_WEB_SEARCH_LABELS[val['provider']]}, {val['model']}"
-            if not os.environ.get(val["key_env"]):
-                etikett += f" ({val['key_env']} saknas)"
-            profil_etikett[etikett] = val["name"]
-            sokmodell_etiketter.append(etikett)
-        if sokmodell_etiketter:
-            _aterstall_sokval("mcp_web_search_profile", sokmodell_etiketter[0])
-            if st.session_state["mcp_web_search_profile"] not in sokmodell_etiketter:
-                st.session_state["mcp_web_search_profile"] = sokmodell_etiketter[0]
-            sokmodell_etikett = st.selectbox(
-                "Sökmodell",
-                sokmodell_etiketter,
-                key="mcp_web_search_profile",
-                on_change=_spara_sokval,
-                args=("mcp_web_search_profile",),
-                disabled=not web_search,
-                help=(
-                    "Vilken av dina konfigurerade LLM-profiler som gör sökningen. "
-                    "Profilens leverantör avgör sök-API:et (OpenRouter använder sitt "
-                    "`web`-plugin, OpenAI sitt `web_search`-verktyg i Responses-API:et, "
-                    "Anthropic `web_search` i Messages-API:et) och profilens modell "
-                    "gör själva anropet. En billig profil räcker: sökträffarna kommer "
-                    "från sökmotorn, inte från modellen. Förstahandsvalet ställs in i "
-                    "**Admin → Inställningar → LLM-konfigurationer**."
-                ),
-            )
-            vald_profil = profil_etikett.get(sokmodell_etikett, "")
-            vald_nyckel = next(
-                (val["key_env"] for val in valbara_profiler if val["name"] == vald_profil), ""
-            )
-            if web_search and vald_nyckel and not os.environ.get(vald_nyckel):
-                # Annars blir ett påslaget webbsök tyst dött: verktyget svarar med en
-                # feltext som modellen kan välja att inte nämna.
-                st.warning(
-                    f"Webbsök via **{vald_profil}** kräver att `{vald_nyckel}` är satt "
-                    "i miljön. Modellen får verktyget, men varje anrop svarar att "
-                    "nyckeln saknas."
-                )
-        else:
-            st.selectbox(
-                "Sökmodell",
-                ["Ingen konfigurerad LLM kan söka"],
-                disabled=True,
-                help=(
-                    "Webbsök kräver en LLM-konfiguration vars leverantör har en "
-                    "sök-API (OpenRouter, OpenAI eller Anthropic). Lägg till en sådan "
-                    "i Admin → Inställningar → LLM-konfigurationer."
-                ),
-            )
-            vald_profil = ""
-        _aterstall_sokval("mcp_web_search_budget")
-        web_search_budget = st.slider(
-            "Högst antal webbsökningar per fråga",
-            MIN_WEB_SEARCH_BUDGET,
-            MAX_WEB_SEARCH_BUDGET,
-            key="mcp_web_search_budget",
-            on_change=_spara_sokval,
-            args=("mcp_web_search_budget",),
-            disabled=not web_search,
-            help=(
-                "Tak för antalet **betalda** webbsökningar i en fråga (~$0,007 per "
-                "sökning hos OpenRouter). Nås taket tas verktyget bort för resten av "
-                "frågan — modellen sammanfattar då med det underlag den har. Sättet "
-                "att bara begränsa kostnaden; arkivsökningarna är gratis och styrs av "
-                "verktygsomgångarna i stället."
-            ),
-        )
+        reranker_mode, top_k, top_n = _render_mcp_rerank()
+        web_search, vald_profil, web_search_budget = _render_mcp_webbsok(profiles)
         _aterstall_sokval("mcp_max_turns")
         max_turns = st.slider(
             "Verktygsomgångar (max)",

@@ -304,10 +304,7 @@ def detect_redactions_file(
         try:
             conn = state_db.connect()
             state_db.init_schema(conn)
-            row = conn.execute(
-                "SELECT redaction_checked_at FROM pdf_files WHERE pdf_stem=?",
-                (pdf.stem,),
-            ).fetchone()
+            row = state_db.get_pdf_file(conn, pdf.stem)
             if row is None or row["redaction_checked_at"] is None:
                 source = state_db.source_for_path(pdf)
                 state_db.upsert_pdf_file(
@@ -318,8 +315,14 @@ def detect_redactions_file(
                     and "[MASKAD]" in txt_file.read_text(encoding="utf-8", errors="replace")
                 )
                 state_db.mark_redaction_checked(conn, pdf.stem, has_redactions=has_red)
-        except Exception:
-            pass
+        except Exception as exc:
+            # Markören tas bort ändå (kontrollflödet oförändrat), men felet loggas
+            # så att det går att se varför filen annars kontrolleras om varje körning.
+            log_error(
+                "ocr_pages.detect_redactions",
+                pdf.name,
+                f"kunde inte synka redaction_checked_at trots markörfil: {type(exc).__name__}: {exc}",
+            )
         marker.unlink(missing_ok=True)
         return 0
     if not txt_file.exists():
@@ -334,8 +337,13 @@ def detect_redactions_file(
         try:
             import pymupdf
             ocr_doc = pymupdf.open(str(ocr_pdf))
-        except Exception:
-            pass
+        except Exception as exc:
+            # Fortsätter utan textlager: [MASKAD] placeras då med jämn fördelning.
+            log_error(
+                "ocr_pages.detect_redactions",
+                ocr_pdf.name,
+                f"kunde inte öppna OCR-PDF för textlagret, fortsätter utan: {type(exc).__name__}: {exc}",
+            )
 
     pt_per_px = 72.0 / dpi  # bildpixlar → PDF-punkter (vid dpi=72 är faktorn 1.0)
 
