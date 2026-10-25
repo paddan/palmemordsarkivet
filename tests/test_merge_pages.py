@@ -203,3 +203,28 @@ def test_merge_one_rebuilds_from_zero_byte_txt_with_create_missing(
 
     assert merge_one("doc", txt_dir, create_missing=True) is True
     assert (txt_dir / "doc.txt").read_text(encoding="utf-8") == "Sida ett\f\fSida tre"
+
+
+def test_merge_one_rewrites_txt_after_layout_page(tmp_path: Path, monkeypatch) -> None:
+    # En ny layoutsida (med Markdown) skriver om text/<stem>.txt och flyttar
+    # text_mtime, så att ingestens mtime-delta plockar upp filen.
+    import os
+
+    txt_dir = _setup(tmp_path, monkeypatch)
+    path = txt_dir / "doc.txt"
+    os.utime(path, (1_000_000, 1_000_000))
+    conn = state_db.connect()
+    state_db.record_page(
+        conn, pdf_stem="doc", page_num=2, engine="surya-layout",
+        text="Förhör med X\nF: Ja", score=90.0,
+        markdown="> Sidhuvud: Förhör med X\n\n**F:** Ja",
+    )
+    conn.close()
+
+    assert merge_one("doc", txt_dir) is True
+    assert path.read_text(encoding="utf-8") == "A.\fFörhör med X\nF: Ja\fC."
+    assert path.stat().st_mtime > 1_000_000
+    conn = state_db.connect()
+    row = state_db.get_pdf_file(conn, "doc")
+    conn.close()
+    assert row["text_mtime"] == path.stat().st_mtime

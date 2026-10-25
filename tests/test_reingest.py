@@ -415,3 +415,175 @@ def test_corrupt_unusable_mtimes_file_is_logged_and_ingest_continues(
     assert rc == 0
     varningar = [msg for level, msg in ctx.rader if level == "warning"]
     assert any("unusable_mtimes.json" in m and "JSONDecodeError" in m for m in varningar)
+
+
+# ---------------------------------------------------------------------------
+# _chunka_fil — Markdown från layoutsidor och färskhetsregeln (Task 6)
+# ---------------------------------------------------------------------------
+
+def _gammal_chunka_fil(raw, filnamn, meta, disk_mtime, chunk_chars, chunk_overlap):
+    """Ordagrann kopia av _chunka_fil före Task 6 — referens för regressionen."""
+    from ingest import chunk_text, is_useful, split_pages
+
+    rows = []
+    chunk_idx = 0
+    for page_idx, page in enumerate(split_pages(raw), start=1):
+        for _, _, chunk in chunk_text(page, chunk_chars, chunk_overlap):
+            if not is_useful(chunk):
+                continue
+            rows.append({
+                "text": chunk, "source": filnamn, "page": page_idx,
+                "chunk_idx": chunk_idx, "mtime": disk_mtime, **meta,
+            })
+            chunk_idx += 1
+    return rows
+
+
+_PLAIN = (
+    "Protokoll   fört vid förhör med vittne.   Förhöret hölls i Stockholm.\n"
+    + "Vittnet uppger att hon gick längs Sveavägen den kvällen. " * 30
+    + "\f"
+    + "  | Nr |  Namn  |\n|----|----|\n| 01 | Andersson, Karl |\n"
+    + "Tabellen ovan  är  inskannad med pdftotext -layout och ska chunkas som i dag. " * 12
+    + "\f\f"
+    + "Kort."
+)
+
+
+def test_plain_file_chunks_unchanged() -> None:
+    from ingest import _chunka_fil
+
+    meta = {"nr": "1", "titel": "t"}
+    expected = _gammal_chunka_fil(_PLAIN, "a.txt", meta, 1.5, 800, 150)
+    assert expected  # testet ska mäta något
+    assert _chunka_fil(_PLAIN, "a.txt", meta, 1.5, 800, 150) == expected
+    assert _chunka_fil(_PLAIN, "a.txt", meta, 1.5, 800, 150, page_markdown={}) == expected
+    # Markdown för en sida utanför filen påverkar inget
+    assert _chunka_fil(
+        _PLAIN, "a.txt", meta, 1.5, 800, 150, page_markdown={9: ("x", "# x")}
+    ) == expected
+
+
+def _layout_doc(tmp_path, monkeypatch, fixture: str = "forhor-dialog-a"):
+    """Riktig väg: record_page → merge_one → normalize_text.process_file."""
+    from test_surya_layout import load_fixture
+
+    import surya_layout as sl
+    from merge_pages import merge_one
+    from normalize_text import process_file
+
+    monkeypatch.setenv("STATE_DB", str(tmp_path / "state.db"))
+    txt_dir = tmp_path / "text"
+    txt_dir.mkdir()
+    (txt_dir / "doc.txt").write_text(_PLAIN, encoding="utf-8")
+    conn = state_db.connect()
+    state_db.init_schema(conn)
+    state_db.upsert_pdf_file(conn, pdf_stem="doc", source="files", pdf_path="x.pdf")
+    blocks, _ = sl.parse_page(load_fixture(fixture))
+    state_db.record_page(
+        conn, pdf_stem="doc", page_num=2, engine="surya-layout",
+        text=sl.page_text(blocks), score=90.0, markdown=sl.page_markdown(blocks),
+    )
+    assert merge_one("doc", txt_dir, conn=conn) is True
+    process_file(txt_dir / "doc.txt")
+    md_map = state_db.get_page_markdown_map(conn, "doc")
+    conn.close()
+    return txt_dir / "doc.txt", md_map
+
+
+def test_fresh_markdown_used(tmp_path, monkeypatch) -> None:
+    from ingest import _chunka_fil
+
+    path, md_map = _layout_doc(tmp_path, monkeypatch)
+    raw = path.read_text(encoding="utf-8")
+    ctx = _RecorderContext()
+    rows = _chunka_fil(raw, "doc.txt", {}, 2.0, 800, 150, page_markdown=md_map, context=ctx)
+
+    page2 = [r["text"] for r in rows if r["page"] == 2]
+    assert page2
+    for text in page2:
+        assert text.startswith("> Sidhuvud: SPANINGSUPPSLAG · Sid nr 2\n")
+    assert any("**F:**" in t for t in page2)
+    # övriga sidor chunkas exakt som i dag
+    ref = _gammal_chunka_fil(raw, "doc.txt", {}, 2.0, 800, 150)
+    assert [r["text"] for r in rows if r["page"] != 2] == [r["text"] for r in ref if r["page"] != 2]
+    assert [r["chunk_idx"] for r in rows] == list(range(len(rows)))
+    # en sammanfattning, ingen dokumenttext i loggen
+    summary = [m for _, m in ctx.rader if "Markdown" in m]
+    assert len(summary) == 1
+    assert "1 sidor chunkade från Markdown" in summary[0]
+    assert "0 med inaktuell Markdown" in summary[0]
+    assert not any("Sarkaja" in m or "Aftonbladet" in m for _, m in ctx.rader)
+
+
+def test_stale_markdown_ignored(tmp_path, monkeypatch) -> None:
+    from ingest import _chunka_fil
+
+    path, md_map = _layout_doc(tmp_path, monkeypatch)
+    raw = path.read_text(encoding="utf-8")
+    # Texten rättas efter OCR (LLM-korrigering, merge_wpu, manuell redigering)
+    raw = raw.replace("Aftonbladet", "Expressen")
+    ctx = _RecorderContext()
+    rows = _chunka_fil(raw, "doc.txt", {}, 2.0, 800, 150, page_markdown=md_map, context=ctx)
+
+    assert rows == _gammal_chunka_fil(raw, "doc.txt", {}, 2.0, 800, 150)
+    assert not any("> Sidhuvud:" in r["text"] for r in rows)
+    debug = [m for lvl, m in ctx.rader if lvl == "debug"]
+    stale = [m for m in debug if "Markdown förkastad" in m]
+    assert len(stale) == 1
+    assert "1 sidor" in stale[0] and "[2]" in stale[0]
+    summary = [m for _, m in ctx.rader if "sidor chunkade från Markdown" in m]
+    assert len(summary) == 1
+    assert "0 sidor chunkade från Markdown" in summary[0]
+    assert "1 med inaktuell Markdown" in summary[0]
+    assert not any("Expressen" in m for _, m in ctx.rader)
+
+
+def test_empty_markdown_falls_back_to_text(tmp_path, monkeypatch) -> None:
+    from ingest import _chunka_fil
+
+    raw = "Första sidan. " * 20 + "\f" + "Andra sidan med text som räcker. " * 10
+    page2 = raw.split("\f")[1]
+    rows = _chunka_fil(raw, "a.txt", {}, 1.0, 800, 150, page_markdown={2: (page2, "")})
+    assert rows == _gammal_chunka_fil(raw, "a.txt", {}, 1.0, 800, 150)
+
+
+def test_run_ingest_reads_markdown_map(tmp_path, monkeypatch) -> None:
+    import ingest as ingest_module
+
+    path, _ = _layout_doc(tmp_path, monkeypatch)
+    captured: list[str] = []
+
+    class _Stub:
+        def __init__(self, name: str) -> None:
+            pass
+
+        def encode(self, texts, **kwargs):
+            import numpy as np
+
+            captured.extend(texts)
+            return np.ones((len(texts), ingest_module.EMBED_DIM), dtype="float32")
+
+    monkeypatch.setattr(ingest_module, "SentenceTransformer", _Stub)
+    rc = ingest_module.run_ingest(
+        rebuild=False, limit=None, text_dir=path.parent, db_dir=tmp_path / "lancedb",
+        chunk_chars=800, chunk_overlap=150, model_name="m",
+        unusable_list=tmp_path / "unusable.txt", reindex_since=None,
+        context=_RecorderContext(),
+    )
+    assert rc == 0
+    assert any(t.startswith("passage: > Sidhuvud:") for t in captured)
+
+
+def test_many_stale_pages_give_one_debug_line_cut_at_ten() -> None:
+    from ingest import _chunka_fil
+
+    pages = [f"Sida nummer {i} med tillräckligt mycket text för att vara användbar här." for i in range(1, 13)]
+    raw = "\f".join(pages)
+    md_map = {i: ("annan text än sidan", f"**M:** markdown {i}") for i in range(1, 13)}
+    ctx = _RecorderContext()
+    _chunka_fil(raw, "doc.txt", {}, 2.0, 800, 150, page_markdown=md_map, context=ctx)
+    stale = [m for lvl, m in ctx.rader if lvl == "debug" and "Markdown förkastad" in m]
+    assert len(stale) == 1
+    assert "12 sidor" in stale[0]
+    assert "[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]" in stale[0] and "11" not in stale[0].split("första")[1]

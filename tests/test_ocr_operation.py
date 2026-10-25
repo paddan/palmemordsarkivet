@@ -175,7 +175,7 @@ def test_fallback_uses_layout_engine_when_selected(tmp_path, monkeypatch) -> Non
 
 
 def test_missing_layout_runtime_is_logged_with_reason(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(ocr_mod, "surya_layout_available", lambda: False)
+    monkeypatch.setattr(ocr_mod, "surya_layout_unavailable_reason", lambda python=None: "tolk saknas: x")
     monkeypatch.setattr(ocr_mod, "_surya_available", lambda: True)
     ctx = _ArgvContext()
 
@@ -186,6 +186,23 @@ def test_missing_layout_runtime_is_logged_with_reason(tmp_path, monkeypatch) -> 
         level == "error" and "PALME_SURYA_PYTHON" in message for level, message in ctx.lines
     )
 
+
+
+def test_unresolved_llama_server_is_named_in_the_log(tmp_path, monkeypatch) -> None:
+    python = tmp_path / "python"
+    python.write_text("", encoding="utf-8")
+    monkeypatch.setattr(ocr_mod, "surya_python", lambda: python)
+    monkeypatch.setattr(
+        ocr_mod, "surya_layout_unavailable_reason",
+        lambda python=None: "llama-server hittades inte (sätt LLAMA_CPP_BINARY)",
+    )
+    ctx = _ArgvContext()
+
+    options = OcrOptions(root=tmp_path, fallback_only=True, surya_engine="layout")
+    assert ocr_mod.run_ocr(options, ctx) == 1
+    errors = [m for level, m in ctx.lines if level == "error"]
+    assert any("llama-server hittades inte" in m and "LLAMA_CPP_BINARY" in m for m in errors)
+    assert not any("svarade inte på --identity" in m for m in errors)
 
 
 # --- exitkod 3 och delvis lästa filer (Ruling Y/Z/AB) -------------------------------
@@ -330,11 +347,11 @@ def test_redo_without_new_pages_and_failure_does_not_merge(redo_setup) -> None:
 def test_redo_only_checks_layout_availability_once(tmp_path, monkeypatch) -> None:
     checks: list[int] = []
 
-    def unavailable() -> bool:
+    def unavailable(python=None) -> str:
         checks.append(1)
-        return False
+        return "tolk saknas: x"
 
-    monkeypatch.setattr(ocr_mod, "surya_layout_available", unavailable)
+    monkeypatch.setattr(ocr_mod, "surya_layout_unavailable_reason", unavailable)
     ctx = _ArgvContext()
 
     options = OcrOptions(root=tmp_path, redo_only=True, surya_engine="layout")
@@ -431,6 +448,26 @@ def test_fallback_picks_incomplete_stem_with_text(incomplete_setup) -> None:
     assert any(
         level == "debug" and "half" in m and "1 av 3" in m for level, m in sink.lines
     )
+
+
+def test_fallback_debug_explains_text_file_that_is_not_a_candidate(incomplete_setup) -> None:
+    inp, options, _marks = incomplete_setup
+    _write_pdf(inp / "tess.pdf", 2)
+    _mark_tesseract_failed("tess", inp / "tess.pdf")
+    (options.txt / "tess.txt").write_text("tesseract-text", encoding="utf-8")
+    _write_pdf(inp / "done.pdf", 2)
+    _mark_tesseract_failed("done", inp / "done.pdf")
+    _record_pages("done", 1, 2)
+    (options.txt / "done.txt").write_text("klar", encoding="utf-8")
+
+    ctx, sink = _context(debug=True)
+    argv: list[list[str]] = []
+    ctx.run_process = lambda a, cwd=None: argv.append([str(x) for x in a]) or 0  # type: ignore[method-assign]
+
+    assert ocr_mod.run_surya_fallback("test", inp, options, ctx) == 0
+    assert argv == []
+    assert any("tess" in m and "0 rader av 2 PDF-sidor = Tesseract-text" in m for _l, m in sink.lines)
+    assert any("done" in m and "2 pdf_pages-rader av 2 PDF-sidor" in m for _l, m in sink.lines)
 
 
 def test_fallback_retries_file_after_rc3_with_pages_recorded(incomplete_setup) -> None:

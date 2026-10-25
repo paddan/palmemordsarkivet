@@ -350,10 +350,23 @@ def _run_identity(python: Path, worker: Path) -> str | None:
     return str(result["identity"])
 
 
-def surya_layout_available() -> bool:
-    """Tolken finns, workern svarar ``ok`` på ``--identity`` inom 30 s och hittar ``llama-server``."""
-    python = surya_python()
+def surya_layout_unavailable_reason(python: Path | None = None) -> str | None:
+    """``None`` när Surya 2-layout går att köra, annars orsaken på svenska.
+
+    Gör en enda identitetsprob: tolken finns, workern svarar ``ok`` på
+    ``--identity`` inom 30 s och hittar ``llama-server``.
+    """
+    python = surya_python() if python is None else python
     if not python.exists():
-        return False
+        return f"tolk saknas: {python}"
     identity = _run_identity(python, WORKER_PATH)
-    return identity is not None and LLAMA_UNRESOLVED not in identity
+    if identity is None:
+        return "workern svarade inte på --identity"
+    if LLAMA_UNRESOLVED in identity:
+        return "llama-server hittades inte (sätt LLAMA_CPP_BINARY)"
+    return None
+
+
+def surya_layout_available() -> bool:
+    """Tolken finns, workern svarar och hittar ``llama-server`` (se orsaksfunktionen)."""
+    return surya_layout_unavailable_reason() is None

@@ -61,6 +61,24 @@ För utveckling/tester:
 .venv/bin/python scripts/install.py --dev
 ```
 
+Surya 2-layout har ett eget beroendeträd och installeras bara på begäran:
+
+```bash
+.venv/bin/python scripts/install.py --surya-layout
+```
+
+Flaggan kräver Homebrew och gör följande (ingenting annat körs, och projektets
+`.venv` rörs inte): `brew install llama.cpp uv` för det som saknas,
+`uv venv --python 3.12 ~/.local/share/palmemordsarkivet/surya-venv` om venv:en
+inte finns, `uv pip install --python <venv>/bin/python 'surya-ocr==0.22.1'` och
+sist `<venv>/bin/python src/surya_worker.py --identity` som kontroll. Python 3.12
+är avsiktligt: PyTorch-hjulen finns inte för Homebrews nyare Python, så en
+3.14-venv installerar ett paket som inte går att importera. En befintlig venv
+med en annan Python-version skrivs därför inte över: skriptet avbryter med ett
+felmeddelande, och du tar bort katalogen eller låter `PALME_SURYA_PYTHON` peka
+på en annan venv. Se
+[Surya 2-layout](#surya-2-layout---surya-engine-layout) för miljövariabler och licenser.
+
 > **Beroendepinnar:** `sentence-transformers<5` och `transformers<5` är medvetet pinnade — 5.x-versionerna bryter cross-encoder-laddning och Surya-integrationen.
 
 ## Användning
@@ -212,7 +230,38 @@ Tesseract inte producerade någon text alls, och senare per sida via
 threshold om, och resultatet mergas tillbaka in i `generated/text/<stem>.txt`
 per dokument. Se `Per-sida OCR` nedan.
 
-**Surya 2-layout (`--surya-engine layout`).** Med `scripts/ocr.py --surya-engine layout`
+#### Surya 2-layout (`--surya-engine layout`)
+
+**När den används.** Layoutmotorn passar sidor där radbaserad OCR slår sönder
+strukturen: omkörning av sidor med låg kvalitetspoäng (`--redo --mode pages`),
+SPANINGSUPPSLAG-försidor med numrerade fält och kryssrutor, förhör och tabeller,
+och senare manuell omskanning av enstaka sidor. Standard är `lines` tills piloten
+(`docs/surya-layout-pilot.md`) visat att `layout` är minst lika bra på arkivets
+sidor. Hastigheten är ca 25 s/sida vid 300 dpi; lägre upplösning är inte snabbare
+och tappar blankettfält.
+
+**Installation och miljö.** `scripts/install.py --surya-layout` (se
+[Vad install.py gör](#vad-installpy-gör)) skapar worker-venv:en.
+`PALME_SURYA_PYTHON` pekar på tolken (standard
+`~/.local/share/palmemordsarkivet/surya-venv/bin/python`); en befintlig venv med
+`surya-ocr==0.22.1`, till exempel infoscrys (`~/.local/share/infoscry/surya-venv`),
+kan återanvändas genom att peka dit i stället för att installera igen.
+`LLAMA_CPP_BINARY` anger sökvägen till `llama-server` när den inte ligger i
+`PATH`. Homebrews llama.cpp är inte pinnad och flyttar med `brew upgrade`, därför
+ingår llama-server-bygget i motoridentiteten (`engine_identity`). Vikterna
+(`surya-2.gguf` och `surya-2-mmproj.gguf`, ca 1,36 GiB) hämtas till
+`~/.cache/huggingface/hub/models--datalab-to--surya-ocr-2-gguf` när den första
+sidan läses.
+
+**Licenser.** `surya-ocr`-paketet är Apache-2.0 och llama.cpp MIT. Vikterna
+([datalab-to/surya-ocr-2-gguf](https://huggingface.co/datalab-to/surya-ocr-2-gguf))
+har en modifierad AI Pubs Open Rail-M-licens: fri för forskning, personligt bruk
+och startups under 5 MUSD i finansiering eller omsättning; bredare kommersiell
+självhosting kräver licens från upphovsmännen (se
+[prissidan](https://www.datalab.to/pricing)). Villkoren kan ändras — kontrollera
+alltid modellkortet.
+
+**Hur den fungerar.** Med `scripts/ocr.py --surya-engine layout`
 körs fallbacken och redo-steget med motorn `surya-layout` i stället för den
 radbaserade `surya` (standard är fortfarande `lines` tills piloten är klar).
 Motorn läser varje sida som layoutblock (rubriker, stycken, tabeller,
@@ -229,7 +278,10 @@ tillfällig PNG som tas bort direkt efter läsningen, så layoutvägen lämnar i
 
 Exitkoder från `ocr_pages.py --engine surya-layout`:
 
-- `0` — filen kördes klart (enstaka sidor kan ha hoppats och tas vid nästa körning).
+- `0` — filen kördes klart. Enstaka sidor kan ha hoppats över (loggas). På
+  fallback-vägen räknas en fil med text och rc 0 som klar och felflaggorna
+  rensas, så en hoppad sida plockas inte upp av fallbacken igen; bara redo-steget
+  kan ta den, och då bara om sidans poäng är låg.
 - `3` (`EXIT_SURYA_UNAVAILABLE`) — Surya-runtimen går inte att använda: workern
   svarade `NEEDS_SURYA`, `NEEDS_LLAMA_CPP`, `NEEDS_SURYA_MODEL` eller
   `SURYA_START_FAILED`, eller dog (`WORKER_DIED`/`PROTOCOL_MISMATCH`) tre sidor i
@@ -245,6 +297,15 @@ Exitkoder från `ocr_pages.py --engine surya-layout`:
 - `2` — argparse avvisade kommandoraden (okänd eller saknad flagga).
 - `130` — avbrutet med Ctrl-C; `143` — avbrutet med SIGTERM (128 + 15), som när
   ett bakgrundsjobb avbryts.
+
+**Markdown, sidhuvud och sidfot.** `PAGE_FOOTER` (oftast sidnummer) utelämnas ur
+Markdown och därmed ur embeddings, men finns kvar i `pdf_pages.text` och därför i
+fuzzy-sökning och citat. `PAGE_HEADER` skrivs som första raden
+`> Sidhuvud: …` (högst 200 tecken) och blir kontextrad i varje chunk på sidan i
+stället för en egen chunk — i förhören är det sidhuvudet som säger vem som hörs.
+Kvalitetspoängen räknas alltid på ren text, så Markdown-tecken sänker aldrig
+poängen. Hur Markdown används i indexeringen (och färskhetsregeln) beskrivs under
+[Ingest](#3-indexera-i-vektor-db).
 
 Sidor som hann sparas före ett fel slås ändå ihop till `text/<stem>.txt` och
 normaliseras; filen räknas fortfarande som misslyckad. En fil som Surya-fallbacken
@@ -348,6 +409,27 @@ För att slå ihop alla väntande per-sida-resultat från state.db:
 Båda kommandona är idempotenta.
 
 - Chunkar `text/*.txt` (800 tecken med 150 teckens överlapp, bryter på radslut).
+- Sidor som OCR:ats med `surya-layout` chunkas i stället från sin Markdown
+  (`pdf_pages.markdown`, `chunk_markdown`), men bara när Markdownen är färsk:
+  `normalize(pdf_pages.text)` måste vara exakt lika med sidan i `text/<stem>.txt`.
+  Ändrad text (LLM-korrigering, `merge_wpu`, manuell redigering) ger ren text som
+  tidigare. Markdown-chunkningen delar vid tomrader och före varje replik
+  (`**F:**`, `**S:**` …), håller en fråga ihop med nästa replik när paret ryms,
+  delar stora tabeller mellan rader med rubrik + avdelare upprepade (ingen
+  överlapp inuti tabellen) — men bara när rubriken lämnar plats åt minst en hel
+  rad; ryms ingen rad bredvid rubriken står rubriken en gång som vanlig rad, och
+  en rad som ensam är för lång delas vid cellgränser (`|`), i sista hand vid
+  ordgränser (ingen token kapas), delar blanketter mellan fält och lägger sidhuvudet
+  (`> Sidhuvud: …`) först i varje chunk — inräknat i chunkstorleken. Alla andra
+  sidor ger exakt samma chunks som förut; LanceDB-schemat är oförändrat.
+  En chunk som blir för kort för att indexeras (under 80 tecken utan sidhuvudet,
+  t.ex. en ensam replik `**M:** Ja.`) slås ihop med föregående eller nästa chunk
+  eller får grannens slut som överlapp, så att ingen text faller ur indexet.
+  Ett senare `[MASKAD]`-tillägg från maskeringsdetekteringen ändrar sidans text,
+  och då faller layoutsidan tillbaka på ren textchunkning. En LLM-korrigering
+  spelar in sidan på nytt utan Markdown (`record_page` nollar den), så sidan
+  chunkas som ren text. Förkastad Markdown loggas på debugnivå, en rad per fil
+  med antal sidor och de första sidnumren.
 - Embeddar lokalt med `intfloat/multilingual-e5-large` (svenska duger bra).
 - Lagrar i lokal LanceDB med metadata (Nr, Titel, Sida, Anmärkning) **och `mtime`**
   så att ändrade `.txt`-filer (t.ex. efter `.venv/bin/python scripts/ocr.py --redo`) detekteras automatiskt
@@ -356,7 +438,8 @@ Båda kommandona är idempotenta.
   (lagras som `0.0`). Använd `--reindex-since <tid>` för att tvinga re-index av
   legacy-rader vars `.txt` modifierats efter en känd tidpunkt — t.ex. när du
   precis kört en re-OCR-våg.
-- Filtrerar bort OCR-skräp (chunks med <55 % alfanumeriska tecken).
+- Filtrerar bort OCR-skräp (chunks med <55 % alfanumeriska tecken; för
+  Markdown-chunks räknas andelen efter att `*#>|-`, backtick och blanksteg tagits bort).
 - Idempotent. Första körningen laddar ned ~1.1 GB modell.
 
 ### 4. Ställ frågor
@@ -1384,7 +1467,7 @@ Valfritt: installera hunspell + sv_SE-ordlista för att fylla i `pct_swe`-kolumn
 `scripts/test.py` kör pytest. Med `--static` körs även `ruff check .` och `mypy src`
 via `.venv/`; saknas verktygen avslutar scriptet med en installationshint.
 
-Testerna täcker: `score_text` (quality), `chunk_text` (ingest), `extract_drive_id`/`sniff_extension` (download),
+Testerna täcker: `score_text` (quality), `chunk_text`/`chunk_markdown` (ingest), `extract_drive_id`/`sniff_extension` (download),
 `detect_redactions_image` (ocr_pages), `merge_one` (merge_pages), `merge_wpu` (merge_wpu),
 LLM-korrektionslogiken (llm_correct), re-ingest-flödet (ingest), state-databasen inkl.
 schema-migrationer, delta-urval och `text_mtime`-stämpling (db, ocr_db_helper, normalize, quality),

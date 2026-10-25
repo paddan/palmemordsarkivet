@@ -137,6 +137,7 @@ samma kommando som `.venv/bin/python scripts/run_pipeline.py`. Kör med
 # Setup
 .venv/bin/python scripts/install.py         # Installera (brew, Python-paket, tessdata)
 .venv/bin/python scripts/install.py --dev   # Installera även pytest/ruff/mypy
+.venv/bin/python scripts/install.py --surya-layout  # Bara Surya 2:s separata venv (brew: llama.cpp, uv)
 
 # Workflow
 .venv/bin/python scripts/run_pipeline.py                   # Hela pipelinen
@@ -603,6 +604,16 @@ LLM:en returnerar noll kandidater, så omkörningar inte debiterar tomma sidor i
 
 **mtime-tracking (ingest.py)**: Varje `.txt`-fil jämförs mot mtime som lagras i `ingest`-tabellen i state.db (auktoritativt); nyare fil → re-ingest. LanceDB-tabellen har fortfarande en `mtime`-kolumn men den läses inte längre för delta-beslut. Om ingest-state saknas men källan finns i LanceDB behandlas filen som re-indexering, så gamla chunks ersätts i stället för att dupliceras. Legacy-rader med sentinel-mtime `0.0` re-indexeras bara med `--reindex-since`.
 
+**Markdown i ingest (`chunk_markdown`)**: `_chunka_fil` får `get_page_markdown_map`
+per fil och chunkar en layoutsida från Markdown bara när `normalize(pdf_pages.text)`
+är exakt lika med den råa sidan i `text/<stem>.txt` (split på `\f`, före
+`chunk_text`s blankstegskollaps) — merge → normalize ger just det. Annars ren text
+som i dag plus en debugrad. Sidor utan Markdown måste ge byte-identiska chunks
+(`test_plain_file_chunks_unchanged`); `is_useful(..., markdown=True)` räknar
+alfanumerisk andel och längd utan Markdown-syntax respektive utan sidhuvudraden. Markdown-chunks saknar överlapp, så `_rescue_short` måste finnas kvar: en chunk under 80 tecken slås ihop med en granne eller får grannens slut/början som överlapp — annars faller korta repliker (`**M:** Ja.`) ur indexet (`_assert_conserved` i `tests/test_chunk.py` bevakar det). Chunktext visas aldrig i UI:t (källkorten
+visar bara titel/källa), så ingen `$`-escaping behövs där — lägg till den om
+chunktext någon gång renderas med `st.markdown`.
+
 **Redaktionsdetektering (ocr_pages.py)**: Hittar svarta maskeringsblock i bilder och infogar `[MASKAD]` i texten. På som standard; `--no-detect-redactions` stänger av. Idempotens spåras via `pdf_files.redaction_checked_at` i state.db — `.redact`-markörfilerna är borttagna. `scripts/detect_redactions.py` förfiltrerar listan baserat på databasen så filer som redan kollats spawnar inga subprocesser alls.
 
 **Per-dokument-cleanup (`scripts/ocr.py` + Surya)**: Efter att `ocr_pages.py` är klar kör `scripts/ocr.py` automatiskt `merge_pages.merge_one` + `normalize_text.process_file`. Idempotens och per-sida-text spåras i `pdf_pages`-tabellen i state.db — `page-NNN.txt`/`.json`-markörerna existerar inte längre. Surya-redo betraktar alla befintliga `pdf_pages`-rader som redan försökt per sida (även `engine='llm'`), annars kan `scripts/run_pipeline.py` starta Surya-processer som direkt hoppar alla sidor.
@@ -636,7 +647,22 @@ block; ett block som inte ryms loggas och stoppar inte resten (`update_pdf_text_
 medan den radbaserade vägen fortfarande avbryter. Tillgängligheten kontrolleras en gång per körning
 (även för `--redo` ensam) med `surya_layout_available()`, som också säger nej när identiteten
 innehåller `llama-server unresolved`; `--identity`-proben körs i egen session med 30 s tidsgräns och
-dödar hela sin processgrupp vid tidsgräns. En saknad runtime loggas med orsak.
+dödar hela sin processgrupp vid tidsgräns. En saknad runtime loggas med orsak
+(tolken saknas, `llama-server unresolved` eller att workern inte svarar på `--identity`).
+
+**Varför Surya 2 har en egen venv, och varför `text` förblir ren text**: projektets `.venv` kör
+Python 3.14 med `surya-ocr 0.17.1` och `transformers<5` (Gotcha 1); Surya 2 (`surya-ocr==0.22.1`)
+är verifierad på Python 3.12 (PyTorch-hjulen saknas för Homebrews nyare Python) och kör modellen via
+`llama-server`. Två beroendeträd går inte att hålla ihop i en venv, så `surya_worker.py` körs av en
+annan tolk (`PALME_SURYA_PYTHON`, standard `~/.local/share/palmemordsarkivet/surya-venv/bin/python`;
+infoscrys venv går att återanvända) och projektet importerar aldrig Surya 2. `install.py
+--surya-layout` skapar den; extran `surya` i `pyproject.toml` ska lämnas orörd. Homebrews llama.cpp
+är inte pinnad, därför ingår llama-server-bygget i motoridentiteten. `pdf_pages.text` är blockens
+rena text (inga `#`/`|`) eftersom kvalitetspoängen, fuzzy-sökning, citat och färskhetsregeln i ingest
+räknar på den; Markdown ligger i `pdf_pages.markdown` och används bara av ingest. `PAGE_FOOTER`
+utelämnas ur Markdown, `PAGE_HEADER` blir kontextrad (`> Sidhuvud: …`) i varje chunk — båda finns
+kvar i `text`. Standardmotorn är `lines` tills piloten visat att `layout` är minst lika bra; byt den
+inte utan den. Vikterna (`datalab-to/surya-ocr-2-gguf`) har en egen licens — se modellkortet.
 
 **Pipeline-resume (`scripts/run_pipeline.py`)**: OCR- och ingest-stegen körs alltid, även när download inte hittade nya PDF:er. Stegen är idempotenta och detta gör att en tidigare avbruten körning kan slutföras.
 

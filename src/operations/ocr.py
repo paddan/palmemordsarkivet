@@ -17,7 +17,7 @@ import normalize_text
 from surya_client import (
     EXIT_SURYA_UNAVAILABLE,
     SURYA_PYTHON_ENV,
-    surya_layout_available,
+    surya_layout_unavailable_reason,
     surya_python,
 )
 
@@ -74,18 +74,16 @@ def _surya_engine_arg(options: OcrOptions) -> str:
 def _surya_ready(options: OcrOptions, ctx: OperationContext) -> bool:
     """Om vald Surya-motor går att köra; en saknad runtime loggas med orsak.
 
-    ``layout`` kontrolleras med ``surya_layout_available`` (tolken finns och
+    ``layout`` kontrolleras med ``surya_layout_unavailable_reason`` (tolken finns och
     workern svarar på ``--identity``), ``lines`` med att ``surya`` går att importera.
     """
     if options.surya_engine == "layout":
-        if surya_layout_available():
-            ctx.log(f"[surya] motor surya-layout via {surya_python()}", level="debug")
-            return True
         python = surya_python()
-        orsak = (
-            f"tolken {python} finns inte" if not python.exists()
-            else f"workern svarade inte på --identity med {python}"
-        )
+        reason = surya_layout_unavailable_reason(python)
+        if reason is None:
+            ctx.log(f"[surya] motor surya-layout via {python}", level="debug")
+            return True
+        orsak = reason
         ctx.log(
             f"Surya 2-layout är inte tillgänglig: {orsak}. Installera worker-venv:en "
             f"eller peka {SURYA_PYTHON_ENV} på en Python med surya-ocr==0.22.1.",
@@ -155,6 +153,12 @@ def _fallback_reason(
             f"ofullständig: {rows} av {pages} sidor i pdf_pages — kör Surya på "
             "de sidor som saknas"
         )
+    ctx.log(
+        f"[surya] {stem}: har text, inte ofullständig — "
+        + (f"{rows} pdf_pages-rader av {pages} PDF-sidor" if rows
+           else f"0 rader av {pages} PDF-sidor = Tesseract-text"),
+        level="debug",
+    )
     return None
 
 
@@ -185,7 +189,11 @@ def _log_surya_unavailable(step: str, stem: str, ctx: OperationContext) -> None:
 
 
 def run_surya_fallback(label: str, pdf_dir: Path, options: OcrOptions, context: OperationContext) -> int:
-    """Surya-fallback för filer där Tesseract misslyckats och text saknas."""
+    """Surya-fallback för filer där Tesseract misslyckats och text saknas.
+
+    Kandidater är också ofullständiga filer: text finns, men PDF:en har fler sidor
+    än pdf_pages-rader (en tidigare körning stoppades på exitkod 3).
+    """
     conn = state_db.connect()
     state_db.init_schema(conn)
     candidates: list[tuple[str, Path]] = []

@@ -27,6 +27,7 @@ from sentence_transformers import SentenceTransformer
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import db as state_db  # noqa: E402
+from normalize_text import normalize, normalize_markdown  # noqa: E402
 
 try:
     from errors_log import log_error
@@ -43,6 +44,7 @@ EMBED_DIM = 1024
 
 CHUNK_CHARS = 800
 CHUNK_OVERLAP = 150
+MIN_CHUNK_CHARS = 80  # kortare chunks indexeras inte (is_useful)
 MIN_ALNUM_RATIO = 0.55  # filtrera OCR-skräp
 
 # Filnamn: "<Nr> — <Titel> — <Beställt> — <Upplagt> — <Anmärkning> — <Sidor>.txt"
@@ -100,6 +102,398 @@ def chunk_text(text: str, size: int, overlap: int) -> list[tuple[int, int, str]]
             break
         i = max(end - overlap, i + 1)
     return chunks
+
+
+# --- Markdown från Surya-layout ---------------------------------------------
+
+_SIDHUVUD = "> Sidhuvud:"
+# Replikgräns: talarmarkör i fetstil först på raden (``**F:**``, ``**Fråga:**``,
+# ``**[MASKAD]**``). Kortnamn i versaler (1–3 tecken) täcker F/S/FL/M/J m.fl.
+_TURN_RE = re.compile(r"^\*\*(?:(?:[A-ZÅÄÖ]{1,3}|Fråga|Svar):|\[MASKAD\]:?)\*\*")
+_QUESTION_RE = re.compile(r"^\*\*(?:F|FL|Fråga):\*\*")
+_TABLE_SEP_RE = re.compile(r"^\|(?:\s*:?-{3,}:?\s*\|)+\s*$")
+_FORM_FIELD_PREFIX = "- **"
+
+
+def _md_blocks(body: str, base: int) -> list[tuple[int, int, str]]:
+    """Dela vid tomrader. Returnerar ``(start, end, block)`` med offset i sidans Markdown."""
+    blocks: list[tuple[int, int, str]] = []
+    pos = 0
+    start: int | None = None
+    end = 0
+    for line in body.split("\n"):
+        if line.strip():
+            if start is None:
+                start = pos
+            end = pos + len(line)
+        elif start is not None:
+            blocks.append((base + start, base + end, body[start:end]))
+            start = None
+        pos += len(line) + 1
+    if start is not None:
+        blocks.append((base + start, base + end, body[start:end]))
+    return blocks
+
+
+def _is_table(lines: list[str]) -> bool:
+    return (
+        len(lines) >= 2
+        and all(ln.startswith("|") for ln in lines)
+        and bool(_TABLE_SEP_RE.match(lines[1]))
+    )
+
+
+def _is_form(lines: list[str]) -> bool:
+    top = [ln for ln in lines if not ln.startswith(" ")]
+    return bool(top) and lines[0].startswith(_FORM_FIELD_PREFIX) and all(
+        ln.startswith(_FORM_FIELD_PREFIX) for ln in top
+    )
+
+
+def _split_turns(start: int, text: str) -> list[tuple[int, int, str]]:
+    """Dela ett block före varje rad som inleder en ny replik."""
+    parts: list[tuple[int, int, str]] = []
+    cur_start = 0
+    pos = 0
+    for i, line in enumerate(text.split("\n")):
+        if i and _TURN_RE.match(line):
+            parts.append((start + cur_start, start + pos - 1, text[cur_start:pos - 1]))
+            cur_start = pos
+        pos += len(line) + 1
+    parts.append((start + cur_start, start + len(text), text[cur_start:]))
+    return parts
+
+
+def _split_words(text: str, budget: int) -> list[str]:
+    """Dela ``text`` vid blanksteg i bitar om högst ``budget`` tecken.
+
+    Ingen token kapas — utom ett enskilt ord som ensamt är längre än ``budget``,
+    som då delas hårt (annars kan biten aldrig rymmas).
+    """
+    pieces: list[str] = []
+    cur = ""
+    for word in text.split():
+        while len(word) > budget:
+            if cur:
+                pieces.append(cur)
+                cur = ""
+            pieces.append(word[:budget])
+            word = word[budget:]
+        if not word:
+            continue
+        if cur and len(cur) + 1 + len(word) > budget:
+            pieces.append(cur)
+            cur = ""
+        cur = f"{cur} {word}" if cur else word
+    if cur:
+        pieces.append(cur)
+    return pieces
+
+
+def _split_row(row: str, budget: int) -> list[str]:
+    """Dela en för lång tabellrad vid cellgränser (``|``), i sista hand vid ordgränser.
+
+    Bitarna skrivs som radfragment ``| cell | cell |``; en cell som ensam inte
+    ryms delas vid ordgränser.
+    """
+    cells = [c.strip() for c in row.strip().strip("|").split("|")]
+    parts: list[str] = []
+    for cell in cells:
+        if len(cell) + 4 <= budget:
+            parts.append(cell)
+        else:
+            parts += _split_words(cell, max(1, budget - 4))
+    pieces: list[str] = []
+    cur: list[str] = []
+    for part in parts:
+        if cur and len("| " + " | ".join([*cur, part]) + " |") > budget:
+            pieces.append("| " + " | ".join(cur) + " |")
+            cur = []
+        cur.append(part)
+    if cur:
+        pieces.append("| " + " | ".join(cur) + " |")
+    return pieces
+
+
+def _split_group(g: str, budget: int) -> list[str]:
+    """Dela en radgrupp som ensam är större än ``budget`` utan att kapa någon token."""
+    if g.startswith("|") and "\n" not in g:
+        return _split_row(g, budget)
+    if "\n" in g:
+        # blankettfält med alternativrader: dela mellan raderna i första hand
+        out: list[str] = []
+        for line in g.split("\n"):
+            if len(line) <= budget:
+                out.append(line)
+            else:
+                out += _split_words(line, budget)
+        return _pack_lines(out, budget)
+    return _split_words(g, budget)
+
+
+def _pack_lines(
+    groups: list[str], budget: int, prefix: str = ""
+) -> list[str]:
+    """Packa radgrupper (fält, tabellrader) girigt till bitar om högst ``budget`` tecken.
+
+    ``prefix`` (tabellens rubrik + avdelare) inleder en bit bara när det lämnar
+    plats åt minst en hel rad. En grupp som inte ryms ens ensam delas med
+    ``_split_group`` (tabellrad vid cellgränser, annars vid ordgränser) och dess
+    fragment får inget prefix. Kom prefixet aldrig med (ingen rad ryms bredvid
+    rubriken) packas tabellen om med rubrik och avdelare som vanliga rader, så
+    att kolumnnamnen ändå indexeras (regel AJ).
+    """
+    items: list[tuple[str, bool]] = []  # (text, får inledas med prefix)
+    for g in groups:
+        if len(g) <= budget:
+            items.append((g, True))
+        else:
+            items += [(piece, False) for piece in _split_group(g, budget)]
+
+    pieces: list[str] = []
+    cur: list[str] = []
+    used_prefix = False
+
+    def fits(lines: list[str]) -> bool:
+        return len("\n".join(lines)) <= budget
+
+    for text, may_prefix in items:
+        with_prefix = bool(prefix) and may_prefix and fits([prefix, text])
+        # en bit utan rubrik (startad av en rad som inte rymdes bredvid den)
+        # fortsätter inte med rader som kan få rubriken framför sig
+        headless = bool(cur) and bool(prefix) and cur[0] != prefix
+        if cur and fits([*cur, text]) and not (headless and with_prefix):
+            cur.append(text)
+            continue
+        if cur:
+            pieces.append("\n".join(cur))
+        if with_prefix:
+            cur = [prefix, text]
+            used_prefix = True
+        else:
+            cur = [text]
+    if cur:
+        pieces.append("\n".join(cur))
+    if prefix and not used_prefix:
+        return _pack_lines(prefix.split("\n") + groups, budget)
+    return pieces
+
+
+def _oversized(kind: str, text: str, budget: int, overlap: int) -> list[str]:
+    """Dela ett block som inte ryms i en chunk efter dess struktur."""
+    lines = text.split("\n")
+    if kind == "table" and len(lines) > 2:
+        # mellan rader; rubrik + avdelare upprepas, ingen överlapp inuti tabellen
+        return _pack_lines(lines[2:], budget, prefix=lines[0] + "\n" + lines[1])
+    if kind == "form":
+        fields: list[str] = []
+        for ln in lines:
+            if ln.startswith(" ") and fields:
+                fields[-1] += "\n" + ln
+            else:
+                fields.append(ln)
+        return _pack_lines(fields, budget)
+    return [c for _, _, c in chunk_text(text, budget, overlap)]
+
+
+def chunk_markdown(md: str, size: int, overlap: int) -> list[tuple[int, int, str]]:
+    """Strukturmedveten chunkning av en layoutsidas Markdown.
+
+    Returnerar ``(start, end, chunk)`` som ``chunk_text``; offset pekar på
+    innehållet i ``md`` (ungefärliga för block som delats med ``chunk_text``).
+
+    - Gränser läggs vid tomrader (block) och före varje ny replik.
+    - Block som ryms packas ihop (skilda med tomrad) upp till ``size``.
+    - Ett för stort block delas: tabeller mellan rader med rubrik och avdelare
+      upprepade (ingen överlapp inuti tabellen), blankettfält mellan fält
+      (kryssrutealternativen följer sitt fält), övrigt med ``chunk_text``.
+    - En fråga (``**F:**``, ``**FL:**``, ``**Fråga:**``) hålls ihop med nästa
+      replik — inklusive löpande stycken emellan — när paret ryms.
+    - En inledande rad ``> Sidhuvud: …`` tas ur flödet och läggs först i varje
+      chunk. Den räknas mot ``size``; är den minst halva ``size`` kortas den till
+      en fjärdedel.
+    """
+    md = md.strip()
+    if not md:
+        return []
+    header = ""
+    base = 0
+    body = md
+    if md.startswith(_SIDHUVUD):
+        first, _, body = md.partition("\n")
+        header = first.rstrip()
+        if len(header) >= size / 2:
+            header = header[: size // 4]
+        base = len(first) + 1
+    budget = size - len(header) - 1 if header else size
+
+    # 1. Enheter: (typ, start, end, text)
+    units: list[tuple[str, int, int, str]] = []
+    for start, end, block in _md_blocks(body, base):
+        lines = block.split("\n")
+        if _is_table(lines):
+            parts = [("table", start, end, block)]
+        elif _is_form(lines):
+            parts = [("form", start, end, block)]
+        else:
+            parts = [
+                ("question" if _QUESTION_RE.match(t) else "turn" if _TURN_RE.match(t) else "text", s, e, t)
+                for s, e, t in _split_turns(start, block)
+            ]
+        for kind, s, e, t in parts:
+            if len(t) <= budget:
+                units.append((kind, s, e, t))
+            else:
+                units += [(kind, s, e, piece) for piece in _oversized(kind, t, budget, overlap)]
+
+    # 2. Fråga + svar: slå ihop frågan, löpande stycken och nästa replik när de ryms
+    merged: list[tuple[str, int, int, str]] = []
+    i = 0
+    while i < len(units):
+        kind, s, e, t = units[i]
+        if kind == "question":
+            j = i + 1
+            while j < len(units) and units[j][0] == "text":
+                j += 1
+            # en fråga paras bara med ett icke-frågande svar; fråga följd av fråga
+            # står för sig (den andra frågan paras i sin tur med sitt svar)
+            if j < len(units) and units[j][0] == "turn":
+                pair = "\n\n".join(u[3] for u in units[i:j + 1])
+                if len(pair) <= budget:
+                    merged.append(("turn", s, units[j][2], pair))
+                    i = j + 1
+                    continue
+        merged.append(units[i])
+        i += 1
+
+    # 3. Packa girigt upp till budget
+    chunks: list[tuple[int, int, str]] = []
+    cur: list[tuple[str, int, int, str]] = []
+    cur_len = 0
+    for u in merged:
+        add = len(u[3]) + (2 if cur else 0)
+        if cur and cur_len + add > budget:
+            chunks.append(_md_chunk(cur))
+            cur, cur_len, add = [], 0, len(u[3])
+        cur.append(u)
+        cur_len += add
+    if cur:
+        chunks.append(_md_chunk(cur))
+    # 4. Ingen enhet får falla ur indexet (regel AJ)
+    chunks = _rescue_short(chunks, budget, overlap)
+    return [(s, e, f"{header}\n{c}" if header else c) for s, e, c in chunks]
+
+
+def _md_chunk(units: list[tuple[str, int, int, str]]) -> tuple[int, int, str]:
+    return (units[0][1], units[-1][2], "\n\n".join(u[3] for u in units))
+
+
+def _tail(text: str, limit: int, need: int = 0) -> str:
+    """Slutet på ``text`` om högst ``limit`` tecken.
+
+    Radjusterat i första hand (helst från en icke-indragen rad, dvs. fältets
+    huvud); räcker det inte till ``need`` tecken tas ett ordjusterat slut.
+    """
+    lines = text.split("\n")
+    picked: list[str] = []
+    head_start: int | None = None  # längsta svans som börjar på en icke-indragen rad
+    for ln in reversed(lines):
+        if len("\n".join([ln, *picked])) > limit:
+            break
+        picked.insert(0, ln)
+        if ln.strip() and not ln.startswith(" "):
+            head_start = len(picked)
+    if head_start is not None and len("\n".join(picked[len(picked) - head_start:])) >= need:
+        picked = picked[len(picked) - head_start:]
+    tail = "\n".join(picked).strip("\n")
+    if tail and len(tail) >= need:
+        return tail
+    cut = text[-limit:]
+    space = next((i for i, ch in enumerate(cut) if ch.isspace()), -1)
+    return (cut[space + 1:] if 0 <= space < len(cut) - 1 and len(cut) < len(text) else cut).strip()
+
+
+def _head(text: str, limit: int, need: int = 0) -> str:
+    """Början på ``text`` om högst ``limit`` tecken, rad- eller ordjusterad (spegling av ``_tail``)."""
+    lines = text.split("\n")
+    picked: list[str] = []
+    for ln in lines:
+        if len("\n".join([*picked, ln])) > limit:
+            break
+        picked.append(ln)
+    head = "\n".join(picked).strip("\n")
+    if head and len(head) >= need:
+        return head
+    cut = text[:limit]
+    space = max((i for i, ch in enumerate(cut) if ch.isspace()), default=-1)
+    return (cut[:space] if space > 0 and len(cut) < len(text) else cut).strip()
+
+
+def _borrow_tail(text: str, limit: int, need: int) -> str:
+    """Slutet av en chunk att låna som överlapp åt en kort efterföljare.
+
+    Slutar chunken på en tabell får de lånade raderna tabellens rubrik- och
+    avdelarrad före sig (annars saknar de sina kolumnnamn). Ryms inte rubriken
+    plus rader lånas i stället slutet av närmaste icke-tabellenhet.
+    """
+    blocks = text.split("\n\n")
+    last = blocks[-1].split("\n")
+    if not _is_table(last):
+        return _tail(text, limit, need)
+    prefix = last[0] + "\n" + last[1]
+    room = limit - len(prefix) - 1
+    if len(last) > 2 and room > 0:
+        rows = _tail("\n".join(last[2:]), room, 0)
+        if rows and len(rows) <= room and all(ln.startswith("|") for ln in rows.split("\n")):
+            with_header = f"{prefix}\n{rows}"
+            if len(with_header) >= need:
+                return with_header
+    others = "\n\n".join(b for b in blocks[:-1] if not _is_table(b.split("\n")))
+    if others:
+        tail = _tail(others, limit, need)
+        if len(tail) >= need:
+            return tail
+    # rader utan rubrik är bättre än att enheten faller ur indexet
+    return _tail(text, limit, need)
+
+
+def _rescue_short(
+    chunks: list[tuple[int, int, str]], budget: int, overlap: int
+) -> list[tuple[int, int, str]]:
+    """Kort chunk (under ``MIN_CHUNK_CHARS``, utan sidhuvud) skulle förkastas av ``is_useful``
+    och dess text finns inte i någon annan chunk. Lägg den sist i föregående chunk om det
+    ryms, annars först i nästa; annars får den föregående chunks slut som överlapp
+    (sidans första chunk lånar i stället början av nästa)."""
+    items = list(chunks)
+    out: list[tuple[int, int, str]] = []
+    i = 0
+    while i < len(items):
+        s, e, c = items[i]
+        if len(c) < MIN_CHUNK_CHARS:
+            if out and len(out[-1][2]) + 2 + len(c) <= budget:
+                ps, _, pc = out[-1]
+                out[-1] = (ps, e, f"{pc}\n\n{c}")
+                i += 1
+                continue
+            if i + 1 < len(items) and len(c) + 2 + len(items[i + 1][2]) <= budget:
+                _, ne, nc = items[i + 1]
+                items[i + 1] = (s, ne, f"{c}\n\n{nc}")
+                i += 1
+                continue
+            limit = min(overlap, budget - len(c) - 2)
+            need = MIN_CHUNK_CHARS - len(c) - 2
+            if out:
+                tail = _borrow_tail(out[-1][2], limit, need)
+                if tail:
+                    c = f"{tail}\n\n{c}"
+            elif i + 1 < len(items):
+                # första chunken saknar föregångare: låna början av nästa i stället
+                head = _head(items[i + 1][2], limit, need)
+                if head:
+                    c = f"{c}\n\n{head}"
+        out.append((s, e, c))
+        i += 1
+    return out
 
 
 def parse_reindex_since(value: str) -> float:
@@ -217,11 +611,27 @@ def delete_source_for_reingest(table, source: str, *, is_reingest: bool) -> None
         table.delete(_source_predicate(source))
 
 
-def is_useful(chunk: str) -> bool:
-    if len(chunk) < 80:
+_MD_SYNTAX_RE = re.compile(r"[*#>|\-`\s]")
+
+
+def is_useful(chunk: str, markdown: bool = False) -> bool:
+    """Sann om chunken är tillräckligt lång och textrik för att indexeras.
+
+    För Markdown-chunks bedöms innehållet utan sidhuvudraden (``> Sidhuvud: …``),
+    och andelen alfanumeriska tecken räknas efter att
+    Markdown-syntax (``*#>|-``, backtick) och blanksteg tagits bort — annars
+    förkastas glesa tabeller och blankettfält. Textvägen är oförändrad.
+    """
+    if markdown and chunk.startswith(_SIDHUVUD):
+        # sidhuvudet är kontext — chunken ska bära sig på sitt eget innehåll
+        chunk = chunk.partition("\n")[2]
+    if len(chunk) < MIN_CHUNK_CHARS:
         return False
-    alnum = sum(c.isalnum() for c in chunk)
-    return alnum / len(chunk) >= MIN_ALNUM_RATIO
+    text = _MD_SYNTAX_RE.sub("", chunk) if markdown else chunk
+    if not text:
+        return False
+    alnum = sum(c.isalnum() for c in text)
+    return alnum / len(text) >= MIN_ALNUM_RATIO
 
 
 def _table_exists(db: lancedb.LanceDBConnection, name: str) -> bool:
@@ -383,13 +793,41 @@ def _chunka_fil(
     disk_mtime: float,
     chunk_chars: int,
     chunk_overlap: int,
+    page_markdown: dict[int, tuple[str, str]] | None = None,
+    context: Any = None,
 ) -> list[dict[str, Any]]:
-    """Dela texten i sidvisa chunks och returnera en tabellrad per användbar chunk."""
+    """Dela texten i sidvisa chunks och returnera en tabellrad per användbar chunk.
+
+    ``page_markdown`` är ``{sidnr: (pdf_pages.text, markdown)}`` för layoutsidor.
+    En sidas Markdown används bara när den är färsk, dvs. när
+    ``normalize(pdf_pages.text)`` är exakt lika med sidan i textfilen (rå, före
+    ``chunk_text``s blankstegskollaps). Annars har texten ändrats efter OCR
+    (LLM-korrigering, merge_wpu, manuell redigering) och sidan chunkas som ren
+    text precis som tidigare.
+    """
+    page_markdown = page_markdown or {}
     rows: list[dict[str, Any]] = []
     chunk_idx = 0
+    from_md = stale = 0
+    stale_pages: list[int] = []
     for page_idx, page in enumerate(split_pages(raw), start=1):
-        for _, _, chunk in chunk_text(page, chunk_chars, chunk_overlap):
-            if not is_useful(chunk):
+        chunks = None
+        markdown = False
+        if page_idx in page_markdown:
+            db_text, md = page_markdown[page_idx]
+            if not (md or "").strip():
+                pass  # tom Markdown (t.ex. blank sida) — ren text som i dag
+            elif normalize(db_text) == page:
+                chunks = chunk_markdown(normalize_markdown(md), chunk_chars, chunk_overlap)
+                markdown = True
+                from_md += 1
+            else:
+                stale += 1
+                stale_pages.append(page_idx)
+        if chunks is None:
+            chunks = chunk_text(page, chunk_chars, chunk_overlap)
+        for _, _, chunk in chunks:
+            if not is_useful(chunk, markdown=markdown):
                 continue
             rows.append({
                 "text": chunk,
@@ -400,6 +838,17 @@ def _chunka_fil(
                 **meta,
             })
             chunk_idx += 1
+    if stale_pages and context is not None:
+        context.log(
+            f"[markdown] {filnamn}: Markdown förkastad på {len(stale_pages)} sidor "
+            f"(texten ändrad efter OCR), första: {stale_pages[:10]}",
+            level="debug",
+        )
+    if page_markdown and context is not None:
+        context.log(
+            f"[markdown] {filnamn}: {from_md} sidor chunkade från Markdown, "
+            f"{stale} med inaktuell Markdown (ren text i stället)"
+        )
     return rows
 
 
@@ -637,7 +1086,11 @@ def run_ingest(
         if raw is None:
             continue
 
-        rows = _chunka_fil(raw, f.name, meta, disk_mtime, chunk_chars, chunk_overlap)
+        page_markdown = state_db.get_page_markdown_map(state_conn, f.stem)
+        rows = _chunka_fil(
+            raw, f.name, meta, disk_mtime, chunk_chars, chunk_overlap,
+            page_markdown=page_markdown, context=ctx,
+        )
         if not rows:
             _markera_oanvand_fil(table, state_conn, f, disk_mtime, is_reingest, i, len(todo), ctx)
             unusable.append(f.name)

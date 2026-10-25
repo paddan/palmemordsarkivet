@@ -278,3 +278,24 @@ def test_availability_false_when_llama_server_unresolved(tmp_path, monkeypatch):
 
 def test_exit_code_constant():
     assert surya_client.EXIT_SURYA_UNAVAILABLE == 3
+
+
+def test_unavailable_reason_variants(tmp_path, monkeypatch):
+    monkeypatch.setenv("PALME_SURYA_PYTHON", str(tmp_path / "saknas"))
+    assert "tolk saknas" in surya_client.surya_layout_unavailable_reason()
+
+    silent = tmp_path / "silent.py"
+    silent.write_text("import sys; sys.exit(1)\n")
+    monkeypatch.setattr(surya_client, "WORKER_PATH", silent)
+    monkeypatch.setenv("PALME_SURYA_PYTHON", sys.executable)
+    assert "svarade inte på --identity" in surya_client.surya_layout_unavailable_reason()
+
+    unresolved = tmp_path / "id.py"
+    unresolved.write_text(
+        HEADER + "reply(protocol=1, type='identity', status='ok', identity='x llama-server unresolved')\n"
+    )
+    monkeypatch.setattr(surya_client, "WORKER_PATH", unresolved)
+    assert "LLAMA_CPP_BINARY" in surya_client.surya_layout_unavailable_reason()
+
+    monkeypatch.setattr(surya_client, "WORKER_PATH", fake(tmp_path, ECHO))
+    assert surya_client.surya_layout_unavailable_reason() is None

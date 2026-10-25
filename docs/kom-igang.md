@@ -22,7 +22,7 @@ Python-formen. Kör den från projektroten — inget `cd` behövs.
 
 | Genväg | Vad den gör |
 |---|---|
-| `./install.sh --dev` | installerar beroenden (brew, pip, tessdata); `--no-surya` hoppar Surya-OCR |
+| `./install.sh --dev` | installerar beroenden (brew, pip, tessdata); `--no-surya` hoppar Surya-OCR; `--surya-layout` installerar Surya 2-layout (se nedan) |
 | `./run_pipeline.sh` | hela pipelinen: download → OCR → ingest (`--test 5`, `--with-llm`, `--profile NAMN`, `--jobs N`) |
 | `./download.sh`, `./download_wpu.sh` | hämtar PDF:er från palmemordsarkivet.se respektive wpu.nu |
 | `./ocr.sh`, `./ocr_tesseract.sh` | OCR till text (`--skip-redo` hoppar Surya) |
@@ -43,6 +43,27 @@ Alla `scripts/*.py` har en genväg, så samma form fungerar för till exempel
 ./install.sh --no-surya  # snabbare install utan Surya-OCR
 ./install.sh --dev  # valfritt: installera pytest/ruff/mypy för utveckling
 ```
+
+### Valfritt: Surya 2-layout
+
+Den nya OCR-motorn Surya 2 läser en sida som layoutblock (rubriker, stycken,
+tabeller, blanketter som SPANINGSUPPSLAG, förhör) och ger både ren text och
+Markdown. Den är avstängd som standard (`--surya-engine lines`) och behövs bara
+om du vill köra om dåliga sidor eller blanketter med den. Den kräver en egen
+Python 3.12-miljö, så installationen sker separat:
+
+```bash
+./install.sh --surya-layout  # llama.cpp + uv via brew (om de saknas), egen venv, surya-ocr==0.22.1
+./ocr.sh --redo --mode pages --surya-engine layout
+```
+
+Venv:en hamnar i `~/.local/share/palmemordsarkivet/surya-venv`. Modellvikterna
+(ca 1,36 GiB) laddas ned första gången en sida läses. Har du redan en venv med
+`surya-ocr==0.22.1` (till exempel infoscrys) kan du peka på den i stället:
+`export PALME_SURYA_PYTHON=~/.local/share/infoscry/surya-venv/bin/python`.
+Ligger `llama-server` utanför `PATH` anger du den med `LLAMA_CPP_BINARY`.
+Mer om motorn, hastighet (ca 25 s/sida) och licenser:
+[Teknisk referens](teknisk-referens.md#surya-2-layout---surya-engine-layout).
 
 `scripts/install.py` sköter pipeline- och webgränssnittsberoendena via Homebrew och pip — se
 [Vad install.py gör](teknisk-referens.md#vad-installpy-gör) för detaljer.

@@ -197,3 +197,27 @@ def test_tesseract_only_row_is_not_skipped(txt_dir, db_path):
     assert row["normalized_at"] is not None
     assert row["text_mtime"] is not None
     assert "\x00" not in f.read_text(encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# normalize_markdown() — Markdown från Surya-layout (Task 6)
+# ---------------------------------------------------------------------------
+
+
+def test_normalize_markdown_keeps_pipes_and_indent():
+    from normalize_text import normalize_markdown
+
+    md = (
+        "> Sidhuvud: Förhör\r\n\r\n"
+        "| a | b |\n| --- | --- |\n|  |  |\n"
+        "- **11 Lämnat:**\n  - [x] per teleﬁn\n  - [ ] per brev\n\n\n\n"
+        "---\n**F:** ja\x07"
+    )
+    out = normalize_markdown(md)
+    assert out == (
+        "> Sidhuvud: Förhör\n\n"
+        "| a | b |\n| --- | --- |\n|  |  |\n"
+        "- **11 Lämnat:**\n  - [x] per telefin\n  - [ ] per brev\n\n"
+        "---\n**F:** ja"
+    )
+    assert normalize_markdown(out) == out

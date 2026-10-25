@@ -9,7 +9,9 @@ via ett publikt Google Sheet, medan WPU kompletterar med fler dokument och
 ibland bättre skanningar av samma material.
 
 Pipelinen laddar ner arkivet, OCR-tolkar varje sida (Tesseract + Surya-fallback
-vid Tesseract-fel och på svåra sidor), indexerar texten i en lokal
+vid Tesseract-fel och på svåra sidor; valfritt med Surya 2-layout som läser sidor
+som struktur — blanketter, förhör, tabeller; se
+[Surya 2-layout i tekniska referensen](docs/teknisk-referens.md#surya-2-layout---surya-engine-layout)), indexerar texten i en lokal
 vektor-databas och ger dig ett
 webgränssnitt där du kan ställa frågor om Palme-mordet — med källhänvisningar
 tillbaka till original-PDF:erna. Som komplement kan materialet byggas upp som en
@@ -178,7 +180,7 @@ den granskade grafen.
 - **[Kom igång](docs/kom-igang.md)** — installation, API-nyckel, kör pipelinen
   och ställ din första fråga.
 - **[Teknisk referens](docs/teknisk-referens.md)** — alla steg och flaggor i
-  detalj: nedladdning, OCR (Tesseract/Surya), indexering, RAG/MCP, state-databasen,
+  detalj: nedladdning, OCR (Tesseract/Surya, valfri Surya 2-layout), indexering, RAG/MCP, state-databasen,
   valfri installation av kunskapsgrafen, LLM-konfiguration, filöversikt och
   tester.
 

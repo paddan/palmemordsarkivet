@@ -104,6 +104,21 @@ def normalize(text: str) -> str:
     return '\f'.join(result_pages)
 
 
+def normalize_markdown(md: str) -> str:
+    """Normalisera Markdown från Surya-layout inför chunkning.
+
+    Bara teckennivå: ligaturer, NFC, radslut, styrtecken och högst en tomrad i
+    följd. Till skillnad från ``normalize`` tas inga rader bort och inget indrag
+    strippas — tabellavdelare (``| --- |``), kryssrutealternativens indrag
+    (``  - [x]``) och tomma celler bär struktur.
+    """
+    md = md.translate(_LIGATURES)
+    md = unicodedata.normalize('NFC', md)
+    md = md.replace('\r\n', '\n').replace('\r', '\n')
+    md = _CTRL_RE.sub('', md)
+    return _BLANK_RE.sub('\n\n', md)
+
+
 def process_file(path: Path, dry_run: bool = False) -> bool:
     """Normalisera en fil på plats. Returnerar True om filen förändrades."""
     original = path.read_text(encoding='utf-8', errors='replace')
