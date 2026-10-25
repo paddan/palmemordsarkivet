@@ -351,6 +351,9 @@ from .pipeline import (
     clear_wpu_decisions as clear_wpu_decisions,
 )
 from .pipeline import (
+    count_pages_for_stem as count_pages_for_stem,
+)
+from .pipeline import (
     delete_ingest as delete_ingest,
 )
 from .pipeline import (
@@ -373,6 +376,9 @@ from .pipeline import (
 )
 from .pipeline import (
     get_ingested_mtime as get_ingested_mtime,
+)
+from .pipeline import (
+    get_page_markdown_map as get_page_markdown_map,
 )
 from .pipeline import (
     get_pages_for_stem as get_pages_for_stem,
@@ -538,6 +544,7 @@ __all__ = [
     "clear_tesseract_failed",
     "clear_wpu_decisions",
     "connect",
+    "count_pages_for_stem",
     "create_admin_job",
     "DEFAULT_DB",
     "delete_admin_job",
@@ -564,6 +571,7 @@ __all__ = [
     "get_graph_review_page",
     "get_ingested_mtime",
     "get_llm_usage",
+    "get_page_markdown_map",
     "get_pages_for_stem",
     "get_pdf_file",
     "GRAPH_REVIEW_SCHEMA_SQL",

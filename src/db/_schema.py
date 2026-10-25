@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 DEFAULT_DB: Path = Path(os.environ.get("STATE_DB", str(ROOT / "generated" / "db" / "state.db")))
 
-SCHEMA_VERSION: int = 10
+SCHEMA_VERSION: int = 11
 
 LLM_USAGE_SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS llm_usage (
@@ -123,6 +123,9 @@ CREATE TABLE IF NOT EXISTS pdf_pages (
     text         TEXT,
     score        REAL,
     processed_at TEXT NOT NULL,
+    markdown        TEXT,
+    layout_json     TEXT,
+    engine_identity TEXT,
     PRIMARY KEY (pdf_stem, page_num)
 );
 
@@ -520,12 +523,19 @@ def _migration_010_llm_usage(conn: sqlite3.Connection) -> None:
             conn.execute(statement)
 
 
+def _migration_011_page_layout(conn: sqlite3.Connection) -> None:
+    """Lägg till Markdown, layout-JSON och motoridentitet per OCR-sida."""
+    for col in ("markdown", "layout_json", "engine_identity"):
+        _add_column_if_missing(conn, "pdf_pages", col, "TEXT")
+
+
 MIGRATIONS: tuple[_Migration, ...] = (
     _Migration(6, "pdf_files OCR-felstatus", _migration_006_pdf_file_ocr_status),
     _Migration(7, "admin_jobs jobbmodell", _migration_007_admin_jobs),
     _Migration(8, "grafgranskning", _migration_008_graph_review),
     _Migration(9, "globala grafnamnregler", _migration_009_graph_name_rules),
     _Migration(10, "LLM-räknare per profil", _migration_010_llm_usage),
+    _Migration(11, "Markdown och layout per sida", _migration_011_page_layout),
 )
 
 

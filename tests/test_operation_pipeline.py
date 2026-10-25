@@ -266,6 +266,7 @@ def test_surya_fallback_uses_current_python_interpreter(tmp_path, monkeypatch) -
 
     monkeypatch.setattr("operations.ocr.state_db.connect", lambda: FakeConnection())
     monkeypatch.setattr("operations.ocr.state_db.init_schema", lambda conn: None)
+    monkeypatch.setattr("operations.ocr.state_db.count_pages_for_stem", lambda conn, stem: 0)
     monkeypatch.setattr(
         "operations.ocr.state_db.list_surya_fallback_candidates",
         lambda conn: ["doc"],

@@ -12,7 +12,7 @@ Inspektera med t.ex. `sqlite3 generated/db/state.db`. Tabellerna:
 
 - `downloads` — palmemordsarkivet- och wpu-nedladdningar (Drive-ID eller URL, sha1 där det finns, filename, bytes)
 - `pdf_files` — per-PDF-status (redaction_checked_at, merged_at, normalized_at, text_mtime, tesseract_done_at, tesseract_failed, tesseract_blacklisted_at, surya_failed_at)
-- `pdf_pages` — per-sida OCR-resultat (text, engine, score)
+- `pdf_pages` — per-sida OCR-resultat (text, engine, score; för motorn `surya-layout` även `markdown` — `NULL` för tom sida —, `layout_json` med blocklayouten och `engine_identity` med workerns `--identity`-svar)
 - `quality` / `quality_pages` — kvalitetspoäng per fil och sida
 - `ingest` — vad som indexerats i LanceDB och med vilken text_mtime
 - `llm_corrections` — vilka sidor som LLM-korrigerats
@@ -212,6 +212,56 @@ Tesseract inte producerade någon text alls, och senare per sida via
 threshold om, och resultatet mergas tillbaka in i `generated/text/<stem>.txt`
 per dokument. Se `Per-sida OCR` nedan.
 
+**Surya 2-layout (`--surya-engine layout`).** Med `scripts/ocr.py --surya-engine layout`
+körs fallbacken och redo-steget med motorn `surya-layout` i stället för den
+radbaserade `surya` (standard är fortfarande `lines` tills piloten är klar).
+Motorn läser varje sida som layoutblock (rubriker, stycken, tabeller,
+sidhuvud, blanketter) via en fristående worker i en egen venv
+(`PALME_SURYA_PYTHON`, standard `~/.local/share/palmemordsarkivet/surya-venv/bin/python`,
+`surya-ocr==0.22.1`) och sparar per sida både ren text (`pdf_pages.text`),
+Markdown (`pdf_pages.markdown`, `NULL` för tom sida), blocklayouten
+(`layout_json`) och workerns identitet (`engine_identity`). Pixeldetekterade
+maskeringar läggs in som `[MASKAD]`-block, och PDF-textlagret skrivs per block.
+Workern startas en gång per PDF och bara om någon sida faktiskt ska OCR:as. Ett
+fel på en enskild sida loggas och sidan hoppas. Sidbilden skrivs till en
+tillfällig PNG som tas bort direkt efter läsningen, så layoutvägen lämnar inga
+`page-NNN.png` efter sig och återanvänder aldrig en gammal bild.
+
+Exitkoder från `ocr_pages.py --engine surya-layout`:
+
+- `0` — filen kördes klart (enstaka sidor kan ha hoppats och tas vid nästa körning).
+- `3` (`EXIT_SURYA_UNAVAILABLE`) — Surya-runtimen går inte att använda: workern
+  svarade `NEEDS_SURYA`, `NEEDS_LLAMA_CPP`, `NEEDS_SURYA_MODEL` eller
+  `SURYA_START_FAILED`, eller dog (`WORKER_DIED`/`PROTOCOL_MISMATCH`) tre sidor i
+  rad. Ett enstaka dödsfall hoppar bara sidan och workern startas om vid nästa.
+  `scripts/ocr.py` tolkar 3 som ett miljöfel: fallbacken och redo-steget loggar en
+  rad och stoppar steget utan att markera någon fil som misslyckad eller
+  blacklistad. Steget lämnar 3 vidare, och resten av körningens Surya-steg
+  (wpu-fallbacken och redo) hoppas med en loggrad som namnger steget som
+  stoppade — en trasig runtime kostar ett försök per körning, inte tre. Stegen
+  utan Surya (merge_wpu, maskeringar, normalisering, kvalitet) körs ändå, och
+  `scripts/ocr.py` avslutar med icke-noll exitkod.
+- `1` — övriga fel (saknad PDF, `--pages` som inte är heltal, saknad `--out-dir`).
+- `2` — argparse avvisade kommandoraden (okänd eller saknad flagga).
+- `130` — avbrutet med Ctrl-C; `143` — avbrutet med SIGTERM (128 + 15), som när
+  ett bakgrundsjobb avbryts.
+
+Sidor som hann sparas före ett fel slås ändå ihop till `text/<stem>.txt` och
+normaliseras; filen räknas fortfarande som misslyckad. En fil som Surya-fallbacken
+inte läste klart (exitkod 3 mitt i filen) är fortfarande fallback-kandidat vid nästa
+körning trots att textfilen har innehåll: kandidat är en Tesseract-misslyckad fil
+utan `surya_failed_at` som antingen saknar text eller vars PDF har fler sidor
+(räknat med pypdfium2) än den har rader i `pdf_pages`. Eftersom `ocr_pages.py`
+hoppar redan sparade sidor läses bara de som saknas. En oläsbar PDF räknas inte som
+ofullständig, och en fil helt utan `pdf_pages`-rader men med text (Tesseract-text)
+heller inte. I redo-steget behövs ingen motsvarighet: sidor som inte hann läsas
+saknas i `pdf_pages` och står därför kvar bland redo-sidorna nästa gång. Avbryts jobbet (SIGTERM)
+stängs workern och `llama-server` direkt i stället för att vänta på sidan.
+Saknas runtime när layout valts loggar `scripts/ocr.py` orsaken (tolken saknas,
+svarar inte på `--identity` inom 30 s, eller identiteten säger
+`llama-server unresolved`) och Surya-stegen hoppas; samma kontroll görs en gång
+för `--redo` ensam.
+
 #### Per-sida OCR (`scripts/ocr_pages.py`)
 
 Renderar PDF:en sida för sida och lagrar OCR-text + metadata i `pdf_pages`-
@@ -220,6 +270,7 @@ tabellen i state.db. Kombination med `.venv/bin/python scripts/quality.py --per-
 
 ```bash
 .venv/bin/python scripts/ocr_pages.py --in downloaded/files/foo.pdf --out-dir generated/text_pages --engine surya
+.venv/bin/python scripts/ocr_pages.py --in downloaded/files/foo.pdf --out-dir generated/text_pages --engine surya-layout --pages 3
 .venv/bin/python scripts/ocr_pages.py --help
 ```
 

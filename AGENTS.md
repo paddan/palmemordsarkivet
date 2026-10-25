@@ -44,6 +44,7 @@ src/
   quality.py           # OCR quality scoring (0–100 heuristics + optional hunspell)
   ocr_pages.py         # Per-page OCR pipeline (Tesseract/Surya) + redaktionsdetektering
   surya_worker.py      # Fristående Surya 2-worker (egen venv, ingen projektimport): en sida per JSON-rad, rå HTML-block ut, felkoder
+  surya_client.py      # Klient för Surya-workern: startar den i egen session, en sida per rad med tidsgräns, felkoder, --identity-probe
   surya_layout.py      # Ren layoutmodul: Suryas HTML-block → typade block, ren text, Markdown, JSON och [MASKAD]-infogning (parse_page)
   form_layout.py       # Blankettfält (bara när en mall i data/formular/ matchar), förhörsmetadata, repliker, avstavning, kryssrutemasker
   normalize_text.py    # Rule-based OCR normalization (ligatures, whitespace). Inkrementellt via state.db.
@@ -605,6 +606,37 @@ LLM:en returnerar noll kandidater, så omkörningar inte debiterar tomma sidor i
 **Redaktionsdetektering (ocr_pages.py)**: Hittar svarta maskeringsblock i bilder och infogar `[MASKAD]` i texten. På som standard; `--no-detect-redactions` stänger av. Idempotens spåras via `pdf_files.redaction_checked_at` i state.db — `.redact`-markörfilerna är borttagna. `scripts/detect_redactions.py` förfiltrerar listan baserat på databasen så filer som redan kollats spawnar inga subprocesser alls.
 
 **Per-dokument-cleanup (`scripts/ocr.py` + Surya)**: Efter att `ocr_pages.py` är klar kör `scripts/ocr.py` automatiskt `merge_pages.merge_one` + `normalize_text.process_file`. Idempotens och per-sida-text spåras i `pdf_pages`-tabellen i state.db — `page-NNN.txt`/`.json`-markörerna existerar inte längre. Surya-redo betraktar alla befintliga `pdf_pages`-rader som redan försökt per sida (även `engine='llm'`), annars kan `scripts/run_pipeline.py` starta Surya-processer som direkt hoppar alla sidor.
+
+**Motorn `surya-layout` (`ocr_pages.py` + `operations/ocr.py`)**: väljs i OCR-operationen med
+`--surya-engine layout` (standard `lines` = gamla `surya` tills piloten är klar; byt inte standarden
+utan den). `run_ocr_pages` öppnar `SuryaWorker` en gång per anrop och först när en sida verkligen
+ska OCR:as — sidor som redan finns i `pdf_pages` startar ingen worker (`surya_worker=` injicerar en
+falsk i tester). Tolkningen går alltid via `surya_layout.parse_page` (inte `parse_blocks` direkt),
+med sidbildens höjd och pixelmaskeringarna; `engine_identity` hämtas en gång per anrop.
+`SuryaPageError` hoppar sidan. En saknad runtime (`UNAVAILABLE_CODES`: `NEEDS_SURYA`,
+`NEEDS_LLAMA_CPP`, `NEEDS_SURYA_MODEL`, `SURYA_START_FAILED`) avbryter resten av filen med
+**exitkod 3** (`EXIT_SURYA_UNAVAILABLE`); `WORKER_DIED`/`PROTOCOL_MISMATCH` hoppar bara sidan
+(klienten startar om workern vid nästa sida) tills tre dödsfall i rad avbryter filen, också med
+exitkod 3. Exitkod 3 är ett miljöfel: `run_surya_fallback` och `_run_redo` loggar en rad och stoppar
+steget **utan** `mark_surya_failed`/blacklist — annars blir en saknad runtime permanent felstatus per
+fil. Sidor som hann sparas före ett fel slås ändå ihop och normaliseras (antal rader i `pdf_pages`
+före/efter via `count_pages_for_stem`); filen räknas fortfarande som misslyckad när rc ≠ 0.
+Båda stegen returnerar 3 vidare, och `run_ocr` hoppar då resten av körningens Surya-steg
+(wpu-fallback, redo) med en loggrad — icke-Surya-stegen körs ändå och slutkoden är icke-noll.
+Fallback-kandidat är också en fil vars PDF (pypdfium2) har fler sidor än `pdf_pages`-rader (> 0),
+även om texten har innehåll; annars blir en fil som stoppades på exitkod 3 tyst ofullständig.
+Redo behöver ingen motsvarighet — olästa sidor saknar `page_exists` och listas igen.
+Layoutvägen skriver sidbilden till en tillfällig PNG som tas bort direkt efter läsningen (även vid
+fel) och återanvänder aldrig en befintlig `page-NNN.png`. `ocr_pages.main()` installerar en
+SIGTERM-hanterare som höjer `SystemExit`, och `SuryaWorker.__exit__` stänger bara graciöst när
+inget undantag är på väg — annars SIGTERM→SIGKILL mot workerns grupp direkt, så ett avbrutet jobb
+inte lämnar worker och `llama-server` kvar (de ligger i en egen session och nås inte av jobbets
+egen signal). Ta inte bort hanteraren. PDF-textlagret skrivs per
+block; ett block som inte ryms loggas och stoppar inte resten (`update_pdf_text_layer(on_failure=)`),
+medan den radbaserade vägen fortfarande avbryter. Tillgängligheten kontrolleras en gång per körning
+(även för `--redo` ensam) med `surya_layout_available()`, som också säger nej när identiteten
+innehåller `llama-server unresolved`; `--identity`-proben körs i egen session med 30 s tidsgräns och
+dödar hela sin processgrupp vid tidsgräns. En saknad runtime loggas med orsak.
 
 **Pipeline-resume (`scripts/run_pipeline.py`)**: OCR- och ingest-stegen körs alltid, även när download inte hittade nya PDF:er. Stegen är idempotenta och detta gör att en tidigare avbruten körning kan slutföras.
 

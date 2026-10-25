@@ -18,7 +18,9 @@ Sammansatt ``<out_dir>/<stem>.txt`` skrivs på slutet, sidor separerade med ``\f
 Engines:
     tesseract  — subprocess till `tesseract`
     vision     — subprocess till `ocrit` (macOS Vision Framework)
-    surya      — Surya-modeller via helpers i den här modulen
+    surya      — Surya-modeller (radbaserad, 0.17) via helpers i den här modulen
+    surya-layout — Surya 2 i en egen venv (``surya_client.SuryaWorker``): layoutblock
+                 → ren text, Markdown och blocklayout (``surya_layout.parse_page``)
 
 Kör:
     python ocr_pages.py --in path/to/foo.pdf --out-dir text_pages
@@ -28,13 +30,18 @@ Kör:
 from __future__ import annotations
 
 import argparse
+import contextlib
+import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+from collections.abc import Callable
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -46,6 +53,17 @@ try:
 except Exception:  # pragma: no cover
     def score_text(text: str, use_hunspell: bool = False) -> dict:
         return {"chars": len(text), "score": 0.0}
+
+from surya_client import (  # noqa: E402 — ren klient, ingen Surya-import
+    EXIT_SURYA_UNAVAILABLE,
+    UNAVAILABLE_CODES,
+    SuryaPageError,
+    SuryaUnavailable,
+)
+
+# Så många dödsfall (WORKER_DIED/PROTOCOL_MISMATCH) i rad tål en fil innan den
+# avbryts med EXIT_SURYA_UNAVAILABLE; däremellan startas workern om per sida.
+MAX_CONSECUTIVE_WORKER_DEATHS = 3
 
 try:
     from errors_log import log_error
@@ -133,8 +151,67 @@ def ocr_surya_lines(image) -> tuple[str, list[dict]]:
     return "\n".join(line["text"] for line in lines), lines
 
 
+def ocr_surya_layout(
+    worker,
+    image,
+    work_dir: Path,
+    pdf_stem: str,
+    page: int,
+    redactions: list[tuple[int, int]],
+    trace: dict[str, Any] | None = None,
+) -> tuple[str, str | None, str, list[dict]]:
+    """Läs en sida med Surya 2-workern och tolka blocken.
+
+    Sidbilden skrivs till en tillfällig PNG i ``work_dir``, skickas som absolut
+    sökväg och tas bort direkt efter läsningen, även vid fel — en befintlig
+    ``page-NNN.png`` (kanske i annan dpi) återanvänds aldrig. Returnerar ``(text, markdown, layout_json, pdf_lines)``:
+    ``markdown`` är ``None`` när sidan saknar Markdown-innehåll (tom sida, bara
+    figur eller bara sidfot), och ``pdf_lines`` har ett ``{"text", "bbox"}`` per
+    block med en verklig ruta och text, för ``update_pdf_text_layer``.
+    ``[MASKAD]``-block som pixeldetektorn lagt in saknar bredd och tas inte med i
+    textlagret. ``trace`` fylls av ``parse_page`` med en textfri sammanfattning
+    (bl.a. ``degraded``). Höjer ``SuryaUnavailable``/``SuryaPageError`` orörda.
+    """
+    import surya_layout  # lokalt: ren modul, men behövs bara för den här motorn
+
+    work_dir.mkdir(parents=True, exist_ok=True)
+    fd, name = tempfile.mkstemp(prefix=f".layout-{page:03d}-", suffix=".png", dir=work_dir)
+    os.close(fd)
+    png_path = Path(name)
+    try:
+        image.save(str(png_path), format="PNG")
+        raw = worker.read_page(pdf_stem, page, png_path.resolve())
+    finally:
+        png_path.unlink(missing_ok=True)
+    blocks, _degraded = surya_layout.parse_page(
+        raw.blocks, image=image, page_height=image.height,
+        redactions=redactions, trace=trace,
+    )
+    text = surya_layout.page_text(blocks)
+    markdown = surya_layout.page_markdown(blocks) if text else ""
+    pdf_lines: list[dict] = []
+    for block in blocks:
+        block_text = surya_layout.page_text([block])
+        if block.bbox is None or not block_text.strip():
+            continue
+        x0, y0, x1, y1 = block.bbox
+        if x1 <= x0 or y1 <= y0:
+            continue
+        pdf_lines.append({"text": block_text, "bbox": [x0, y0, x1, y1]})
+    return (
+        text,
+        markdown if markdown.strip() else None,
+        surya_layout.blocks_to_json(blocks),
+        pdf_lines,
+    )
+
+
 def update_pdf_text_layer(
-    src_pdf: Path, dst_pdf: Path, page_lines: dict[int, list[dict]], dpi: int
+    src_pdf: Path,
+    dst_pdf: Path,
+    page_lines: dict[int, list[dict]],
+    dpi: int,
+    on_failure: Callable[[int, int], None] | None = None,
 ) -> int:
     """Skriv ny PDF där angivna sidor får Surya-rader som osynligt textlager.
 
@@ -142,6 +219,11 @@ def update_pdf_text_layer(
     och Surya-textraderna skrivs in via insert_textbox med render_mode=3
     (osynlig). Övriga sidor lämnas orörda. Skrivs till dst_pdf (kan vara
     samma som src_pdf — vi använder en tempfil).
+
+    En post kan vara flerradig (ett layoutblock): teckenstorleken räknas då per
+    rad i rutan. Ryms en post inte ens efter fem halveringar avbryts hela
+    patchen, utom när ``on_failure`` ges — då anropas den med ``(sida, index)``
+    och resten av posterna skrivs ändå (layoutvägen).
 
     Returnerar antal sidor som faktiskt patchades.
     """
@@ -162,12 +244,13 @@ def update_pdf_text_layer(
             page.apply_redactions(images=0, graphics=0)
 
             # Lägg in Surya-text osynligt
-            for line in lines:
+            for index, line in enumerate(lines):
                 x0, y0, x1, y1 = line["bbox"]
                 rect = pymupdf.Rect(
                     x0 * scale, y0 * scale, x1 * scale, y1 * scale
                 )
-                fontsize = max(1.0, (y1 - y0) * scale * 0.85)
+                n_lines = line["text"].count("\n") + 1
+                fontsize = max(1.0, (y1 - y0) * scale * 0.85 / n_lines)
                 for _ in range(5):
                     rc = page.insert_textbox(
                         rect, line["text"],
@@ -177,7 +260,9 @@ def update_pdf_text_layer(
                     if rc >= 0:
                         break
                     fontsize = max(1.0, fontsize * 0.5)
-                if rc < 0:
+                if rc < 0 and on_failure is not None:
+                    on_failure(page_num, index)
+                elif rc < 0:
                     raise RuntimeError(
                         f"kunde inte infoga textrad på sida {page_num}: {line['text'][:80]!r}"
                     )
@@ -439,8 +524,18 @@ def run_ocr_pages(
     no_detect_redactions: bool,
     txt_dir: str | None,
     context=None,
+    surya_worker=None,
 ) -> int:
-    """OCR:a en PDF per sida. Returnerar exitkod."""
+    """OCR:a en PDF per sida. Returnerar exitkod.
+
+    ``surya_worker`` ersätter ``SuryaWorker`` för motorn ``surya-layout`` (tester);
+    ``None`` skapar en riktig worker, en gång per anrop och bara om någon sida
+    faktiskt ska OCR:as. Saknas Surya-runtimen (``UNAVAILABLE_CODES``), eller dör
+    workern ``MAX_CONSECUTIVE_WORKER_DEATHS`` gånger i rad, avbryts resten av filen
+    och exitkoden blir ``EXIT_SURYA_UNAVAILABLE`` (3) — ett miljöfel som anroparen
+    inte ska bokföra på filen. Ett enstaka dödsfall hoppar bara sidan; klienten
+    startar workern igen vid nästa sida.
+    """
     ctx = _ctx(context)
     pdf = Path(inp)
     if not pdf.exists():
@@ -473,81 +568,146 @@ def run_ocr_pages(
             return 1
 
     page_lines: dict[int, list[dict]] = {}
-    want_pdf_patch = engine == "surya" and bool(ocr_dir) and not no_update_pdf
+    want_pdf_patch = engine in ("surya", "surya-layout") and bool(ocr_dir) and not no_update_pdf
     n_total = 0
     n_skipped = 0
     n_done = 0
+    skipped_pages: list[int] = []
+    aborted = False
+    worker_deaths = 0
     conn = state_db.connect()
     state_db.init_schema(conn)
     source = state_db.source_for_path(pdf)
     state_db.upsert_pdf_file(
         conn, pdf_stem=pdf.stem, source=source, pdf_path=str(pdf),
     )
-    for page_num, image in render_pages(pdf, dpi):
-        ctx.check_cancelled()
-        n_total += 1
-        if only_pages is not None and page_num not in only_pages:
-            continue
+    # surya-layout: workern (modell + llama-server) startas först när en sida
+    # verkligen ska OCR:as, och stängs (hela processgruppen) när loopen lämnas.
+    layout_worker = None
+    identity: str | None = None
+    with contextlib.ExitStack() as stack:
+        for page_num, image in render_pages(pdf, dpi):
+            ctx.check_cancelled()
+            n_total += 1
+            if only_pages is not None and page_num not in only_pages:
+                continue
 
-        png_path = stem_dir / f"page-{page_num:03d}.png"
+            png_path = stem_dir / f"page-{page_num:03d}.png"
 
-        if state_db.page_exists(conn, pdf.stem, page_num):
-            n_skipped += 1
-            continue
+            if state_db.page_exists(conn, pdf.stem, page_num):
+                n_skipped += 1
+                skipped_pages.append(page_num)
+                continue
 
-        redaction_blocks: list[tuple[int, int]] = []
-        if not no_detect_redactions:
-            redaction_blocks = detect_redactions_image(image)
+            redaction_blocks: list[tuple[int, int]] = []
+            if not no_detect_redactions:
+                redaction_blocks = detect_redactions_image(image)
 
-        try:
-            if engine == "surya":
-                if want_pdf_patch:
-                    text, lines = ocr_surya_lines(image)
-                    page_lines[page_num] = lines
-                    if redaction_blocks:
-                        text = _merge_redaction_markers(
-                            text, redaction_blocks, image.height, line_bboxes=lines
+            markdown: str | None = None
+            layout_json: str | None = None
+            try:
+                if engine == "surya-layout":
+                    if layout_worker is None:
+                        layout_worker = _open_layout_worker(stack, surya_worker)
+                        identity = layout_worker.identity()
+                        ctx.log(
+                            f"  [{pdf.stem}] surya-layout: motoridentitet "
+                            f"{identity or 'okänd (--identity svarade inte)'}",
+                            level="debug",
                         )
+                    trace: dict[str, Any] = {}
+                    text, markdown, layout_json, lines = ocr_surya_layout(
+                        layout_worker, image, stem_dir, pdf.stem, page_num,
+                        redaction_blocks, trace=trace,
+                    )
+                    worker_deaths = 0
+                    _log_layout_trace(ctx, pdf.stem, page_num, trace, markdown)
+                    if want_pdf_patch:
+                        page_lines[page_num] = lines
+                elif engine == "surya":
+                    if want_pdf_patch:
+                        text, lines = ocr_surya_lines(image)
+                        page_lines[page_num] = lines
+                        if redaction_blocks:
+                            text = _merge_redaction_markers(
+                                text, redaction_blocks, image.height, line_bboxes=lines
+                            )
+                    else:
+                        text = ocr_surya(image)
+                        if redaction_blocks:
+                            text = _merge_redaction_markers(
+                                text, redaction_blocks, image.height
+                            )
                 else:
-                    text = ocr_surya(image)
+                    if not png_path.exists():
+                        image.save(str(png_path))
+                    if engine == "vision":
+                        text = ocr_vision(png_path)
+                    else:
+                        text = ocr_tesseract(png_path, langs)
                     if redaction_blocks:
                         text = _merge_redaction_markers(
                             text, redaction_blocks, image.height
                         )
-            else:
-                if not png_path.exists():
-                    image.save(str(png_path))
-                if engine == "vision":
-                    text = ocr_vision(png_path)
-                else:
-                    text = ocr_tesseract(png_path, langs)
-                if redaction_blocks:
-                    text = _merge_redaction_markers(
-                        text, redaction_blocks, image.height
-                    )
-        except Exception as e:  # noqa: BLE001
-            ctx.log(f"  [{pdf.stem} p{page_num}] FEL: {e}", level="error")
-            log_error("ocr_pages", f"{pdf.name}#p{page_num}", str(e))
-            continue
+            except SuryaUnavailable as e:
+                log_error("ocr_pages", f"{pdf.name}#p{page_num}", e.code)
+                if e.code not in UNAVAILABLE_CODES:
+                    worker_deaths += 1
+                    if worker_deaths < MAX_CONSECUTIVE_WORKER_DEATHS:
+                        ctx.log(
+                            f"  [{pdf.stem} p{page_num}] Surya-workern dog ({e.code}, "
+                            f"{worker_deaths} i rad) — sidan hoppas, workern startas om "
+                            f"vid nästa sida: {e}",
+                            level="error",
+                        )
+                        continue
+                ctx.log(
+                    f"  [{pdf.stem} p{page_num}] Surya-workern går inte att använda "
+                    f"({e.code}"
+                    + (f", {worker_deaths} dödsfall i rad" if worker_deaths else "")
+                    + f") — resten av filen hoppas (exitkod {EXIT_SURYA_UNAVAILABLE}): {e}",
+                    level="error",
+                )
+                aborted = True
+                break
+            except SuryaPageError as e:
+                worker_deaths = 0
+                ctx.log(f"  [{pdf.stem} p{page_num}] Surya kunde inte läsa sidan ({e.code}): {e}",
+                        level="error")
+                log_error("ocr_pages", f"{pdf.name}#p{page_num}", e.code)
+                continue
+            except Exception as e:  # noqa: BLE001
+                ctx.log(f"  [{pdf.stem} p{page_num}] FEL: {e}", level="error")
+                log_error("ocr_pages", f"{pdf.name}#p{page_num}", str(e))
+                continue
 
-        try:
-            scored = score_text(text, use_hunspell=False)
-        except Exception:
-            scored = {"chars": len(text), "score": 0.0}
+            try:
+                scored = score_text(text, use_hunspell=False)
+            except Exception:
+                scored = {"chars": len(text), "score": 0.0}
 
-        redact_suffix = f" [{len(redaction_blocks)} mask]" if redaction_blocks else ""
-        state_db.record_page(
-            conn, pdf_stem=pdf.stem, page_num=page_num,
-            engine=engine, text=text, score=scored.get("score"),
+            redact_suffix = f" [{len(redaction_blocks)} mask]" if redaction_blocks else ""
+            state_db.record_page(
+                conn, pdf_stem=pdf.stem, page_num=page_num,
+                engine=engine, text=text, score=scored.get("score"),
+                markdown=markdown, layout_json=layout_json,
+                engine_identity=identity if engine == "surya-layout" else None,
+            )
+            n_done += 1
+            ctx.log(f"  [{pdf.stem} p{page_num:03d}] {len(text):5d} tecken "
+                    f"score={scored.get('score', 0)}{redact_suffix}")
+
+    if skipped_pages:
+        ctx.log(
+            f"  [{pdf.stem}] {len(skipped_pages)} sidor hoppade — redan i pdf_pages "
+            f"(t.ex. {skipped_pages[:10]})",
+            level="debug",
         )
-        n_done += 1
-        ctx.log(f"  [{pdf.stem} p{page_num:03d}] {len(text):5d} tecken "
-                f"score={scored.get('score', 0)}{redact_suffix}")
-
     ctx.log(f"Klart {pdf.stem}: {n_done} OCR:ade, {n_skipped} hoppade, "
             f"{n_total} sidor totalt.")
 
-    if only_pages and n_done == 0 and n_skipped == 0:
+    # Vid avbrott är n_total ofullständigt — markera då inga sidor som "saknade".
+    if only_pages and n_done == 0 and n_skipped == 0 and not aborted:
         missing = only_pages - set(range(1, n_total + 1))
         for p in missing:
             if not state_db.page_exists(conn, pdf.stem, p):
@@ -568,16 +728,61 @@ def run_ocr_pages(
             shutil.copy2(pdf, ocr_pdf)
             ctx.log(f"  [pdf-patch] kopierade {pdf.name} → {ocr_pdf.parent.name}/")
         if ocr_pdf.exists():
+            on_failure = None
+            if engine == "surya-layout":
+                def on_failure(page: int, index: int) -> None:
+                    # Ett block som inte ryms får inte stoppa resten av patchen.
+                    ctx.log(f"  [pdf-patch] {pdf.stem} p{page}: block {index} rymdes inte "
+                            "i sin ruta och saknas i textlagret", level="warning")
+                    log_error("ocr_pages.pdf_patch", f"{pdf.name}#p{page}",
+                              f"block {index} rymdes inte i textlagret")
             try:
-                n = update_pdf_text_layer(ocr_pdf, ocr_pdf, page_lines, dpi)
+                n = update_pdf_text_layer(ocr_pdf, ocr_pdf, page_lines, dpi,
+                                          on_failure=on_failure)
                 ctx.log(f"  [pdf-patch] {ocr_pdf.name}: patchade {n} sidor")
             except Exception as e:  # noqa: BLE001
                 ctx.log(f"  [pdf-patch] FEL: {e}", level="error")
                 log_error("ocr_pages.pdf_patch", pdf.name, str(e))
-    return 0
+    return EXIT_SURYA_UNAVAILABLE if aborted else 0
+
+
+def _open_layout_worker(stack: contextlib.ExitStack, injected):
+    """Den injicerade workern (tester) eller en ny ``SuryaWorker`` som stängs av ``stack``."""
+    if injected is not None:
+        return injected
+    from surya_client import SuryaWorker
+
+    return stack.enter_context(SuryaWorker())
+
+
+def _log_layout_trace(ctx, stem: str, page_num: int, trace: dict[str, Any],
+                      markdown: str | None) -> None:
+    """Logga layouttolkningens textfria spår (debug) och degraderad struktur (varning)."""
+    summary = json.dumps(trace, ensure_ascii=False, sort_keys=True, default=str)
+    ctx.log(f"  [{stem} p{page_num}] layout-spår: {summary}", level="debug")
+    if markdown is None:
+        ctx.log(f"  [{stem} p{page_num}] ingen Markdown: sidan saknar innehåll "
+                "utöver sidfot/figur", level="debug")
+    if trace.get("degraded"):
+        ctx.log(f"  [{stem} p{page_num}] degraderad struktur: minst ett block "
+                "kunde inte tolkas enligt sin etikett och sparades som ren text",
+                level="warning")
+
+
+def _raise_system_exit(signum: int, frame: object) -> None:
+    """SIGTERM → ``SystemExit`` så att ``ExitStack`` stänger Surya-workerns grupp."""
+    raise SystemExit(128 + signum)
+
+
+def _install_sigterm_handler() -> None:
+    """Ett avbrutet jobb skickar SIGTERM; utan hanterare dör processen utan att
+    köra sina kontexthanterare och workern (egen session) och llama-server blir
+    kvar. Återställs inte — det här är en CLI-process."""
+    signal.signal(signal.SIGTERM, _raise_system_exit)
 
 
 def main() -> int:
+    _install_sigterm_handler()
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--in", dest="inp",
@@ -589,8 +794,10 @@ def main() -> int:
                     help="output-katalog (env: OUT_DIR); krävs ej för --engine detect-only")
     ap.add_argument("--engine",
                     default=os.environ.get("ENGINE", "tesseract"),
-                    choices=["tesseract", "vision", "surya", "detect-only"],
-                    help="OCR-motor (default: tesseract). detect-only: bara redaktionsdetektering, ingen om-OCR")
+                    choices=["tesseract", "vision", "surya", "surya-layout", "detect-only"],
+                    help="OCR-motor (default: tesseract). surya-layout: Surya 2-layout med Markdown "
+                         "(kräver separat venv, PALME_SURYA_PYTHON). detect-only: bara "
+                         "redaktionsdetektering, ingen om-OCR")
     ap.add_argument("--langs",
                     default=os.environ.get("LANGS", "swe"),
                     help="tesseract-språk (default: swe)")

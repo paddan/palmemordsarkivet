@@ -385,19 +385,32 @@ def record_page(
     conn: sqlite3.Connection, *,
     pdf_stem: str, page_num: int, engine: str,
     text: str | None, score: float | None,
+    markdown: str | None = None,
+    layout_json: str | None = None,
+    engine_identity: str | None = None,
 ) -> None:
-    """Skriv en OCR-sida (UPSERT på pdf_stem+page_num). Ersätter page-NNN.json."""
+    """Skriv en OCR-sida (UPSERT på pdf_stem+page_num). Ersätter page-NNN.json.
+
+    Markdown, layout och motoridentitet skrivs alltid: en omkörning utan dem
+    (t.ex. Tesseract efter Surya) nollar medvetet gammal Markdown så den inte
+    blir kvar och motsäger den nya texten.
+    """
     conn.execute(
         """
-        INSERT INTO pdf_pages(pdf_stem, page_num, engine, text, score, processed_at)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO pdf_pages(pdf_stem, page_num, engine, text, score, processed_at,
+                              markdown, layout_json, engine_identity)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(pdf_stem, page_num) DO UPDATE SET
             engine       = excluded.engine,
             text         = excluded.text,
             score        = excluded.score,
-            processed_at = excluded.processed_at
+            processed_at = excluded.processed_at,
+            markdown        = excluded.markdown,
+            layout_json     = excluded.layout_json,
+            engine_identity = excluded.engine_identity
         """,
-        (pdf_stem, page_num, engine, text, score, now()),
+        (pdf_stem, page_num, engine, text, score, now(),
+         markdown, layout_json, engine_identity),
     )
     conn.commit()
 
@@ -410,6 +423,14 @@ def page_exists(conn: sqlite3.Connection, pdf_stem: str, page_num: int) -> bool:
     ).fetchone() is not None
 
 
+def count_pages_for_stem(conn: sqlite3.Connection, pdf_stem: str) -> int:
+    """Antal sidor för en stem i pdf_pages (före/efter en körning: sparades nya sidor?)."""
+    row = conn.execute(
+        "SELECT COUNT(*) FROM pdf_pages WHERE pdf_stem=?", (pdf_stem,)
+    ).fetchone()
+    return int(row[0])
+
+
 def get_pages_for_stem(
     conn: sqlite3.Connection, pdf_stem: str
 ) -> list[sqlite3.Row]:
@@ -418,6 +439,20 @@ def get_pages_for_stem(
         "SELECT * FROM pdf_pages WHERE pdf_stem=? ORDER BY page_num",
         (pdf_stem,),
     ))
+
+
+def get_page_markdown_map(
+    conn: sqlite3.Connection, pdf_stem: str
+) -> dict[int, tuple[str, str]]:
+    """``page_num`` → ``(text, markdown)`` för sidor som har Markdown."""
+    return {
+        row["page_num"]: (row["text"] or "", row["markdown"])
+        for row in conn.execute(
+            "SELECT page_num, text, markdown FROM pdf_pages "
+            "WHERE pdf_stem=? AND markdown IS NOT NULL ORDER BY page_num",
+            (pdf_stem,),
+        )
+    }
 
 
 def list_page_texts_for_stem(

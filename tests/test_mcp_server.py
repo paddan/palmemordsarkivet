@@ -11,10 +11,23 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def _full_webbsoksbudget() -> None:
+def _isolerad_llm_config(tmp_path, monkeypatch) -> None:
+    """Testerna får aldrig läsa (eller skriva) utvecklarens riktiga
+    generated/llm_config.json — t.ex. ett sparat `web_search_default` ändrar
+    vilken sökprofil som väljs. Peka på en tom temp-fil: då gäller
+    standardkonfigurationen, och tester som själva sparar profiler hamnar i
+    temp-katalogen."""
+    import config
+
+    monkeypatch.setattr(config, "CONFIG_FILE", tmp_path / "isolerad_llm_config.json")
+
+
+@pytest.fixture(autouse=True)
+def _full_webbsoksbudget(_isolerad_llm_config) -> None:
     """Budgeträknaren är modulstate (per fråga i drift, nollställs av
     Utredning-sidan). Testerna ska starta med full budget i stället för att ärva
-    varandras förbrukning."""
+    varandras förbrukning. Beror uttryckligen på `_isolerad_llm_config`: autouse-
+    fixtures körs i namnordning, och profilvalet läses ur konfigen redan här."""
     mcp_server.set_web_search_budget(mcp_server.WEB_SEARCH_BUDGET_MAX)
     mcp_server.set_web_search_provider(None)
     mcp_server.set_web_search_profile(None)

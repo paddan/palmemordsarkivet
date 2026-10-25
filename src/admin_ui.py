@@ -183,6 +183,7 @@ OPERATION_HELP: dict[str, SectionHelp] = {
             ("retry_failed", "Ger tidigare misslyckade filer ett nytt försök."),
             ("mode", "Vad redo-steget arbetar på: hela filer eller enbart sidor under tröskeln."),
             ("source", "Filer med inbäddat textlager, OCR:ade filer, eller alla."),
+            ("surya_engine", "lines är den gamla radläsningen, layout läser rubriker, tabeller och sidhuvud och sparar även Markdown (kräver separat Surya 2-installation)."),
             ("jobs", "Hur många filer som bearbetas samtidigt."),
             ("per_file_jobs", "Antal trådar varje OCR-körning får."),
             ("threshold", "Sidor under denna poäng OCR:as om med Surya."),
@@ -204,7 +205,7 @@ OPERATION_HELP: dict[str, SectionHelp] = {
     "ocr-pages": SectionHelp(
         "OCR:ar en enskild PDF sida för sida med vald motor.",
         (
-            ("engine", "tesseract är snabbast, surya bäst på svåra sidor, vision använder en bildmodell och detect-only letar bara maskeringar."),
+            ("engine", "tesseract är snabbast, surya bäst på svåra sidor, surya-layout läser även rubriker och tabeller och sparar Markdown (kräver separat Surya 2-installation), vision använder en bildmodell och detect-only letar bara maskeringar."),
             ("no_update_pdf", "Behåller OCR-PDF:en orörd."),
             ("no_detect_redactions", "Söker inte efter svarta maskeringsblock."),
             ("langs", "Språkkod för Tesseract, t.ex. swe."),

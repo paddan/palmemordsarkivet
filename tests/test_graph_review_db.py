@@ -79,7 +79,7 @@ def test_runs_json_roundtrip_and_newest_first(conn):
 
 
 def test_page_text_is_current_page_and_document_specific(conn):
-    conn.executemany('INSERT INTO pdf_pages VALUES(?,?,?,?,?,?)', [
+    conn.executemany('INSERT INTO pdf_pages(pdf_stem, page_num, engine, text, score, processed_at) VALUES(?,?,?,?,?,?)', [
         ('doc', 1, 'llm', 'Korrigerad text', 95, 'now'),
         ('other', 1, 'tesseract', 'Annan text', 80, 'now')])
     assert db.get_graph_review_page(conn, 'doc', 1) == 'Korrigerad text'
