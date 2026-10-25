@@ -1,0 +1,463 @@
+{
+ "protocol": 2,
+ "type": "page",
+ "unitId": "form-v2-a",
+ "ordinal": 2,
+ "page": 1,
+ "status": "read",
+ "text": "01 Polismyndighet*\nRPS\n02 Arbetsenhet*\nRKP-A2\n03 Upprättat(d) av*\ntelefon*\nKrinsp Sören Morberg\n09 Brott med vilket uppgiften hör samman*\nMordet på statsminister Olof Palme\n10 | sak\nSPANINGSUPPSLAG\ni grövre brottmål\nSid nr\n07 Avsnitt\n08 Löpande nr\nEH 4879-1\n04\nFortsätt-\nningsblad\nUppgiftslämnare (efternamn och förnamn)\n05\nFörhörsprot\nPromemona\n1993-06-16 EÅ\nPhond\nProtokoll fört vid förhör med polis-\ninspektören Avsan, Anti Harald, f.d.\n580108-1034, [REDACTED]\n[REDACTED] ).\n[REDACTED]\n[REDACTED]\nStockholm, [REDACTED].\nFörhöret hållet onsdagen den 16 juni\n1993, i RKP-A2:s lokaler med början\nklockan 10.30.\nFörhörsledare: krinsp Sören Morberg.\nFörhörsvittne: krinsp Egon Berger.\nAvsan underrättas att han upplysningsvis skall höras i Palmeutredningen, med\nanledning av inkomma uppgifter.\nAvsan uppger att han är född i Sverige 1958 och att hans föräldrar härstammar\nfrån Estland. Han vill minnas att föräldrarna och även han blev svenska med-\nborgare 1967, men han är inte helt säker på den uppgiften. Avsan kan estniska\noch han förklarar att man kan göra sig förstådd om man talar med en finländare\nmed hjälp av estniska, men det går inte att hålla en flytade dialog.\n1986 så bodde Avsan på [REDACTED] där han bott sedan september månad 1983.\nHan har för övrigt själv varit med och byggt sitt hus. Vid den här tidpunkten\nvar han gift och hade två barn, fem och två år gamla. Idag har han fyra barn.\nTjänstemässigt så tjänstgjorde Avsan på piketgruppen, där han haft ett svaromål\nvill han minnas, sedan den 1 maj 1985. Han ingick i piketstyrkan och var inte\npiketbefälhavare. På fråga om han tjänstgjorde den 28 februari 1986, så är han\nosäker på det. Det har i så fall inte varit under kvällstid då pådraget kring\nmordet skedde, utan i så fall tidigare under dagen. Avsan fick veta att Olof\nRPS-4637-2\nEx 2: Till spaningschefens pärm (i nr-följd inom avsnitt)\n57-93-HCD\n76",
+ "model": "surya-ocr 0.22.1 backend llamacpp model datalab-to/surya-ocr-2 surya-2.gguf 6a3a4c30e5e74446d4f8b6afd05b2f2da970f470:1266400864 surya-2-mmproj.gguf 6a3a4c30e5e74446d4f8b6afd05b2f2da970f470:204986688",
+ "blocks": [
+  {
+   "text": "01 Polismyndighet*",
+   "html": "01 Polismyndighet*",
+   "bbox": [
+    305,
+    228,
+    543,
+    267
+   ],
+   "confidence": 0.9655717867539667,
+   "label": "PageHeader",
+   "readingOrder": 0
+  },
+  {
+   "text": "RPS",
+   "html": "RPS",
+   "bbox": [
+    387,
+    274,
+    486,
+    319
+   ],
+   "confidence": 0.9655717867539667,
+   "label": "PageHeader",
+   "readingOrder": 1
+  },
+  {
+   "text": "02 Arbetsenhet*",
+   "html": "02 Arbetsenhet*",
+   "bbox": [
+    305,
+    326,
+    506,
+    361
+   ],
+   "confidence": 0.9655717867539667,
+   "label": "PageHeader",
+   "readingOrder": 2
+  },
+  {
+   "text": "RKP-A2",
+   "html": "RKP-A2",
+   "bbox": [
+    397,
+    368,
+    558,
+    414
+   ],
+   "confidence": 0.9655717867539667,
+   "label": "PageHeader",
+   "readingOrder": 3
+  },
+  {
+   "text": "03 Upprättat(d) av*",
+   "html": "03 Upprättat(d) av*",
+   "bbox": [
+    305,
+    421,
+    538,
+    460
+   ],
+   "confidence": 0.9655717867539667,
+   "label": "PageHeader",
+   "readingOrder": 4
+  },
+  {
+   "text": "telefon*",
+   "html": "telefon*",
+   "bbox": [
+    831,
+    421,
+    930,
+    456
+   ],
+   "confidence": 0.9655717867539667,
+   "label": "PageHeader",
+   "readingOrder": 5
+  },
+  {
+   "text": "Krinsp Sören Morberg",
+   "html": "Krinsp Sören Morberg",
+   "bbox": [
+    397,
+    467,
+    898,
+    519
+   ],
+   "confidence": 0.9655717867539667,
+   "label": "PageHeader",
+   "readingOrder": 6
+  },
+  {
+   "text": "09 Brott med vilket uppgiften hör samman*",
+   "html": "09 Brott med vilket uppgiften hör samman*",
+   "bbox": [
+    305,
+    516,
+    818,
+    554
+   ],
+   "confidence": 0.9655717867539667,
+   "label": "PageHeader",
+   "readingOrder": 7
+  },
+  {
+   "text": "Mordet på statsminister Olof Palme",
+   "html": "Mordet på statsminister Olof Palme",
+   "bbox": [
+    397,
+    558,
+    1235,
+    611
+   ],
+   "confidence": 0.9655717867539667,
+   "label": "PageHeader",
+   "readingOrder": 8
+  },
+  {
+   "text": "10 | sak",
+   "html": "10 | sak",
+   "bbox": [
+    305,
+    618,
+    432,
+    653
+   ],
+   "confidence": 0.9655717867539667,
+   "label": "PageHeader",
+   "readingOrder": 9
+  },
+  {
+   "text": "SPANINGSUPPSLAG",
+   "html": "SPANINGSUPPSLAG",
+   "bbox": [
+    1352,
+    235,
+    1803,
+    288
+   ],
+   "confidence": 0.9655717867539667,
+   "label": "SectionHeader",
+   "readingOrder": 10
+  },
+  {
+   "text": "i grövre brottmål",
+   "html": "i grövre brottmål",
+   "bbox": [
+    1352,
+    295,
+    1622,
+    337
+   ],
+   "confidence": 0.9655717867539667,
+   "label": "Text",
+   "readingOrder": 11
+  },
+  {
+   "text": "Sid nr",
+   "html": "Sid nr",
+   "bbox": [
+    2155,
+    228,
+    2249,
+    263
+   ],
+   "confidence": 0.9655717867539667,
+   "label": "PageHeader",
+   "readingOrder": 12
+  },
+  {
+   "text": "07 Avsnitt",
+   "html": "07 Avsnitt",
+   "bbox": [
+    1922,
+    305,
+    2058,
+    340
+   ],
+   "confidence": 0.9655717867539667,
+   "label": "PageHeader",
+   "readingOrder": 13
+  },
+  {
+   "text": "08 Löpande nr",
+   "html": "08 Löpande nr",
+   "bbox": [
+    2155,
+    305,
+    2351,
+    340
+   ],
+   "confidence": 0.9655717867539667,
+   "label": "PageHeader",
+   "readingOrder": 14
+  },
+  {
+   "text": "EH 4879-1",
+   "html": "EH 4879-1",
+   "bbox": [
+    1947,
+    330,
+    2393,
+    414
+   ],
+   "confidence": 0.9655717867539667,
+   "label": "PageHeader",
+   "readingOrder": 15
+  },
+  {
+   "text": "04\nFortsätt-\nningsblad\nUppgiftslämnare (efternamn och förnamn)\n05\nFörhörsprot\nPromemona\n1993-06-16 EÅ",
+   "html": "<table border=\"1\">\n<tr>\n<td>04</td>\n<td>Fortsätt-<br/>ningsblad</td>\n<td>Uppgiftslämnare (efternamn och förnamn)</td>\n</tr>\n<tr>\n<td>05</td>\n<td>Förhörsprot</td>\n<td>Promemona</td>\n</tr>\n<tr>\n<td></td>\n<td></td>\n<td>1993-06-16 EÅ</td>\n</tr>\n</table>",
+   "bbox": [
+    1339,
+    421,
+    2368,
+    614
+   ],
+   "confidence": 0.9655717867539667,
+   "label": "Table",
+   "readingOrder": 16
+  },
+  {
+   "text": "Phond",
+   "html": "Phond",
+   "bbox": [
+    62,
+    877,
+    285,
+    983
+   ],
+   "confidence": 0.9655717867539667,
+   "label": "Text",
+   "readingOrder": 17
+  },
+  {
+   "text": "Protokoll fört vid förhör med polis-\ninspektören Avsan, Anti Harald, f.d.\n580108-1034, [REDACTED]",
+   "html": "<p>Protokoll fört vid förhör med polis-<br/>inspektören <u>Avsan, Anti Harald, f.d.</u><br/><u>580108-1034,</u> [REDACTED]</p>",
+   "bbox": [
+    1359,
+    870,
+    2264,
+    1067
+   ],
+   "confidence": 0.9655717867539667,
+   "label": "Text",
+   "readingOrder": 18
+  },
+  {
+   "text": "[REDACTED] ).",
+   "html": "[REDACTED] ).",
+   "bbox": [
+    1359,
+    1081,
+    2306,
+    1140
+   ],
+   "confidence": 0.9655717867539667,
+   "label": "Text",
+   "readingOrder": 19
+  },
+  {
+   "text": "[REDACTED]",
+   "html": "[REDACTED]",
+   "bbox": [
+    1359,
+    1151,
+    2306,
+    1211
+   ],
+   "confidence": 0.9655717867539667,
+   "label": "Text",
+   "readingOrder": 20
+  },
+  {
+   "text": "[REDACTED]",
+   "html": "[REDACTED]",
+   "bbox": [
+    1359,
+    1228,
+    2207,
+    1281
+   ],
+   "confidence": 0.9655717867539667,
+   "label": "Text",
+   "readingOrder": 21
+  },
+  {
+   "text": "Stockholm, [REDACTED].",
+   "html": "Stockholm, [REDACTED].",
+   "bbox": [
+    1359,
+    1298,
+    2009,
+    1351
+   ],
+   "confidence": 0.9655717867539667,
+   "label": "Text",
+   "readingOrder": 22
+  },
+  {
+   "text": "Förhöret hållet onsdagen den 16 juni\n1993, i RKP-A2:s lokaler med början\nklockan 10.30.",
+   "html": "<p>Förhöret hållet onsdagen den 16 juni<br/>1993, i RKP-A2:s lokaler med början<br/>klockan 10.30.</p>",
+   "bbox": [
+    1359,
+    1369,
+    2269,
+    1562
+   ],
+   "confidence": 0.9655717867539667,
+   "label": "Text",
+   "readingOrder": 23
+  },
+  {
+   "text": "Förhörsledare: krinsp Sören Morberg.",
+   "html": "Förhörsledare: krinsp Sören Morberg.",
+   "bbox": [
+    1359,
+    1579,
+    2269,
+    1632
+   ],
+   "confidence": 0.9655717867539667,
+   "label": "Text",
+   "readingOrder": 24
+  },
+  {
+   "text": "Förhörsvittne: krinsp Egon Berger.",
+   "html": "Förhörsvittne: krinsp Egon Berger.",
+   "bbox": [
+    1359,
+    1649,
+    2220,
+    1702
+   ],
+   "confidence": 0.9655717867539667,
+   "label": "Text",
+   "readingOrder": 25
+  },
+  {
+   "text": "Avsan underrättas att han upplysningsvis skall höras i Palmeutredningen, med\nanledning av inkomma uppgifter.",
+   "html": "<p>Avsan underrättas att han upplysningsvis skall höras i Palmeutredningen, med<br/>anledning av inkomma uppgifter.</p>",
+   "bbox": [
+    392,
+    1790,
+    2269,
+    1912
+   ],
+   "confidence": 0.9655717867539667,
+   "label": "Text",
+   "readingOrder": 26
+  },
+  {
+   "text": "Avsan uppger att han är född i Sverige 1958 och att hans föräldrar härstammar\nfrån Estland. Han vill minnas att föräldrarna och även han blev svenska med-\nborgare 1967, men han är inte helt säker på den uppgiften. Avsan kan estniska\noch han förklarar att man kan göra sig förstådd om man talar med en finländare\nmed hjälp av estniska, men det går inte att hålla en flytade dialog.",
+   "html": "<p>Avsan uppger att han är född i Sverige 1958 och att hans föräldrar härstammar<br/>från Estland. Han vill minnas att föräldrarna och även han blev svenska med-<br/>borgare 1967, men han är inte helt säker på den uppgiften. Avsan kan estniska<br/>och han förklarar att man kan göra sig förstådd om man talar med en finländare<br/>med hjälp av estniska, men det går inte att hålla en flytade dialog.</p>",
+   "bbox": [
+    392,
+    2000,
+    2319,
+    2351
+   ],
+   "confidence": 0.9655717867539667,
+   "label": "Text",
+   "readingOrder": 27
+  },
+  {
+   "text": "1986 så bodde Avsan på [REDACTED] där han bott sedan september månad 1983.\nHan har för övrigt själv varit med och byggt sitt hus. Vid den här tidpunkten\nvar han gift och hade två barn, fem och två år gamla. Idag har han fyra barn.",
+   "html": "<p>1986 så bodde Avsan på [REDACTED] där han bott sedan september månad 1983.<br/>Han har för övrigt själv varit med och byggt sitt hus. Vid den här tidpunkten<br/>var han gift och hade två barn, fem och två år gamla. Idag har han fyra barn.</p>",
+   "bbox": [
+    392,
+    2439,
+    2294,
+    2632
+   ],
+   "confidence": 0.9655717867539667,
+   "label": "Text",
+   "readingOrder": 28
+  },
+  {
+   "text": "Tjänstemässigt så tjänstgjorde Avsan på piketgruppen, där han haft ett svaromål\nvill han minnas, sedan den 1 maj 1985. Han ingick i piketstyrkan och var inte\npiketbefälhavare. På fråga om han tjänstgjorde den 28 februari 1986, så är han\nosäker på det. Det har i så fall inte varit under kvällstid då pådraget kring\nmordet skedde, utan i så fall tidigare under dagen. Avsan fick veta att Olof",
+   "html": "<p>Tjänstemässigt så <u>tjänstgjorde</u> Avsan på <u>piketgruppen</u>, där han haft ett svaromål<br/>vill han minnas, sedan den 1 maj 1985. Han ingick i piketstyrkan och var inte<br/>piketbefälhavare. På fråga om han <u>tjänstgjorde</u> den 28 februari 1986, så är han<br/>osäker på det. Det har i så fall inte varit under kvällstid då pådraget kring<br/>mordet skedde, utan i så fall tidigare <u>under dagen</u>. Avsan fick veta att <u>Olof</u></p>",
+   "bbox": [
+    392,
+    2719,
+    2344,
+    3070
+   ],
+   "confidence": 0.9655717867539667,
+   "label": "Text",
+   "readingOrder": 29
+  },
+  {
+   "text": "RPS-4637-2",
+   "html": "RPS-4637-2",
+   "bbox": [
+    236,
+    3105,
+    285,
+    3246
+   ],
+   "confidence": 0.9655717867539667,
+   "label": "Text",
+   "readingOrder": 30
+  },
+  {
+   "text": "Ex 2: Till spaningschefens pärm (i nr-följd inom avsnitt)",
+   "html": "Ex 2: Till spaningschefens pärm (i nr-följd inom avsnitt)",
+   "bbox": [
+    1525,
+    3228,
+    2393,
+    3281
+   ],
+   "confidence": 0.9655717867539667,
+   "label": "Footnote",
+   "readingOrder": 32
+  },
+  {
+   "text": "57-93-HCD",
+   "html": "57-93-HCD",
+   "bbox": [
+    1947,
+    3263,
+    2393,
+    3351
+   ],
+   "confidence": 0.9655717867539667,
+   "label": "Text",
+   "readingOrder": 33
+  },
+  {
+   "text": "76",
+   "html": "76",
+   "bbox": [
+    2319,
+    3351,
+    2418,
+    3421
+   ],
+   "confidence": 0.9655717867539667,
+   "label": "PageFooter",
+   "readingOrder": 34
+  }
+ ],
+ "source": {
+  "pdf": "10 — Alla förhör med AA — 2020-06-15 — 2020-07-14 — EH-14879-1 — 3.pdf",
+  "page": 1,
+  "dpi": 300,
+  "size": [
+   2480,
+   3509
+  ]
+ }
+}

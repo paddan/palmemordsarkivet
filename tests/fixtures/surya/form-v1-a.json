@@ -1,0 +1,866 @@
+{
+ "protocol": 2,
+ "type": "page",
+ "unitId": "form-v1-a",
+ "ordinal": 0,
+ "page": 1,
+ "status": "read",
+ "text": "01 Poliodistrikt (där uppslaget mottagits)\nStockholm\n02 Arbetsenhet\nKCV\nSPANINGSUPPSLAG\ni grövre brottmål\n07 Avsnitt\n08 Löpande nr\nD\n2449\n09 Plate för förturestämpel\n03 Uppgiftsmottagare\n04 telefon\n05 datum\n06 klockan\nInsp NEK Persson\n769 45 81\n860316\n09.10\n10 Brott med vilket uppslaget hör samman\nMordet på Palme\n11 Spaningsuppslaget lämnat\nvid person-ligt besök\nper telefon\nper brev\n\nF-år  -mån  -dag  -nr\n12 Uppgiftslämnarens efternamn och alla förnamn (i rätt följd, tilltalsnamnet markeras)\n13 Yrka/titel\n14 Postadress (utdelningsadress och ortsadress), telefon bostaden\n15 Arbetsplats (arbetsgivare, postadress och telefon arbetet)\n16 Uppslaget avser\nmisstänkt person\nfordon\n17 Händelse (kort rubricering t ex lakttagelse av person, fordon, gods, skottlossning etc med angivande av tid och plats)\ngods\n18 I sak. (anteckna först kländ persons yrke, namn, födelsetid, bostad, telefon och arbetsgivare – okländ persons kön, ålder, signalement och klädsel – berört fordons reg nr, fabrikat, typ, årsmodell, fårg m m samt annat gods med noggrann beskrivning. Därefter övriga sakuppgifter med angivande av ev hållpunkter för tider och platser samt bedömning av uppgiftslämnarens trovärdighet och ev sprit- eller narkotikapäverkan)\nTipset inringt från vh. befäl Jönköpingspolisen, Götesson,.\nuppger att han har hört talas om en person,\n[REDACTED]\nhar\nhört sägas att\n. Han har tidigare bott i [REDACTED].\nRPS 463.1.2.\n19 Ovanstående uppslag\nkan anknyta till uppslag nr\n21\nanknyter till uppslag nr\n22 Registrerat: Signatur\n23 Arendet tilldelat\nI datum\nI signatur\nKormard\n03-86 HW/RS\n20 Tagit def\nSpaningschef\nBitr spaningschef\nRegistrator\nSignatur\nSignatur\nSignatur\n24 Eärdigbaarbetni: datum\n860407\n25 Spaningschef: sign\nMed feta linjer avgränsade avsnitt ifylls ej av uppgiftsmottagaren\nEx 2: Till spaningschefens pärm (i nr-följd inom avsnitt)",
+ "model": "surya-ocr 0.22.1 backend llamacpp model datalab-to/surya-ocr-2 surya-2.gguf 6a3a4c30e5e74446d4f8b6afd05b2f2da970f470:1266400864 surya-2-mmproj.gguf 6a3a4c30e5e74446d4f8b6afd05b2f2da970f470:204986688",
+ "blocks": [
+  {
+   "text": "01 Poliodistrikt (där uppslaget mottagits)",
+   "html": "<p>01 Poliodistrikt (där uppslaget mottagits)</p>",
+   "bbox": [
+    290,
+    193,
+    826,
+    239
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 0
+  },
+  {
+   "text": "Stockholm",
+   "html": "<p><b>Stockholm</b></p>",
+   "bbox": [
+    310,
+    232,
+    568,
+    284
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 1
+  },
+  {
+   "text": "02 Arbetsenhet",
+   "html": "<p>02 Arbetsenhet</p>",
+   "bbox": [
+    290,
+    284,
+    501,
+    326
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 2
+  },
+  {
+   "text": "KCV",
+   "html": "<p><b>KCV</b></p>",
+   "bbox": [
+    315,
+    330,
+    412,
+    375
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 3
+  },
+  {
+   "text": "SPANINGSUPPSLAG\ni grövre brottmål",
+   "html": "<p><b>SPANINGSUPPSLAG<br/>i grövre brottmål</b></p>",
+   "bbox": [
+    1327,
+    200,
+    1746,
+    295
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 4
+  },
+  {
+   "text": "07 Avsnitt",
+   "html": "<p>07 Avsnitt</p>",
+   "bbox": [
+    1843,
+    211,
+    1991,
+    249
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 5
+  },
+  {
+   "text": "08 Löpande nr",
+   "html": "<p>08 Löpande nr</p>",
+   "bbox": [
+    2103,
+    211,
+    2339,
+    253
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 6
+  },
+  {
+   "text": "D",
+   "html": "<p><b>D</b></p>",
+   "bbox": [
+    1887,
+    249,
+    1994,
+    337
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 7
+  },
+  {
+   "text": "2449",
+   "html": "<p><b>2449</b></p>",
+   "bbox": [
+    2108,
+    249,
+    2381,
+    337
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 8
+  },
+  {
+   "text": "09 Plate för förturestämpel",
+   "html": "<p>09 Plate för förturestämpel</p>",
+   "bbox": [
+    1843,
+    340,
+    2217,
+    382
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 9
+  },
+  {
+   "text": "03 Uppgiftsmottagare",
+   "html": "<p>03 Uppgiftsmottagare</p>",
+   "bbox": [
+    290,
+    375,
+    583,
+    421
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 10
+  },
+  {
+   "text": "04 telefon",
+   "html": "<p>04 telefon</p>",
+   "bbox": [
+    816,
+    379,
+    960,
+    421
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 11
+  },
+  {
+   "text": "05 datum",
+   "html": "<p>05 datum</p>",
+   "bbox": [
+    1327,
+    386,
+    1463,
+    425
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 12
+  },
+  {
+   "text": "06 klockan",
+   "html": "<p>06 klockan</p>",
+   "bbox": [
+    1582,
+    386,
+    1738,
+    425
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 13
+  },
+  {
+   "text": "Insp NEK Persson",
+   "html": "<p><b>Insp NEK Persson</b></p>",
+   "bbox": [
+    315,
+    425,
+    744,
+    477
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 14
+  },
+  {
+   "text": "769 45 81",
+   "html": "<p><b>769 45 81</b></p>",
+   "bbox": [
+    806,
+    425,
+    1052,
+    477
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 15
+  },
+  {
+   "text": "860316",
+   "html": "<p><b>860316</b></p>",
+   "bbox": [
+    1297,
+    425,
+    1471,
+    474
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 16
+  },
+  {
+   "text": "09.10",
+   "html": "<p><b>09.10</b></p>",
+   "bbox": [
+    1602,
+    425,
+    1756,
+    474
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 17
+  },
+  {
+   "text": "10 Brott med vilket uppslaget hör samman",
+   "html": "<p>10 Brott med vilket uppslaget hör samman</p>",
+   "bbox": [
+    290,
+    470,
+    846,
+    512
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 18
+  },
+  {
+   "text": "Mordet på Palme",
+   "html": "<p><b>Mordet på Palme</b></p>",
+   "bbox": [
+    310,
+    516,
+    719,
+    568
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 19
+  },
+  {
+   "text": "11 Spaningsuppslaget lämnat",
+   "html": "<p>11 Spaningsuppslaget lämnat</p>",
+   "bbox": [
+    1322,
+    481,
+    1726,
+    523
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 20
+  },
+  {
+   "text": "vid person-ligt besök",
+   "html": "<p><input type=\"checkbox\"/> vid person-ligt besök</p>",
+   "bbox": [
+    1322,
+    519,
+    1533,
+    586
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 21
+  },
+  {
+   "text": "per telefon",
+   "html": "<p><input checked=\"\" type=\"checkbox\"/> per telefon</p>",
+   "bbox": [
+    1565,
+    519,
+    1781,
+    586
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 22
+  },
+  {
+   "text": "per brev",
+   "html": "<p><input type=\"checkbox\"/> per brev</p>",
+   "bbox": [
+    1828,
+    533,
+    2014,
+    586
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 23
+  },
+  {
+   "text": "",
+   "html": "<p><input type=\"checkbox\"/></p>",
+   "bbox": [
+    2076,
+    533,
+    2153,
+    586
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 24
+  },
+  {
+   "text": "F-år  -mån  -dag  -nr",
+   "html": "<p><input type=\"checkbox\"/> F-år <input type=\"checkbox\"/> -mån <input type=\"checkbox\"/> -dag <input type=\"checkbox\"/> -nr</p>",
+   "bbox": [
+    1828,
+    582,
+    2160,
+    625
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 25
+  },
+  {
+   "text": "12 Uppgiftslämnarens efternamn och alla förnamn (i rätt följd, tilltalsnamnet markeras)",
+   "html": "<p>12 Uppgiftslämnarens efternamn och alla förnamn (i rätt följd, tilltalsnamnet markeras)</p>",
+   "bbox": [
+    290,
+    572,
+    1441,
+    621
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 26
+  },
+  {
+   "text": "13 Yrka/titel",
+   "html": "<p>13 Yrka/titel</p>",
+   "bbox": [
+    290,
+    663,
+    461,
+    702
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 27
+  },
+  {
+   "text": "14 Postadress (utdelningsadress och ortsadress), telefon bostaden",
+   "html": "<p>14 Postadress (utdelningsadress och ortsadress), telefon bostaden</p>",
+   "bbox": [
+    806,
+    667,
+    1694,
+    716
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 28
+  },
+  {
+   "text": "15 Arbetsplats (arbetsgivare, postadress och telefon arbetet)",
+   "html": "<p>15 Arbetsplats (arbetsgivare, postadress och telefon arbetet)</p>",
+   "bbox": [
+    290,
+    758,
+    1091,
+    800
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 29
+  },
+  {
+   "text": "16 Uppslaget avser",
+   "html": "<p>16 Uppslaget avser</p>",
+   "bbox": [
+    290,
+    849,
+    546,
+    891
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 30
+  },
+  {
+   "text": "misstänkt person",
+   "html": "<p><input checked=\"\" type=\"checkbox\"/> misstänkt person</p>",
+   "bbox": [
+    290,
+    891,
+    471,
+    954
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 31
+  },
+  {
+   "text": "fordon",
+   "html": "<p><input type=\"checkbox\"/> fordon</p>",
+   "bbox": [
+    578,
+    912,
+    680,
+    954
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 32
+  },
+  {
+   "text": "17 Händelse (kort rubricering t ex lakttagelse av person, fordon, gods, skottlossning etc med angivande av tid och plats)",
+   "html": "<p>17 Händelse (kort rubricering t ex lakttagelse av person, fordon, gods, skottlossning etc med angivande av tid och plats)</p>",
+   "bbox": [
+    806,
+    853,
+    2349,
+    919
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 33
+  },
+  {
+   "text": "gods",
+   "html": "<p><input type=\"checkbox\"/> gods</p>",
+   "bbox": [
+    290,
+    1007,
+    412,
+    1046
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 34
+  },
+  {
+   "text": "18 I sak. (anteckna först kländ persons yrke, namn, födelsetid, bostad, telefon och arbetsgivare – okländ persons kön, ålder, signalement och klädsel – berört fordons reg nr, fabrikat, typ, årsmodell, fårg m m samt annat gods med noggrann beskrivning. Därefter övriga sakuppgifter med angivande av ev hållpunkter för tider och platser samt bedömning av uppgiftslämnarens trovärdighet och ev sprit- eller narkotikapäverkan)",
+   "html": "<p>18 I sak. (anteckna först kländ persons yrke, namn, födelsetid, bostad, telefon och arbetsgivare – okländ persons kön, ålder, signalement och klädsel – berört fordons reg nr, fabrikat, typ, årsmodell, fårg m m samt annat gods med noggrann beskrivning. Därefter övriga sakuppgifter med angivande av ev hållpunkter för tider och platser samt bedömning av uppgiftslämnarens trovärdighet och ev sprit- eller narkotikapäverkan)</p>",
+   "bbox": [
+    290,
+    1042,
+    2349,
+    1144
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 35
+  },
+  {
+   "text": "Tipset inringt från vh. befäl Jönköpingspolisen, Götesson,.",
+   "html": "<p><b>Tipset inringt från vh. befäl Jönköpingspolisen, Götesson,.</b></p>",
+   "bbox": [
+    310,
+    1123,
+    1855,
+    1179
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 36
+  },
+  {
+   "text": "uppger att han har hört talas om en person,",
+   "html": "<p><b>uppger att han har hört talas om en person,</b></p>",
+   "bbox": [
+    315,
+    1176,
+    2202,
+    1225
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 37
+  },
+  {
+   "text": "[REDACTED]",
+   "html": "<p><b>[REDACTED]</b></p>",
+   "bbox": [
+    315,
+    1225,
+    2349,
+    1316
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 38
+  },
+  {
+   "text": "har",
+   "html": "<p><b>har</b></p>",
+   "bbox": [
+    464,
+    1365,
+    568,
+    1407
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 39
+  },
+  {
+   "text": "hört sägas att",
+   "html": "<p><b>hört sägas att</b></p>",
+   "bbox": [
+    1059,
+    1361,
+    1438,
+    1411
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 40
+  },
+  {
+   "text": ". Han har tidigare bott i [REDACTED].",
+   "html": "<p><b>. Han har tidigare bott i [REDACTED].</b></p>",
+   "bbox": [
+    1240,
+    1502,
+    1912,
+    1551
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 41
+  },
+  {
+   "text": "RPS 463.1.2.",
+   "html": "<p>RPS 463.1.2.</p>",
+   "bbox": [
+    191,
+    3032,
+    228,
+    3193
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 42
+  },
+  {
+   "text": "19 Ovanstående uppslag",
+   "html": "<p>19 Ovanstående uppslag</p>",
+   "bbox": [
+    255,
+    2881,
+    588,
+    2948
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 43
+  },
+  {
+   "text": "kan anknyta till uppslag nr",
+   "html": "<p><input type=\"checkbox\"/> kan anknyta till uppslag nr</p>",
+   "bbox": [
+    315,
+    2962,
+    670,
+    3004
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 44
+  },
+  {
+   "text": "21",
+   "html": "<p>21</p>",
+   "bbox": [
+    255,
+    3004,
+    300,
+    3042
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 45
+  },
+  {
+   "text": "anknyter till uppslag nr",
+   "html": "<p><input type=\"checkbox\"/> anknyter till uppslag nr</p>",
+   "bbox": [
+    315,
+    3053,
+    622,
+    3095
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 46
+  },
+  {
+   "text": "22 Registrerat: Signatur",
+   "html": "<p>22 Registrerat: Signatur</p>",
+   "bbox": [
+    255,
+    3091,
+    481,
+    3151
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 47
+  },
+  {
+   "text": "23 Arendet tilldelat",
+   "html": "<p>23 Arendet tilldelat</p>",
+   "bbox": [
+    518,
+    3091,
+    774,
+    3130
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 48
+  },
+  {
+   "text": "I datum",
+   "html": "<p>I datum</p>",
+   "bbox": [
+    1014,
+    3091,
+    1126,
+    3130
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 49
+  },
+  {
+   "text": "I signatur",
+   "html": "<p>I signatur</p>",
+   "bbox": [
+    1272,
+    3091,
+    1421,
+    3130
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 50
+  },
+  {
+   "text": "Kormard",
+   "html": "<p><b>Kormard</b></p>",
+   "bbox": [
+    518,
+    3116,
+    888,
+    3200
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 51
+  },
+  {
+   "text": "03-86 HW/RS",
+   "html": "<p><b>03-86 HW/RS</b></p>",
+   "bbox": [
+    1002,
+    3116,
+    1473,
+    3214
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 52
+  },
+  {
+   "text": "20 Tagit def",
+   "html": "<p>20 Tagit def</p>",
+   "bbox": [
+    1555,
+    2916,
+    1736,
+    2958
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 53
+  },
+  {
+   "text": "Spaningschef",
+   "html": "<p>Spaningschef</p>",
+   "bbox": [
+    1555,
+    2969,
+    1746,
+    3011
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 54
+  },
+  {
+   "text": "Bitr spaningschef",
+   "html": "<p>Bitr spaningschef</p>",
+   "bbox": [
+    1803,
+    2969,
+    2068,
+    3011
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 55
+  },
+  {
+   "text": "Registrator",
+   "html": "<p>Registrator</p>",
+   "bbox": [
+    2051,
+    2969,
+    2257,
+    3011
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 56
+  },
+  {
+   "text": "Signatur",
+   "html": "<p>Signatur</p>",
+   "bbox": [
+    1555,
+    3004,
+    1672,
+    3042
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 57
+  },
+  {
+   "text": "Signatur",
+   "html": "<p>Signatur</p>",
+   "bbox": [
+    1803,
+    3004,
+    1952,
+    3042
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 58
+  },
+  {
+   "text": "Signatur",
+   "html": "<p>Signatur</p>",
+   "bbox": [
+    2051,
+    3004,
+    2207,
+    3042
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 59
+  },
+  {
+   "text": "24 Eärdigbaarbetni: datum",
+   "html": "<p>24 Eärdigbaarbetni: datum</p>",
+   "bbox": [
+    1555,
+    3091,
+    1910,
+    3137
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 60
+  },
+  {
+   "text": "860407",
+   "html": "<p><b>860407</b></p>",
+   "bbox": [
+    1555,
+    3116,
+    1912,
+    3200
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 61
+  },
+  {
+   "text": "25 Spaningschef: sign",
+   "html": "<p>25 Spaningschef: sign</p>",
+   "bbox": [
+    2051,
+    3091,
+    2349,
+    3137
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 62
+  },
+  {
+   "text": "Med feta linjer avgränsade avsnitt ifylls ej av uppgiftsmottagaren",
+   "html": "<p>Med feta linjer avgränsade avsnitt ifylls ej av uppgiftsmottagaren</p>",
+   "bbox": [
+    255,
+    3211,
+    727,
+    3281
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 63
+  },
+  {
+   "text": "Ex 2: Till spaningschefens pärm (i nr-följd inom avsnitt)",
+   "html": "<p>Ex 2: Till spaningschefens pärm (i nr-följd inom avsnitt)</p>",
+   "bbox": [
+    1391,
+    3218,
+    2356,
+    3274
+   ],
+   "confidence": 0.9464549017779202,
+   "label": "Text",
+   "readingOrder": 64
+  }
+ ],
+ "source": {
+  "pdf": "1005 — Tips från polisen i Jönköping, hela uppslaget D-2449 — 2021-09-09 — 2021-12-13 — D-2449 — 5.pdf",
+  "page": 1,
+  "dpi": 300,
+  "size": [
+   2480,
+   3509
+  ]
+ }
+}

@@ -26,6 +26,7 @@ När du gör förändringar i projektet ska du **alltid** uppdatera den använda
 - `docs/kom-igang.md` — snabbstart (svenska): krav, installation, API-nyckel, kör pipelinen, ställ första frågan
 - `docs/teknisk-referens.md` — detaljerad dokumentation (svenska): flödesdiagram, alla steg/flaggor, state-db, kunskapsgraf, LLM-config, filöversikt, tester
 - `docs/jev-reranker-pilot.md` — pilotstudie (svenska): Jev mot BGE som reranker, mått, begränsningar och rekommendation, samt uppföljningen som mätte kandidatlistans storlek (RAG och MCP), höjde `top_k` till 50 i båda lärna och gjorde Jev valbar även i utredningsläget
+- `docs/surya-layout-pilot.md` — spik och pilot (svenska): vad Surya 2 (layout + Markdown) ger för SPANINGSUPPSLAG-blanketter och förhör, maskeringarnas beteende, hastighet och konsekvenser för planen i `docs/superpowers/plans/2026-10-25-surya-layout-markdown.md`
 - `AGENTS.md` — instruktioner för framtida Codex-sessioner
 
 ## Project Overview
@@ -42,6 +43,9 @@ src/
   download.py          # Google Drive PDF downloader (state via db)
   quality.py           # OCR quality scoring (0–100 heuristics + optional hunspell)
   ocr_pages.py         # Per-page OCR pipeline (Tesseract/Surya) + redaktionsdetektering
+  surya_worker.py      # Fristående Surya 2-worker (egen venv, ingen projektimport): en sida per JSON-rad, rå HTML-block ut, felkoder
+  surya_layout.py      # Ren layoutmodul: Suryas HTML-block → typade block, ren text, Markdown, JSON och [MASKAD]-infogning (parse_page)
+  form_layout.py       # Blankettfält (bara när en mall i data/formular/ matchar), förhörsmetadata, repliker, avstavning, kryssrutemasker
   normalize_text.py    # Rule-based OCR normalization (ligatures, whitespace). Inkrementellt via state.db.
   llm_correct.py       # LLM post-correction av dåliga OCR-sidor via vald LLM-profil (standard Claude Haiku)
   merge_pages.py       # Slå ihop per-sida-text från state.db → text/<stem>.txt
@@ -114,6 +118,7 @@ Data-kataloger (gitignored):
 
 Repo-data:
 - `data/karta/platser.json`, `data/karta/rorelser.json` — seed-filer för kartans platser och observationer
+- `data/formular/*.json` — blankettmallar (t.ex. SPANINGSUPPSLAG varianter 1 och 2): etiketter per fältnummer, alias, fritextfält och fast tryck; valideras vid inläsning i `form_layout.py`
 
 ## Commands
 

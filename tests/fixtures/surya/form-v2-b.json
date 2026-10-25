@@ -1,0 +1,372 @@
+{
+ "protocol": 2,
+ "type": "page",
+ "unitId": "form-v2-b",
+ "ordinal": 3,
+ "page": 1,
+ "status": "read",
+ "text": "01 Polisdistrikt*\nStockholm\n02 Arbetsenhet*\nRK/A2\n03 Upprattat(d) av* telefon*\nTemmy Andersson -3833\n09 Brott med vilket uppgiften hör samman*\nMordet på statsminister Olof Palme\n10 | sak\nSPANINGSUPPSLAG\nI grövre brottmål\nSid nr\n07 Avsnitt08 Löpande nr\nH90668\n04 Fortsätt-\nningsbladUppgiftslamnare (efternamn och förnamn)\n0506Utskriftsdatum\nFörhörsprotPromemoria1988-09-02\nPhörd\nProtokoll över förhör hållet med\nFörhöret hållet på rum 713 på polishuset i kvarteret Kronoberg i Stockholm med början klockan 18.00 onsdagen den 31 aug 1988.\nFörhörsledare: Krinsp Temmy Andersson.\nFörhörsvittne: Krinsp Ulf Norlin.\n[REDACTED] höres i anledning av vad som angetis i speningsuppslag H 90-66 vars innehåll i stora drag delgavs henne.\nInledningsvis uppgav [REDACTED] på frågor att hon bott på ovenstående adress\nPom\n[REDACTED] kar [REDACTED] katt orta brukar valt\nuppgav på fråga att hon\nVid den tiden hade\nfann snart att detta var [REDACTED] var dock mer\n[REDACTED] statsminister Olof Palme som [REDACTED] har att\ngöra med att\nOlof Palme, har själv aldrig\n[REDACTED]\nAllt som allt har\n[REDACTED]\nRPS 46322\nEx 2: Till spaningschefens pärm (i nr-följd inom avsnitt)",
+ "model": "surya-ocr 0.22.1 backend llamacpp model datalab-to/surya-ocr-2 surya-2.gguf 6a3a4c30e5e74446d4f8b6afd05b2f2da970f470:1266400864 surya-2-mmproj.gguf 6a3a4c30e5e74446d4f8b6afd05b2f2da970f470:204986688",
+ "blocks": [
+  {
+   "text": "01 Polisdistrikt*\nStockholm\n02 Arbetsenhet*",
+   "html": "<p>01 Polisdistrikt*<br/><b>Stockholm</b><br/>02 Arbetsenhet*</p>",
+   "bbox": [
+    285,
+    168,
+    558,
+    305
+   ],
+   "confidence": 0.9480123897373998,
+   "label": "Text",
+   "readingOrder": 0
+  },
+  {
+   "text": "RK/A2\n03 Upprattat(d) av* telefon*\nTemmy Andersson -3833",
+   "html": "<p><b>RK/A2</b><br/>03 Upprattat(d) av* telefon*<br/><b>Temmy Andersson -3833</b></p>",
+   "bbox": [
+    285,
+    316,
+    980,
+    463
+   ],
+   "confidence": 0.9480123897373998,
+   "label": "Text",
+   "readingOrder": 1
+  },
+  {
+   "text": "09 Brott med vilket uppgiften hör samman*\nMordet på statsminister Olof Palme",
+   "html": "<p>09 Brott med vilket uppgiften hör samman*<br/><b>Mordet på statsminister Olof Palme</b></p>",
+   "bbox": [
+    285,
+    452,
+    1216,
+    561
+   ],
+   "confidence": 0.9480123897373998,
+   "label": "Text",
+   "readingOrder": 2
+  },
+  {
+   "text": "10 | sak",
+   "html": "<p>10 | sak</p>",
+   "bbox": [
+    285,
+    561,
+    422,
+    596
+   ],
+   "confidence": 0.9480123897373998,
+   "label": "Text",
+   "readingOrder": 3
+  },
+  {
+   "text": "SPANINGSUPPSLAG\nI grövre brottmål",
+   "html": "<p><b>SPANINGSUPPSLAG</b><br/>I grövre brottmål</p>",
+   "bbox": [
+    1365,
+    179,
+    1794,
+    274
+   ],
+   "confidence": 0.9480123897373998,
+   "label": "Text",
+   "readingOrder": 4
+  },
+  {
+   "text": "Sid nr",
+   "html": "<p>Sid nr</p>",
+   "bbox": [
+    2171,
+    179,
+    2283,
+    214
+   ],
+   "confidence": 0.9480123897373998,
+   "label": "Text",
+   "readingOrder": 5
+  },
+  {
+   "text": "07 Avsnitt08 Löpande nr\nH90668",
+   "html": "<table border=\"1\"><tr><td>07 Avsnitt</td><td>08 Löpande nr</td></tr><tr><td>H</td><td>90668</td></tr></table>",
+   "bbox": [
+    1923,
+    228,
+    2444,
+    368
+   ],
+   "confidence": 0.9480123897373998,
+   "label": "Form",
+   "readingOrder": 6
+  },
+  {
+   "text": "04 Fortsätt-\nningsbladUppgiftslamnare (efternamn och förnamn)\n0506Utskriftsdatum\nFörhörsprotPromemoria1988-09-02",
+   "html": "<table border=\"1\"><tr><td>04 Fortsätt-<br/>ningsblad</td><td>Uppgiftslamnare (efternamn och förnamn)</td></tr><tr><td>05</td><td>06</td><td>Utskriftsdatum</td></tr><tr><td>Förhörsprot</td><td>Promemoria</td><td>1988-09-02</td></tr></table>",
+   "bbox": [
+    1352,
+    358,
+    2208,
+    568
+   ],
+   "confidence": 0.9480123897373998,
+   "label": "Form",
+   "readingOrder": 7
+  },
+  {
+   "text": "Phörd",
+   "html": "<p>Phörd</p>",
+   "bbox": [
+    87,
+    666,
+    285,
+    754
+   ],
+   "confidence": 0.9480123897373998,
+   "label": "Text",
+   "readingOrder": 8
+  },
+  {
+   "text": "Protokoll över förhör hållet med",
+   "html": "<p>Protokoll över förhör hållet med</p>",
+   "bbox": [
+    1377,
+    631,
+    2258,
+    684
+   ],
+   "confidence": 0.9480123897373998,
+   "label": "Text",
+   "readingOrder": 9
+  },
+  {
+   "text": "Förhöret hållet på rum 713 på polishuset i kvarteret Kronoberg i Stockholm med början klockan 18.00 onsdagen den 31 aug 1988.",
+   "html": "<p>Förhöret hållet på rum 713 på polishuset i kvarteret Kronoberg i Stockholm med början klockan 18.00 onsdagen den 31 aug 1988.</p>",
+   "bbox": [
+    1377,
+    877,
+    2419,
+    1070
+   ],
+   "confidence": 0.9480123897373998,
+   "label": "Text",
+   "readingOrder": 11
+  },
+  {
+   "text": "Förhörsledare: Krinsp Temmy Andersson.\nFörhörsvittne: Krinsp Ulf Norlin.",
+   "html": "<p>Förhörsledare: Krinsp Temmy Andersson.<br/>Förhörsvittne: Krinsp Ulf Norlin.</p>",
+   "bbox": [
+    1377,
+    1105,
+    2419,
+    1227
+   ],
+   "confidence": 0.9480123897373998,
+   "label": "Text",
+   "readingOrder": 12
+  },
+  {
+   "text": "[REDACTED] höres i anledning av vad som angetis i speningsuppslag H 90-66 vars innehåll i stora drag delgavs henne.",
+   "html": "<p>[REDACTED] höres i anledning av vad som angetis i speningsuppslag H 90-66 vars innehåll i stora drag delgavs henne.</p>",
+   "bbox": [
+    310,
+    1350,
+    2320,
+    1455
+   ],
+   "confidence": 0.9480123897373998,
+   "label": "Text",
+   "readingOrder": 13
+  },
+  {
+   "text": "Inledningsvis uppgav [REDACTED] på frågor att hon bott på ovenstående adress",
+   "html": "<p>Inledningsvis uppgav [REDACTED] på frågor att hon bott på ovenstående adress</p>",
+   "bbox": [
+    310,
+    1490,
+    2394,
+    1561
+   ],
+   "confidence": 0.9480123897373998,
+   "label": "Text",
+   "readingOrder": 14
+  },
+  {
+   "text": "Pom",
+   "html": "<p>Pom</p>",
+   "bbox": [
+    112,
+    1596,
+    285,
+    1666
+   ],
+   "confidence": 0.9480123897373998,
+   "label": "Text",
+   "readingOrder": 15
+  },
+  {
+   "text": "[REDACTED] kar [REDACTED] katt orta brukar valt",
+   "html": "<p>[REDACTED] kar [REDACTED] katt orta brukar valt</p>",
+   "bbox": [
+    310,
+    1561,
+    2419,
+    1806
+   ],
+   "confidence": 0.9480123897373998,
+   "label": "Text",
+   "readingOrder": 16
+  },
+  {
+   "text": "uppgav på fråga att hon",
+   "html": "<p>uppgav på fråga att hon</p>",
+   "bbox": [
+    509,
+    1824,
+    1154,
+    1894
+   ],
+   "confidence": 0.9480123897373998,
+   "label": "Text",
+   "readingOrder": 17
+  },
+  {
+   "text": "Vid den tiden hade",
+   "html": "<p>Vid den tiden hade</p>",
+   "bbox": [
+    1774,
+    1876,
+    2307,
+    1946
+   ],
+   "confidence": 0.9480123897373998,
+   "label": "Text",
+   "readingOrder": 18
+  },
+  {
+   "text": "fann snart att detta var [REDACTED] var dock mer",
+   "html": "<p>fann snart att detta var [REDACTED] var dock mer</p>",
+   "bbox": [
+    509,
+    2122,
+    1203,
+    2227
+   ],
+   "confidence": 0.9480123897373998,
+   "label": "Text",
+   "readingOrder": 19
+  },
+  {
+   "text": "[REDACTED] statsminister Olof Palme som [REDACTED] har att",
+   "html": "<p>[REDACTED] statsminister Olof Palme som [REDACTED] har att</p>",
+   "bbox": [
+    1563,
+    2297,
+    2369,
+    2420
+   ],
+   "confidence": 0.9480123897373998,
+   "label": "Text",
+   "readingOrder": 20
+  },
+  {
+   "text": "göra med att",
+   "html": "<p>göra med att</p>",
+   "bbox": [
+    298,
+    2402,
+    645,
+    2472
+   ],
+   "confidence": 0.9480123897373998,
+   "label": "Text",
+   "readingOrder": 21
+  },
+  {
+   "text": "Olof Palme, har själv aldrig",
+   "html": "<p>Olof Palme, har själv aldrig</p>",
+   "bbox": [
+    831,
+    2455,
+    1600,
+    2525
+   ],
+   "confidence": 0.9480123897373998,
+   "label": "Text",
+   "readingOrder": 22
+  },
+  {
+   "text": "[REDACTED]",
+   "html": "<p>[REDACTED]</p>",
+   "bbox": [
+    285,
+    2578,
+    2345,
+    2753
+   ],
+   "confidence": 0.9480123897373998,
+   "label": "Text",
+   "readingOrder": 23
+  },
+  {
+   "text": "Allt som allt har",
+   "html": "<p>Allt som allt har</p>",
+   "bbox": [
+    285,
+    2788,
+    769,
+    2858
+   ],
+   "confidence": 0.9480123897373998,
+   "label": "Text",
+   "readingOrder": 24
+  },
+  {
+   "text": "[REDACTED]",
+   "html": "<p>[REDACTED]</p>",
+   "bbox": [
+    285,
+    2788,
+    2369,
+    3016
+   ],
+   "confidence": 0.9480123897373998,
+   "label": "Text",
+   "readingOrder": 25
+  },
+  {
+   "text": "RPS 46322",
+   "html": "<p>RPS 46322</p>",
+   "bbox": [
+    198,
+    3051,
+    248,
+    3226
+   ],
+   "confidence": 0.9480123897373998,
+   "label": "Text",
+   "readingOrder": 26
+  },
+  {
+   "text": "Ex 2: Till spaningschefens pärm (i nr-följd inom avsnitt)",
+   "html": "<p>Ex 2: Till spaningschefens pärm (i nr-följd inom avsnitt)</p>",
+   "bbox": [
+    1377,
+    3191,
+    2332,
+    3262
+   ],
+   "confidence": 0.9480123897373998,
+   "label": "PageFooter",
+   "readingOrder": 27
+  }
+ ],
+ "source": {
+  "pdf": "1083.2 — Förhör med man och kvinna -1- ny maskning — 2021-07-18 — HE-12348-01 — 4.pdf",
+  "page": 1,
+  "dpi": 300,
+  "size": [
+   2481,
+   3507
+  ]
+ }
+}

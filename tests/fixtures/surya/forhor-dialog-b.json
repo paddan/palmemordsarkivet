@@ -1,0 +1,528 @@
+{
+ "protocol": 2,
+ "type": "page",
+ "unitId": "forhor-dialog-b",
+ "ordinal": 8,
+ "page": 7,
+ "status": "read",
+ "text": "01 Polisdistanskr\n02 Arbetsmenskr\n03 Uppgiftsatt av\ntelefon\nSPANINGSUPPSLAG\ni grövre brottmål\nBid nr 3\n07 Avsnitt\n08 Löpande nr\n04 Fortsatt Uppgiftsämnare (efternamn ock förnamn)\nningsblad\n05 06 Utskriftsdatum\nFörhörsprot  Promemoria\n09 Brott med vilket uppgiften hör samman\n10 dak\nVidare erinrar sig\nFör att polismännen ska få en bättre bild av den tillgripna revolvern,\nHan säger vidare att\nmen han är dock lite osäker på den uppgiften.\nVidare har\n.\nF: Ja, , klockan börjar närma sig 18.30 och vi tänkte avsluta förhöret med dig med att ställa följande frågor.\nHar du hört vad jag har dikterat in på bandspelaren?\nJa, det har jag hört.\nF: Är det korrekt indikterat?\nJa.\nF: Du säger att det är rätt indikterat. Vill du ha bandet återuppspelat för dig?\nNej, det räcker om jag får det utskrivna förhöret uppläst per telefon.\nF: Du säger att du vill ha det utskrivna förhöret uppläst.\nFörhöret avslutas kl. 18.30.\nStockholm som ovan\n\nThure Nässén\nkrinsp\nhar den 24 oktober 1989 kl. 15.50 fått det utskrivna förhöret uppläst för sig vid telefonsåmtal. Han godkände förhöret i utskrivet skick.\nStockholm som ovan\n\nTHURE Nässén/\n000-000-000\nTiffele ej om bianketten används som fortsättningsblad\nEx 2: Till spaningsschelens pärm (i nr-följd inom avsnitt)",
+ "model": "surya-ocr 0.22.1 backend llamacpp model datalab-to/surya-ocr-2 surya-2.gguf 6a3a4c30e5e74446d4f8b6afd05b2f2da970f470:1266400864 surya-2-mmproj.gguf 6a3a4c30e5e74446d4f8b6afd05b2f2da970f470:204986688",
+ "blocks": [
+  {
+   "text": "01 Polisdistanskr",
+   "html": "<p>01 Polisdistanskr</p>",
+   "bbox": [
+    375,
+    263,
+    590,
+    309
+   ],
+   "confidence": 0.9358777004010289,
+   "label": "Text",
+   "readingOrder": 0
+  },
+  {
+   "text": "02 Arbetsmenskr",
+   "html": "<p>02 Arbetsmenskr</p>",
+   "bbox": [
+    375,
+    358,
+    590,
+    400
+   ],
+   "confidence": 0.9358777004010289,
+   "label": "Text",
+   "readingOrder": 1
+  },
+  {
+   "text": "03 Uppgiftsatt av",
+   "html": "<p>03 Uppgiftsatt av</p>",
+   "bbox": [
+    375,
+    453,
+    623,
+    495
+   ],
+   "confidence": 0.9358777004010289,
+   "label": "Text",
+   "readingOrder": 2
+  },
+  {
+   "text": "telefon",
+   "html": "<p>telefon</p>",
+   "bbox": [
+    891,
+    477,
+    995,
+    509
+   ],
+   "confidence": 0.9358777004010289,
+   "label": "Text",
+   "readingOrder": 3
+  },
+  {
+   "text": "SPANINGSUPPSLAG",
+   "html": "<p>SPANINGSUPPSLAG</p>",
+   "bbox": [
+    1382,
+    323,
+    1789,
+    379
+   ],
+   "confidence": 0.9358777004010289,
+   "label": "SectionHeader",
+   "readingOrder": 4
+  },
+  {
+   "text": "i grövre brottmål",
+   "html": "<p>i grövre brottmål</p>",
+   "bbox": [
+    1382,
+    372,
+    1630,
+    418
+   ],
+   "confidence": 0.9358777004010289,
+   "label": "Text",
+   "readingOrder": 5
+  },
+  {
+   "text": "Bid nr 3",
+   "html": "<p>Bid nr 3</p>",
+   "bbox": [
+    2149,
+    333,
+    2283,
+    375
+   ],
+   "confidence": 0.9358777004010289,
+   "label": "Text",
+   "readingOrder": 6
+  },
+  {
+   "text": "07 Avsnitt",
+   "html": "<p>07 Avsnitt</p>",
+   "bbox": [
+    1925,
+    389,
+    2067,
+    428
+   ],
+   "confidence": 0.9358777004010289,
+   "label": "Text",
+   "readingOrder": 7
+  },
+  {
+   "text": "08 Löpande nr",
+   "html": "<p>08 Löpande nr</p>",
+   "bbox": [
+    2149,
+    400,
+    2340,
+    439
+   ],
+   "confidence": 0.9358777004010289,
+   "label": "Text",
+   "readingOrder": 8
+  },
+  {
+   "text": "04 Fortsatt Uppgiftsämnare (efternamn ock förnamn)\nningsblad",
+   "html": "<p>04 Fortsatt Uppgiftsämnare (efternamn ock förnamn)<br/><input type=\"checkbox\"/> ningsblad</p>",
+   "bbox": [
+    1382,
+    491,
+    2149,
+    561
+   ],
+   "confidence": 0.9358777004010289,
+   "label": "Text",
+   "readingOrder": 9
+  },
+  {
+   "text": "05 06 Utskriftsdatum",
+   "html": "<p>05 06 Utskriftsdatum</p>",
+   "bbox": [
+    1382,
+    579,
+    2074,
+    635
+   ],
+   "confidence": 0.9358777004010289,
+   "label": "Text",
+   "readingOrder": 10
+  },
+  {
+   "text": "Förhörsprot  Promemoria",
+   "html": "<p><input type=\"checkbox\"/> Förhörsprot <input type=\"checkbox\"/> Promemoria</p>",
+   "bbox": [
+    1382,
+    635,
+    1853,
+    677
+   ],
+   "confidence": 0.9358777004010289,
+   "label": "Text",
+   "readingOrder": 11
+  },
+  {
+   "text": "09 Brott med vilket uppgiften hör samman",
+   "html": "<p>09 Brott med vilket uppgiften hör samman</p>",
+   "bbox": [
+    375,
+    547,
+    911,
+    597
+   ],
+   "confidence": 0.9358777004010289,
+   "label": "Text",
+   "readingOrder": 12
+  },
+  {
+   "text": "10 dak",
+   "html": "<p>10 dak</p>",
+   "bbox": [
+    375,
+    639,
+    499,
+    674
+   ],
+   "confidence": 0.9358777004010289,
+   "label": "Text",
+   "readingOrder": 13
+  },
+  {
+   "text": "Vidare erinrar sig",
+   "html": "<p>Vidare erinrar sig</p>",
+   "bbox": [
+    409,
+    723,
+    863,
+    786
+   ],
+   "confidence": 0.9358777004010289,
+   "label": "Text",
+   "readingOrder": 14
+  },
+  {
+   "text": "För att polismännen ska få en bättre bild av den tillgripna revolvern,",
+   "html": "<p>För att polismännen ska få en bättre bild av den tillgripna revolvern,</p>",
+   "bbox": [
+    409,
+    860,
+    2059,
+    965
+   ],
+   "confidence": 0.9358777004010289,
+   "label": "Text",
+   "readingOrder": 15
+  },
+  {
+   "text": "Han säger vidare att\nmen han är dock lite osäker på den uppgiften.",
+   "html": "<p><input type=\"checkbox\"/> Han säger vidare att <input type=\"checkbox\"/><br/><input type=\"checkbox\"/> men han är dock lite osäker på den uppgiften.</p>",
+   "bbox": [
+    409,
+    965,
+    2134,
+    1123
+   ],
+   "confidence": 0.9358777004010289,
+   "label": "Text",
+   "readingOrder": 16
+  },
+  {
+   "text": "Vidare har",
+   "html": "<p>Vidare har</p>",
+   "bbox": [
+    399,
+    1207,
+    657,
+    1256
+   ],
+   "confidence": 0.9358777004010289,
+   "label": "Text",
+   "readingOrder": 17
+  },
+  {
+   "text": ".",
+   "html": "<p><input type=\"checkbox\"/>.</p>",
+   "bbox": [
+    399,
+    1256,
+    1067,
+    1351
+   ],
+   "confidence": 0.9358777004010289,
+   "label": "Text",
+   "readingOrder": 18
+  },
+  {
+   "text": "F: Ja, , klockan börjar närma sig 18.30 och vi tänkte avsluta förhöret med dig med att ställa följande frågor.",
+   "html": "<p>F: Ja, <input type=\"checkbox\"/>, klockan börjar närma sig 18.30 och vi tänkte avsluta förhöret med dig med att ställa följande frågor.</p>",
+   "bbox": [
+    390,
+    1414,
+    2161,
+    1551
+   ],
+   "confidence": 0.9358777004010289,
+   "label": "Text",
+   "readingOrder": 19
+  },
+  {
+   "text": "Har du hört vad jag har dikterat in på bandspelaren?",
+   "html": "<p>Har du hört vad jag har dikterat in på bandspelaren?</p>",
+   "bbox": [
+    464,
+    1558,
+    1719,
+    1625
+   ],
+   "confidence": 0.9358777004010289,
+   "label": "Text",
+   "readingOrder": 20
+  },
+  {
+   "text": "Ja, det har jag hört.",
+   "html": "<p><input type=\"checkbox\"/> Ja, det har jag hört.</p>",
+   "bbox": [
+    382,
+    1628,
+    982,
+    1684
+   ],
+   "confidence": 0.9358777004010289,
+   "label": "Text",
+   "readingOrder": 21
+  },
+  {
+   "text": "F: Är det korrekt indikterat?",
+   "html": "<p>F: Är det korrekt indikterat?</p>",
+   "bbox": [
+    382,
+    1695,
+    1104,
+    1754
+   ],
+   "confidence": 0.9358777004010289,
+   "label": "Text",
+   "readingOrder": 22
+  },
+  {
+   "text": "Ja.",
+   "html": "<p><input type=\"checkbox\"/> Ja.</p>",
+   "bbox": [
+    382,
+    1769,
+    546,
+    1821
+   ],
+   "confidence": 0.9358777004010289,
+   "label": "Text",
+   "readingOrder": 23
+  },
+  {
+   "text": "F: Du säger att det är rätt indikterat. Vill du ha bandet återuppspelat för dig?",
+   "html": "<p>F: Du säger att det är rätt indikterat. Vill du ha bandet återuppspelat för dig?</p>",
+   "bbox": [
+    380,
+    1835,
+    2091,
+    1965
+   ],
+   "confidence": 0.9358777004010289,
+   "label": "Text",
+   "readingOrder": 24
+  },
+  {
+   "text": "Nej, det räcker om jag får det utskrivna förhöret uppläst per telefon.",
+   "html": "<p><input type=\"checkbox\"/> Nej, det räcker om jag får det utskrivna förhöret uppläst per telefon.</p>",
+   "bbox": [
+    375,
+    1976,
+    2136,
+    2039
+   ],
+   "confidence": 0.9358777004010289,
+   "label": "Text",
+   "readingOrder": 25
+  },
+  {
+   "text": "F: Du säger att du vill ha det utskrivna förhöret uppläst.",
+   "html": "<p>F: Du säger att du vill ha det utskrivna förhöret uppläst.</p>",
+   "bbox": [
+    375,
+    2049,
+    1786,
+    2109
+   ],
+   "confidence": 0.9358777004010289,
+   "label": "Text",
+   "readingOrder": 26
+  },
+  {
+   "text": "Förhöret avslutas kl. 18.30.",
+   "html": "<p>Förhöret avslutas kl. 18.30.</p>",
+   "bbox": [
+    370,
+    2193,
+    1069,
+    2246
+   ],
+   "confidence": 0.9358777004010289,
+   "label": "Text",
+   "readingOrder": 27
+  },
+  {
+   "text": "Stockholm som ovan",
+   "html": "<p>Stockholm som ovan</p>",
+   "bbox": [
+    367,
+    2337,
+    831,
+    2397
+   ],
+   "confidence": 0.9358777004010289,
+   "label": "Text",
+   "readingOrder": 28
+  },
+  {
+   "text": "",
+   "html": "<img/>",
+   "bbox": [
+    342,
+    2397,
+    819,
+    2484
+   ],
+   "confidence": 0.9358777004010289,
+   "label": "Text",
+   "readingOrder": 29
+  },
+  {
+   "text": "Thure Nässén",
+   "html": "<p>Thure Nässén</p>",
+   "bbox": [
+    367,
+    2484,
+    680,
+    2537
+   ],
+   "confidence": 0.9358777004010289,
+   "label": "Text",
+   "readingOrder": 30
+  },
+  {
+   "text": "krinsp",
+   "html": "<p>krinsp</p>",
+   "bbox": [
+    362,
+    2558,
+    531,
+    2611
+   ],
+   "confidence": 0.9358777004010289,
+   "label": "Text",
+   "readingOrder": 31
+  },
+  {
+   "text": "har den 24 oktober 1989 kl. 15.50 fått det utskrivna förhöret uppläst för sig vid telefonsåmtal. Han godkände förhöret i utskrivet skick.",
+   "html": "<p><input type=\"checkbox\"/> har den 24 oktober 1989 kl. 15.50 fått det utskrivna förhöret uppläst för sig vid telefonsåmtal. Han godkände förhöret i utskrivet skick.</p>",
+   "bbox": [
+    347,
+    2639,
+    2350,
+    2779
+   ],
+   "confidence": 0.9358777004010289,
+   "label": "Text",
+   "readingOrder": 32
+  },
+  {
+   "text": "Stockholm som ovan",
+   "html": "<p>Stockholm som ovan</p>",
+   "bbox": [
+    342,
+    2870,
+    819,
+    2927
+   ],
+   "confidence": 0.9358777004010289,
+   "label": "Text",
+   "readingOrder": 33
+  },
+  {
+   "text": "",
+   "html": "<img/>",
+   "bbox": [
+    342,
+    2927,
+    943,
+    3018
+   ],
+   "confidence": 0.9358777004010289,
+   "label": "Text",
+   "readingOrder": 34
+  },
+  {
+   "text": "THURE Nässén/",
+   "html": "<p>THURE Nässén/</p>",
+   "bbox": [
+    342,
+    3039,
+    677,
+    3091
+   ],
+   "confidence": 0.9358777004010289,
+   "label": "Text",
+   "readingOrder": 35
+  },
+  {
+   "text": "000-000-000",
+   "html": "<p>000-000-000</p>",
+   "bbox": [
+    258,
+    3144,
+    278,
+    3281
+   ],
+   "confidence": 0.9358777004010289,
+   "label": "Text",
+   "readingOrder": 36
+  },
+  {
+   "text": "Tiffele ej om bianketten används som fortsättningsblad",
+   "html": "<p>Tiffele ej om bianketten används som fortsättningsblad</p>",
+   "bbox": [
+    310,
+    3260,
+    1027,
+    3309
+   ],
+   "confidence": 0.9358777004010289,
+   "label": "Text",
+   "readingOrder": 37
+  },
+  {
+   "text": "Ex 2: Till spaningsschelens pärm (i nr-följd inom avsnitt)",
+   "html": "<p>Ex 2: Till spaningsschelens pärm (i nr-följd inom avsnitt)</p>",
+   "bbox": [
+    1528,
+    3218,
+    2414,
+    3288
+   ],
+   "confidence": 0.9358777004010289,
+   "label": "PageFooter",
+   "readingOrder": 38
+  }
+ ],
+ "source": {
+  "pdf": "1195 — Förhör med sonen till ägaren av Suckdorffsvapnet — 2021-05-22 — IB-10642-03, se 7, 803, 1194, 1195 — 11.pdf",
+  "page": 7,
+  "dpi": 300,
+  "size": [
+   2481,
+   3509
+  ]
+ }
+}

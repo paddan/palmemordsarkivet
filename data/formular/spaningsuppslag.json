@@ -1,0 +1,101 @@
+{
+  "templates": [
+    {
+      "name": "spaningsuppslag-1",
+      "match": [
+        "SPANINGSUPPSLAG"
+      ],
+      "labels": {
+        "01": "Polisdistrikt (där uppslaget mottagits)",
+        "02": "Arbetsenhet",
+        "03": "Uppgiftsmottagare",
+        "04": "telefon",
+        "05": "datum",
+        "06": "klockan",
+        "07": "Avsnitt",
+        "08": "Löpande nr",
+        "09": "Plats för förtursstämpel",
+        "10": "Brott med vilket uppslaget hör samman",
+        "11": "Spaningsuppslaget lämnat",
+        "12": "Uppgiftslämnarens efternamn och alla förnamn",
+        "13": "Yrke/titel",
+        "14": "Postadress (utdelningsadress och ortsadress), telefon bostaden",
+        "15": "Arbetsplats",
+        "16": "Uppslaget avser",
+        "17": "Händelse",
+        "18": "I sak",
+        "19": "Ovanstående uppslag",
+        "20": "Tagit del",
+        "21": "Anknyter till uppslag nr",
+        "22": "Registrerat",
+        "23": "Ärendet tilldelat",
+        "24": "Färdigbearbetat datum",
+        "25": "Spaningschef sign"
+      },
+      "free_text": [
+        "18"
+      ],
+      "printed": [
+        "Spaningschef",
+        "Bitr spaningschef",
+        "Registrator",
+        "Signatur",
+        "signatur",
+        "datum",
+        "Sid nr",
+        "Forts-blad",
+        "F-år",
+        "-mån",
+        "-dag",
+        "-nr",
+        "Med feta linjer avgränsade avsnitt ifylls ej av uppgiftsmottagaren",
+        "Ex 2: Till spaningschefens pärm (i nr-följd inom avsnitt)"
+      ]
+    },
+    {
+      "name": "spaningsuppslag-2",
+      "match": [
+        "SPANINGSUPPSLAG"
+      ],
+      "labels": {
+        "01": "Polisdistrikt",
+        "02": "Arbetsenhet",
+        "03": "Upprättat(d) av",
+        "04": "Fortsättningsblad",
+        "05": "Förhörsprot",
+        "06": "Promemoria",
+        "07": "Avsnitt",
+        "08": "Löpande nr",
+        "09": "Brott med vilket uppgiften hör samman",
+        "10": "I sak"
+      },
+      "free_text": [
+        "10"
+      ],
+      "printed": [
+        "Spaningschef",
+        "Bitr spaningschef",
+        "Registrator",
+        "Signatur",
+        "signatur",
+        "datum",
+        "Sid nr",
+        "Forts-blad",
+        "F-år",
+        "-mån",
+        "-dag",
+        "-nr",
+        "Med feta linjer avgränsade avsnitt ifylls ej av uppgiftsmottagaren",
+        "Ex 2: Till spaningschefens pärm (i nr-följd inom avsnitt)"
+      ],
+      "aliases": {
+        "01": [
+          "Polismyndighet"
+        ],
+        "06": [
+          "Utskriftsdatum"
+        ]
+      }
+    }
+  ]
+}

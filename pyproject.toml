@@ -87,6 +87,9 @@ py-modules = [
     "prompts",
     "redactions",
     "search_fuzzy",
+    "surya_layout",
+    "form_layout",
+    "surya_worker",
 ]
 
 [tool.setuptools.package-dir]

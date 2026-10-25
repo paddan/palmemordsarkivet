@@ -1,0 +1,580 @@
+{
+ "protocol": 2,
+ "type": "page",
+ "unitId": "forhor-dialog-a",
+ "ordinal": 7,
+ "page": 2,
+ "status": "read",
+ "text": "01 Polisdistrikt*\nSPANINGSUPPSLAG\nSid nr 2\n02 Arbetsenhet*\ni grövre brottmål\n07 Avsnitt\n08 Löpande nr\n03 Upprättat(d) av*\ntelefon*\n04 Fortsätt-\nningsblad\nUppgiftslämnare (efternamn och förnamn)\n09 Brott med vilket uppgiften hör samman*\n05\n06\nUtskriftsdatum\nFörhörsprot\nPromemoria\n10 | sak\natt jag tyckte att den här personen hade såna här glasögon med stålbågade, ungefär sån här pilotmodell och sen så kom jag på att han hade väldigt fyrkantig ansiktsform....och sen ganska smala läppar och sen när jag gjorde den här fantombilden för att veta hur man ska ta ut ögon så tyckte jag att erinra mig att ögonlocken var liksom en sån här nedhängande del och jag tyckte att den här bilden då som jag såg, han hade alla de egenskaper som jag liksom kommer ihåg och.\nF: Den här bilden, i vilken tidning var det du såg den?\nM: Aftonbladet. H....hur länge sen, det är ju två och ett halvt år och man glömmer ju liksom kanske rent den här inutiva känslan, när man känner igen någon. Man liksom..sen har jag tänkt så mycket på det här och förhörts så mycket....att man försöker då..minnet övergår liksom i de här egenskaperna som man kommer ihåg. Och jag tyckte att den här personen hade då egenskaper som jag skulle komma ihåg.\nF: Hur länge sedan var det du såg den här bilden i tidningen?\nHur länge sedan var det den var i tidningen?\nM: Ja, det var en och en halv vecka sedan. Ungefär. Sen så var den publicerad, inte den utan nån...för munnen i DN tror jag det var.\nF: Var det något namn under bilden också?\nM: Ja.\nF: Och namnet?\nM: ...Sarajaka... eller nåt.ü\nF: Sarkaja. SARIKAYA, ERDOGAN *\nM: Ja.\nF: Du kommer inte direkt ihåg den här bilden så väldigt.\nJ: Han hade glasögon på sig på bilden, det kommer jag ihåg.\nM: Ja.\nM: Ja, det sa jag redan nån....\nF: Ja, det har du gjort. Men sen har du ändrat att du tyckte bilden hade tunna läppar och det har du också sagt tidigare.\nM: Ja.\nF: Sen var det det här med ögonen. Som du hade gjort fantombilden.\nM: Ja, just det.\nF: Och de ögonen hade du gjort lite hängande då menar du på.\n* ANKN H 58-14-H, Y 8001, Förekommer även i BAS 8.\nPRS 4632.2\n* Ifylls ej om blanketten används som fortsättningsblad.\nEx 2: Till spaningschefens pärm (i nr-följd inom avsnitt)",
+ "model": "surya-ocr 0.22.1 backend llamacpp model datalab-to/surya-ocr-2 surya-2.gguf 6a3a4c30e5e74446d4f8b6afd05b2f2da970f470:1266400864 surya-2-mmproj.gguf 6a3a4c30e5e74446d4f8b6afd05b2f2da970f470:204986688",
+ "blocks": [
+  {
+   "text": "01 Polisdistrikt*",
+   "html": "01 Polisdistrikt*",
+   "bbox": [
+    308,
+    224,
+    513,
+    259
+   ],
+   "confidence": 0.9705323795594476,
+   "label": "PageHeader",
+   "readingOrder": 0
+  },
+  {
+   "text": "SPANINGSUPPSLAG",
+   "html": "SPANINGSUPPSLAG",
+   "bbox": [
+    1334,
+    238,
+    1761,
+    287
+   ],
+   "confidence": 0.9705323795594476,
+   "label": "PageHeader",
+   "readingOrder": 1
+  },
+  {
+   "text": "Sid nr 2",
+   "html": "Sid nr 2",
+   "bbox": [
+    2148,
+    214,
+    2301,
+    266
+   ],
+   "confidence": 0.9705323795594476,
+   "label": "PageHeader",
+   "readingOrder": 2
+  },
+  {
+   "text": "02 Arbetsenhet*",
+   "html": "02 Arbetsenhet*",
+   "bbox": [
+    308,
+    319,
+    518,
+    354
+   ],
+   "confidence": 0.9705323795594476,
+   "label": "Text",
+   "readingOrder": 3
+  },
+  {
+   "text": "i grövre brottmål",
+   "html": "i grövre brottmål",
+   "bbox": [
+    1334,
+    294,
+    1595,
+    333
+   ],
+   "confidence": 0.9705323795594476,
+   "label": "Text",
+   "readingOrder": 4
+  },
+  {
+   "text": "07 Avsnitt",
+   "html": "07 Avsnitt",
+   "bbox": [
+    1910,
+    294,
+    2058,
+    329
+   ],
+   "confidence": 0.9705323795594476,
+   "label": "Text",
+   "readingOrder": 5
+  },
+  {
+   "text": "08 Löpande nr",
+   "html": "08 Löpande nr",
+   "bbox": [
+    2148,
+    294,
+    2356,
+    329
+   ],
+   "confidence": 0.9705323795594476,
+   "label": "Text",
+   "readingOrder": 6
+  },
+  {
+   "text": "03 Upprättat(d) av*",
+   "html": "03 Upprättat(d) av*",
+   "bbox": [
+    308,
+    410,
+    556,
+    452
+   ],
+   "confidence": 0.9705323795594476,
+   "label": "Text",
+   "readingOrder": 7
+  },
+  {
+   "text": "telefon*",
+   "html": "telefon*",
+   "bbox": [
+    828,
+    417,
+    935,
+    452
+   ],
+   "confidence": 0.9705323795594476,
+   "label": "Text",
+   "readingOrder": 8
+  },
+  {
+   "text": "04 Fortsätt-\nningsblad",
+   "html": "04 Fortsätt-<br/>ningsblad",
+   "bbox": [
+    1339,
+    417,
+    1520,
+    498
+   ],
+   "confidence": 0.9705323795594476,
+   "label": "Text",
+   "readingOrder": 9
+  },
+  {
+   "text": "Uppgiftslämnare (efternamn och förnamn)",
+   "html": "Uppgiftslämnare (efternamn och förnamn)",
+   "bbox": [
+    1602,
+    417,
+    2140,
+    459
+   ],
+   "confidence": 0.9705323795594476,
+   "label": "Text",
+   "readingOrder": 10
+  },
+  {
+   "text": "09 Brott med vilket uppgiften hör samman*",
+   "html": "09 Brott med vilket uppgiften hör samman*",
+   "bbox": [
+    308,
+    508,
+    848,
+    547
+   ],
+   "confidence": 0.9705323795594476,
+   "label": "Text",
+   "readingOrder": 11
+  },
+  {
+   "text": "05",
+   "html": "05",
+   "bbox": [
+    1339,
+    508,
+    1394,
+    547
+   ],
+   "confidence": 0.9705323795594476,
+   "label": "Text",
+   "readingOrder": 12
+  },
+  {
+   "text": "06",
+   "html": "06",
+   "bbox": [
+    1602,
+    508,
+    1681,
+    547
+   ],
+   "confidence": 0.9705323795594476,
+   "label": "Text",
+   "readingOrder": 13
+  },
+  {
+   "text": "Utskriftsdatum",
+   "html": "Utskriftsdatum",
+   "bbox": [
+    1860,
+    508,
+    2066,
+    550
+   ],
+   "confidence": 0.9705323795594476,
+   "label": "Text",
+   "readingOrder": 14
+  },
+  {
+   "text": "Förhörsprot",
+   "html": "Förhörsprot",
+   "bbox": [
+    1399,
+    568,
+    1562,
+    610
+   ],
+   "confidence": 0.9705323795594476,
+   "label": "Text",
+   "readingOrder": 15
+  },
+  {
+   "text": "Promemoria",
+   "html": "Promemoria",
+   "bbox": [
+    1657,
+    568,
+    1828,
+    610
+   ],
+   "confidence": 0.9705323795594476,
+   "label": "Text",
+   "readingOrder": 16
+  },
+  {
+   "text": "10 | sak",
+   "html": "10 | sak",
+   "bbox": [
+    308,
+    606,
+    432,
+    641
+   ],
+   "confidence": 0.9705323795594476,
+   "label": "Text",
+   "readingOrder": 17
+  },
+  {
+   "text": "att jag tyckte att den här personen hade såna här glasögon med stålbågade, ungefär sån här pilotmodell och sen så kom jag på att han hade väldigt fyrkantig ansiktsform....och sen ganska smala läppar och sen när jag gjorde den här fantombilden för att veta hur man ska ta ut ögon så tyckte jag att erinra mig att ögonlocken var liksom en sån här nedhängande del och jag tyckte att den här bilden då som jag såg, han hade alla de egenskaper som jag liksom kommer ihåg och.",
+   "html": "<p>att jag tyckte att den här personen hade såna här glasögon med stålbågade, ungefär sån här pilotmodell och sen så kom jag på att han hade väldigt fyrkantig ansiktsform....och sen ganska smala läppar och sen när jag gjorde den här fantombilden för att veta hur man ska ta ut ögon så tyckte jag att erinra mig att ögonlocken var liksom en sån här nedhängande del och jag tyckte att den här bilden då som jag såg, han hade alla de egenskaper som jag liksom kommer ihåg och.</p>",
+   "bbox": [
+    441,
+    680,
+    2356,
+    1160
+   ],
+   "confidence": 0.9705323795594476,
+   "label": "Text",
+   "readingOrder": 18
+  },
+  {
+   "text": "F: Den här bilden, i vilken tidning var det du såg den?",
+   "html": "<p>F: Den här bilden, <u>i</u> vilken tidning var det du såg den?</p>",
+   "bbox": [
+    365,
+    1174,
+    1711,
+    1237
+   ],
+   "confidence": 0.9705323795594476,
+   "label": "Text",
+   "readingOrder": 19
+  },
+  {
+   "text": "M: Aftonbladet. H....hur länge sen, det är ju två och ett halvt år och man glömmer ju liksom kanske rent den här inutiva känslan, när man känner igen någon. Man liksom..sen har jag tänkt så mycket på det här och förhörts så mycket....att man försöker då..minnet övergår liksom i de här egenskaperna som man kommer ihåg. Och jag tyckte att den här personen hade då egenskaper som jag skulle komma ihåg.",
+   "html": "<p>M: <u>Aftonbladet</u>. H....hur länge sen, det är ju två och ett halvt år och man glömmer ju liksom kanske rent den här inutiva känslan, när man känner igen någon. Man liksom..sen har jag tänkt så mycket på det här och förhörts så mycket....att man försöker då..minnet övergår liksom i de här egenskaperna som man kommer ihåg. Och jag tyckte att den här personen hade då egenskaper som jag skulle komma ihåg.</p>",
+   "bbox": [
+    365,
+    1244,
+    2321,
+    1658
+   ],
+   "confidence": 0.9705323795594476,
+   "label": "Text",
+   "readingOrder": 20
+  },
+  {
+   "text": "F: Hur länge sedan var det du såg den här bilden i tidningen?",
+   "html": "<p>F: Hur länge sedan var det du såg den här bilden i tidningen?</p>",
+   "bbox": [
+    360,
+    1672,
+    1853,
+    1731
+   ],
+   "confidence": 0.9705323795594476,
+   "label": "Text",
+   "readingOrder": 21
+  },
+  {
+   "text": "Hur länge sedan var det den var i tidningen?",
+   "html": "<p>Hur länge sedan var det den var i tidningen?</p>",
+   "bbox": [
+    432,
+    1742,
+    1510,
+    1802
+   ],
+   "confidence": 0.9705323795594476,
+   "label": "Text",
+   "readingOrder": 22
+  },
+  {
+   "text": "M: Ja, det var en och en halv vecka sedan. Ungefär. Sen så var den publicerad, inte den utan nån...för munnen i DN tror jag det var.",
+   "html": "<p>M: Ja, det var en och en halv vecka sedan. Ungefär. Sen så var den publicerad, inte den utan nån...för munnen i DN tror jag det var.</p>",
+   "bbox": [
+    360,
+    1816,
+    2259,
+    1945
+   ],
+   "confidence": 0.9705323795594476,
+   "label": "Text",
+   "readingOrder": 23
+  },
+  {
+   "text": "F: Var det något namn under bilden också?",
+   "html": "<p>F: Var det något namn under bilden också?</p>",
+   "bbox": [
+    360,
+    1956,
+    1364,
+    2012
+   ],
+   "confidence": 0.9705323795594476,
+   "label": "Text",
+   "readingOrder": 24
+  },
+  {
+   "text": "M: Ja.",
+   "html": "<p>M: Ja.</p>",
+   "bbox": [
+    360,
+    2022,
+    513,
+    2075
+   ],
+   "confidence": 0.9705323795594476,
+   "label": "Text",
+   "readingOrder": 25
+  },
+  {
+   "text": "F: Och namnet?",
+   "html": "<p>F: Och namnet?</p>",
+   "bbox": [
+    360,
+    2092,
+    712,
+    2145
+   ],
+   "confidence": 0.9705323795594476,
+   "label": "Text",
+   "readingOrder": 26
+  },
+  {
+   "text": "M: ...Sarajaka... eller nåt.ü",
+   "html": "<p>M: ...Sarajaka... eller nåt.ü</p>",
+   "bbox": [
+    360,
+    2163,
+    1146,
+    2222
+   ],
+   "confidence": 0.9705323795594476,
+   "label": "Text",
+   "readingOrder": 27
+  },
+  {
+   "text": "F: Sarkaja. SARIKAYA, ERDOGAN *",
+   "html": "<p>F: Sarkaja. <u>SARIKAYA, ERDOGAN *</u></p>",
+   "bbox": [
+    360,
+    2233,
+    1520,
+    2303
+   ],
+   "confidence": 0.9705323795594476,
+   "label": "Text",
+   "readingOrder": 28
+  },
+  {
+   "text": "M: Ja.",
+   "html": "<p>M: Ja.</p>",
+   "bbox": [
+    360,
+    2306,
+    513,
+    2355
+   ],
+   "confidence": 0.9705323795594476,
+   "label": "Text",
+   "readingOrder": 29
+  },
+  {
+   "text": "F: Du kommer inte direkt ihåg den här bilden så väldigt.",
+   "html": "<p>F: Du kommer inte direkt ihåg den här bilden så väldigt.</p>",
+   "bbox": [
+    360,
+    2376,
+    1716,
+    2439
+   ],
+   "confidence": 0.9705323795594476,
+   "label": "Text",
+   "readingOrder": 30
+  },
+  {
+   "text": "J: Han hade glasögon på sig på bilden, det kommer jag ihåg.",
+   "html": "<p>J: Han hade glasögon på sig på bilden, det kommer jag ihåg.</p>",
+   "bbox": [
+    360,
+    2446,
+    1788,
+    2510
+   ],
+   "confidence": 0.9705323795594476,
+   "label": "Text",
+   "readingOrder": 31
+  },
+  {
+   "text": "M: Ja.",
+   "html": "<p>M: Ja.</p>",
+   "bbox": [
+    360,
+    2520,
+    506,
+    2566
+   ],
+   "confidence": 0.9705323795594476,
+   "label": "Text",
+   "readingOrder": 32
+  },
+  {
+   "text": "M: Ja, det sa jag redan nån....",
+   "html": "<p>M: Ja, det sa jag redan nån....</p>",
+   "bbox": [
+    360,
+    2587,
+    1109,
+    2646
+   ],
+   "confidence": 0.9705323795594476,
+   "label": "Text",
+   "readingOrder": 33
+  },
+  {
+   "text": "F: Ja, det har du gjort. Men sen har du ändrat att du tyckte bilden hade tunna läppar och det har du också sagt tidigare.",
+   "html": "<p>F: Ja, det har du gjort. Men sen har du ändrat att du tyckte bilden hade tunna läppar och det har du också sagt tidigare.</p>",
+   "bbox": [
+    360,
+    2660,
+    2103,
+    2793
+   ],
+   "confidence": 0.9705323795594476,
+   "label": "Text",
+   "readingOrder": 34
+  },
+  {
+   "text": "M: Ja.",
+   "html": "<p>M: Ja.</p>",
+   "bbox": [
+    360,
+    2800,
+    506,
+    2850
+   ],
+   "confidence": 0.9705323795594476,
+   "label": "Text",
+   "readingOrder": 35
+  },
+  {
+   "text": "F: Sen var det det här med ögonen. Som du hade gjort fantombilden.",
+   "html": "<p>F: Sen var det det här med ögonen. Som du hade gjort fantombilden.</p>",
+   "bbox": [
+    360,
+    2871,
+    1952,
+    2937
+   ],
+   "confidence": 0.9705323795594476,
+   "label": "Text",
+   "readingOrder": 36
+  },
+  {
+   "text": "M: Ja, just det.",
+   "html": "<p>M: Ja, just det.</p>",
+   "bbox": [
+    360,
+    2941,
+    744,
+    2997
+   ],
+   "confidence": 0.9705323795594476,
+   "label": "Text",
+   "readingOrder": 37
+  },
+  {
+   "text": "F: Och de ögonen hade du gjort lite hängande då menar du på.",
+   "html": "<p>F: Och de ögonen hade du gjort lite hängande då menar du på.</p>",
+   "bbox": [
+    360,
+    3011,
+    1805,
+    3077
+   ],
+   "confidence": 0.9705323795594476,
+   "label": "Text",
+   "readingOrder": 38
+  },
+  {
+   "text": "* ANKN H 58-14-H, Y 8001, Förekommer även i BAS 8.",
+   "html": "<p>* ANKN H 58-14-H, Y 8001, Förekommer även i BAS 8.</p>",
+   "bbox": [
+    414,
+    3081,
+    2272,
+    3221
+   ],
+   "confidence": 0.9705323795594476,
+   "label": "Text",
+   "readingOrder": 39
+  },
+  {
+   "text": "PRS 4632.2",
+   "html": "PRS 4632.2",
+   "bbox": [
+    211,
+    3091,
+    248,
+    3221
+   ],
+   "confidence": 0.9705323795594476,
+   "label": "PageFooter",
+   "readingOrder": 40
+  },
+  {
+   "text": "* Ifylls ej om blanketten används som fortsättningsblad.",
+   "html": "* Ifylls ej om blanketten används som fortsättningsblad.",
+   "bbox": [
+    283,
+    3218,
+    972,
+    3260
+   ],
+   "confidence": 0.9705323795594476,
+   "label": "PageFooter",
+   "readingOrder": 41
+  },
+  {
+   "text": "Ex 2: Till spaningschefens pärm (i nr-följd inom avsnitt)",
+   "html": "Ex 2: Till spaningschefens pärm (i nr-följd inom avsnitt)",
+   "bbox": [
+    1468,
+    3218,
+    2373,
+    3270
+   ],
+   "confidence": 0.9705323795594476,
+   "label": "PageFooter",
+   "readingOrder": 42
+  }
+ ],
+ "source": {
+  "pdf": "1279.4 — Förhör med Mårten Palme 17 augusti 1988 — 2021-08-10 — T-2-E — 10.pdf",
+  "page": 2,
+  "dpi": 300,
+  "size": [
+   2480,
+   3505
+  ]
+ }
+}
