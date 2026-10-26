@@ -224,7 +224,8 @@ def _assert_conserved(md: str, size: int, overlap: int = 150) -> None:
     assert not missing, missing[:10]
 
 
-FIXTURE_NAMES = ["form-v1-a", "form-v2-a", "form-v2-b", "forhor-dialog-a", "forhor-dialog-b"]
+FIXTURE_NAMES = ["form-v1-a", "form-v1-c", "form-v1-d", "form-v1-e", "form-v2-a", "form-v2-b", "form-v2-c", "form-v2-d", "form-v2-e", "forhor-dialog-a", "forhor-dialog-b",
+    "forhor-dialog-c"]
 
 
 @pytest.mark.parametrize("size", [200, 400, 800])

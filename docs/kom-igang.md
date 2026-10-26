@@ -191,6 +191,20 @@ för klickad dokumentrad, och
 uppgifter. Referenserna i jämförelsesvaret är klickbara och öppnar matchande
 PDF i en ny webbläsarflik, på refererad sida när sidnumret är känt.
 
+### Sidgranskning
+
+**Sidgranskning** visar en PDF-sida bredvid den text OCR:en gav. Välj dokument
+(skriv i listan för att söka) och sida; flikarna visar **Text** (exakt som den
+indexeras), och för sidor som lästs med `surya-layout` även **Markdown**,
+**Markdown-källa**, **Layout** och **Formulärfält**. Kryssrutan **Visa
+layoutblock** ritar blockens ramar på sidbilden. Ser texten dålig ut, välj motor
+och klicka **Skanna om sidan** — det startar ett bakgrundsjobb (samma som
+Admin → OCR → *Skanna om sida*) och sidan visar jobbets logg tills det är klart.
+Den tidigare läsningen sparas under **Historik**, där **Återställ** lägger
+tillbaka den om omskanningen blev sämre. Saknas PDF:en går sidan inte att
+skanna om, men en sparad läsning kan fortfarande återställas. Länken
+`?doc=<filstam>&page=<n>` öppnar en sida direkt.
+
 ### Karta
 
 Karta-fliken finns i Streamlit-appen och visar observationer runt mordkvällen på

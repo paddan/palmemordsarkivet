@@ -26,12 +26,12 @@ När du gör förändringar i projektet ska du **alltid** uppdatera den använda
 - `docs/kom-igang.md` — snabbstart (svenska): krav, installation, API-nyckel, kör pipelinen, ställ första frågan
 - `docs/teknisk-referens.md` — detaljerad dokumentation (svenska): flödesdiagram, alla steg/flaggor, state-db, kunskapsgraf, LLM-config, filöversikt, tester
 - `docs/jev-reranker-pilot.md` — pilotstudie (svenska): Jev mot BGE som reranker, mått, begränsningar och rekommendation, samt uppföljningen som mätte kandidatlistans storlek (RAG och MCP), höjde `top_k` till 50 i båda lärna och gjorde Jev valbar även i utredningsläget
-- `docs/surya-layout-pilot.md` — spik och pilot (svenska): vad Surya 2 (layout + Markdown) ger för SPANINGSUPPSLAG-blanketter och förhör, maskeringarnas beteende, hastighet och konsekvenser för planen i `docs/superpowers/plans/2026-10-25-surya-layout-markdown.md`
+- `docs/surya-layout-pilot.md` — spik och pilot (svenska): vad Surya 2 (layout + Markdown) ger för SPANINGSUPPSLAG-blanketter och förhör, maskeringarnas beteende, hastighet och konsekvenser för planen i `docs/superpowers/plans/2026-10-25-surya-layout-markdown.md`, samt piloten mot 50 riktiga arkivsidor (lines mot layout, blankettfält, repliker, sökkvalitet, `PAGE_TOO_LARGE`) med utfall per acceptanskriterium och rekommendationen att behålla `lines` som standard
 - `AGENTS.md` — instruktioner för framtida Codex-sessioner
 
 ## Project Overview
 
-**palmemordsarkivet** laddar ner, OCR-processar och gör 3 762 palme-PDF:er + 7 155 wpu-PDF:er (~47 000 sidor, 8 665 sökbara dokument efter merge) från palmemordsarkivet.se och wpu.nu sökbara via RAG + Claude (eller annan vald LLM-backend), med Streamlit-flikarna Utredning, Utredningspärm, Graf, Maskeringar, Jämförelse och Karta. Alla kommentarer och docstrings är på svenska.
+**palmemordsarkivet** laddar ner, OCR-processar och gör 3 762 palme-PDF:er + 7 155 wpu-PDF:er (~47 000 sidor, 8 665 sökbara dokument efter merge) från palmemordsarkivet.se och wpu.nu sökbara via RAG + Claude (eller annan vald LLM-backend), med Streamlit-flikarna Utredning, Utredningspärm, Graf, Maskeringar, Jämförelse, Karta, Sidgranskning och Admin. Alla kommentarer och docstrings är på svenska.
 
 Pipeline: download → OCR (Tesseract + optional Surya) → detect redactions → normalize → quality scoring → LanceDB ingest → RAG query → Streamlit UI.
 
@@ -56,6 +56,7 @@ src/
   Utredning.py         # Streamlit-frågesida (RAG/MCP, svarsgraf, sparknapp, bokmärken, facett-/fuzzy-filter)
   casebook_ui.py       # Delade Streamlit-komponenter för utredningspärm + bokmärken + anteckningar
   redactions.py        # Maskeringsutforskaren: aggregera [MASKAD]-markörer ur pdf_pages
+  page_review.py       # Sidvy-logik för Sidgranskning (Streamlit-fri): text, Markdown, layout, sidbild, historik
   facets.py            # Facetterad sökning: entiteter ur doc_entities → filtrera träffar
   search_fuzzy.py      # OCR-tolerant fuzzy-sökning (difflib token-index över chunk-korpusen)
   compare.py           # Vittnesjämförelse: promptbyggare som ställer källor mot varandra
@@ -76,6 +77,7 @@ src/
     5_Maskeringar.py   # Maskeringsutforskaren (klickbar tabellrad + valt dokuments [MASKAD]-kontext)
     6_Jämförelse.py    # Vittnesjämförelse (korsförhörsläge + klickbara PDF-referenser)
     7_Karta.py         # Karta över mordkvällens observationer med formulär och tidslinje
+    9_Sidgranskning.py # PDF-sida bredvid OCR-text/Markdown/layout; omskanning + historik via rescan-page
   rag/
     ingest.py          # LanceDB vector index builder
     ask.py             # RAG query + LLM-integration (Claude/OpenAI-kompatibla)
@@ -102,6 +104,7 @@ src/
     ocr.py              # Full OCR + Surya-fallback/redo
     pipeline.py         # Full pipeline-orkestrering
     neo4j.py            # Lokal Podman/Neo4j-livscykel
+    rescan.py           # rescan-page: skanna om en sida / återställ historisk läsning (pdf_page_readings)
   admin_ui.py           # Testbara adminpresentatörer och formulärhelpers
   pages/
     8_Admin.py          # Lokal Streamlit-adminsida (bakgrundsjobb + operationer)
@@ -133,6 +136,7 @@ samma kommando som `.venv/bin/python scripts/run_pipeline.py`. Kör med
 .venv/bin/python scripts/test.py            # pytest
 .venv/bin/python scripts/test.py --static   # pytest + ruff/mypy via .venv
 .venv/bin/pytest tests/                     # bara pytest
+.venv/bin/pytest -m external tests/test_surya_real.py  # verklig Surya 2 (PALME_SURYA_PYTHON); bortvald annars
 
 # Setup
 .venv/bin/python scripts/install.py         # Installera (brew, Python-paket, tessdata)
@@ -162,6 +166,9 @@ samma kommando som `.venv/bin/python scripts/run_pipeline.py`. Kör med
 .venv/bin/python scripts/jobs.py log --follow
 .venv/bin/python scripts/jobs.py cancel
 .venv/bin/python scripts/jobs.py list
+
+# Skanna om en sida (historiken i pdf_page_readings; --restore-reading ID återställer)
+.venv/bin/python scripts/rescan_page.py --pdf-stem "<stam>" --page 3 [--engine tesseract] [--no-reindex]
 
 # wpu.nu (valfritt)
 .venv/bin/python scripts/download_wpu.py && .venv/bin/python scripts/merge_wpu.py
@@ -212,7 +219,7 @@ Env-variabler: `CLAUDE_CODE_OAUTH_TOKEN` (Pro/Max, räknas mot prenumeration) el
 - Jobbloggar: `generated/admin_jobs/<job-id>.log` (append-only, tidsstämplad).
 - Cancel sker kontrollerat via `cancel_requested` → SIGTERM till processgrupp → SIGKILL efter grace; ett jobb får aldrig `succeeded` efter begärd cancel. Efter SIGKILL markeras jobbet `interrupted` direkt och workerns barn (egna sessioner) dödas separat, så en hårt dödad worker varken låser `active_slot` eller lämnar kvar tunga processer.
 - En worker som dött utan att skriva status upptäcks som zombie (inte som levande PID) av `reconcile_active_job`, som då frigör `active_slot`.
-- Adminsidan och CLI:n genereras ur samma `src/operations/registry.py` — lägg aldrig till operationer eller flaggor på bara ena sidan. Nya parametrar hamnar automatiskt i formulärets rutnät (`FORM_COLUMNS` fält per rad; sidan körs i full bredd) och hemliga parametrar får inget fält. Varje operation visas som ett eget kort (`st.container(border=True)`) med rubrik (operationens etikett) — utom Neo4j-operationerna, som är parameterlösa och delas upp i ett kort med knapparna Starta/Stopp/Status (`render_neo4j_section`), vilket alltid renderas först i fliken *Extraktion och graf* eftersom grafen kräver en startad databas — och fälten grupperas per sort av `parameter_groups` (Alternativ/Inställningar/Sökvägar) så att kryssrutor och talfält inte blandas. Varje kort har också en hjälp till höger (`OPERATION_HELP` i `src/admin_ui.py`: en förklaring plus en punktlista som förklarar varje val, med etiketter hämtade från formuläret och samma caption-stil som förklaringen via `section_help_markdown`). Punktlistan följer formulärets ordning (`form_field_order`) och **varje fält som visas måste ha en punkt** — testerna `test_help_explains_every_field_in_every_operation`, `test_help_bullets_follow_the_field_order` och `test_every_admin_operation_has_a_help_text` bevakar det. Äldre LLM-fält (`provider`/`model`/`base_url`) döljs i formulär som har en `profile`-parameter (`LEGACY_LLM_PARAMS`) men finns kvar som CLI-flaggor. Etiketter, knapptext och kortare rubriker per operation sätts i `FORM_LAYOUT` i `src/admin_ui.py` — lägg inte in layout i registret, och lägg inte till flaggor bara i formuläret. Talfält hålls smala (`FIELD_WIDTHS`, men över Streamlits brytpunkt ~148 px där stegknapparna döljs) och deras titel ritas separat ovanför fältet så att `width` inte tvingar fram radbrytning; radvikterna i `row_specs` packar fälten till vänster. Parametrar där användaren väljer en befintlig fil får en filväljare i `FILE_PICKERS` (operation, parameter) → källor + mönster, så att rullistan öppnar rätt katalog för funktionens syfte (PDF-arkivet, `state:pdf_pages` för dokument med per-sida-text, `generated/text`) — lägg inte till ett nytt filnamnsfält som textinmatning. Operationer som bara ska köras från CLI:t sätts till `admin_visible=False` (t.ex. `download` och `download-wpu`, som ingår i `run-pipeline`).
+- Adminsidan och CLI:n genereras ur samma `src/operations/registry.py` — lägg aldrig till operationer eller flaggor på bara ena sidan. Nya parametrar hamnar automatiskt i formulärets rutnät (`FORM_COLUMNS` fält per rad; sidan körs i full bredd) och hemliga parametrar får inget fält. Varje operation visas som ett eget kort (`st.container(border=True)`) med rubrik (operationens etikett) — utom Neo4j-operationerna, som är parameterlösa och delas upp i ett kort med knapparna Starta/Stopp/Status (`render_neo4j_section`), vilket alltid renderas först i fliken *Extraktion och graf* eftersom grafen kräver en startad databas — och fälten grupperas per sort av `parameter_groups` (Alternativ/Inställningar/Sökvägar) så att kryssrutor och talfält inte blandas. Varje kort har också en hjälp till höger (`OPERATION_HELP` i `src/admin_ui.py`: en förklaring plus en punktlista som förklarar varje val, med etiketter hämtade från formuläret och samma caption-stil som förklaringen via `section_help_markdown`). Punktlistan följer formulärets ordning (`form_field_order`) och **varje fält som visas måste ha en punkt** — testerna `test_help_explains_every_field_in_every_operation`, `test_help_bullets_follow_the_field_order` och `test_every_admin_operation_has_a_help_text` bevakar det. Äldre LLM-fält (`provider`/`model`/`base_url`) döljs i formulär som har en `profile`-parameter (`LEGACY_LLM_PARAMS`) men finns kvar som CLI-flaggor. Etiketter, knapptext och kortare rubriker per operation sätts i `FORM_LAYOUT` i `src/admin_ui.py` — lägg inte in layout i registret, och lägg inte till flaggor bara i formuläret. Talfält hålls smala (`FIELD_WIDTHS`, men över Streamlits brytpunkt ~148 px där stegknapparna döljs) och deras titel ritas separat ovanför fältet så att `width` inte tvingar fram radbrytning; radvikterna i `row_specs` packar fälten till vänster. Parametrar där användaren väljer en befintlig fil får en filväljare i `FILE_PICKERS` (operation, parameter) → källor + mönster, så att rullistan öppnar rätt katalog för funktionens syfte (PDF-arkivet, `state:pdf_pages` för dokument med per-sida-text, `state:pdf_files` för alla dokument, `generated/text`) — lägg inte till ett nytt filnamnsfält som textinmatning. Operationer som bara ska köras från CLI:t sätts till `admin_visible=False` (t.ex. `download` och `download-wpu`, som ingår i `run-pipeline`).
 
 ## Loggning
 
@@ -649,6 +656,39 @@ medan den radbaserade vägen fortfarande avbryter. Tillgängligheten kontrollera
 innehåller `llama-server unresolved`; `--identity`-proben körs i egen session med 30 s tidsgräns och
 dödar hela sin processgrupp vid tidsgräns. En saknad runtime loggas med orsak
 (tolken saknas, `llama-server unresolved` eller att workern inte svarar på `--identity`).
+**Renderingstak och `layout_json` med dpi**: workern vägrar sidbilder över `MAX_PAGE_PIXELS`
+(16 777 216; speglas i `surya_client` och bevakas av `test_constants_match_worker`). I motorn
+`surya-layout` renderas en för stor sida därför om i högsta dpi som ryms
+(`ocr_pages.cap_layout_image`: `floor(dpi·sqrt(gräns/bildpunkter))`, kontrollerat mot den faktiska
+bildstorleken), och **samma bild** används för maskeringsdetektering, Surya och PDF-textlagret
+(`update_pdf_text_layer(page_dpi=…)`). Den använda dpi:n sparas: `layout_json` är
+`{"dpi": N, "blocks": [...]}` (`surya_layout.layout_to_json`/`layout_from_json`; den äldre rena
+blocklistan läses som 300 dpi), och Sidgranskningen skalar ramarna från `PageView.ocr_dpi` — anta
+aldrig 300 dpi för en layoutrad. Övriga motorer renderas i den begärda dpi:n som förut.
+
+**Etikettradens kvarleva och `[Redacted]` (`form_layout.py`)**: en rad godtas som etikett bara när
+*hela* raden liknar mallens etikett (prosa som "07 avsnitt i bandet saknas, sa han." är text); ändra
+inte det. Text efter mallens etikett på en godtagen rad (`07 Avsnitt E`) blir fältets värde om fältet
+inte fick något värde underifrån och texten är ≤ 60 tecken, inte fast tryck och inte ett fältnummer;
+annars står den kvar som vanlig text i läsordningen. Kvarlevan är allt mallens etikett inte
+täcker: `_label_match` justerar raden mot mallens etikett (difflib) och väljer det prefix som liknar
+mest och vars sista ord täcks, med klipp även mitt i ord vid bokstav→siffra (`Avsnitt12` → `12`);
+klipp aldrig bara nära etikettens längd eller låt helradslikheten ersätta hela raden med mallens
+etikett — då försvann svansen. Inledande tryckta parenteser i kvarlevan hör till etiketten. En
+orättad (rå) etikett med tomt fält skrivs också som lös text. Skyddsnätet (beslut BG/BI,
+`safety_net`/`_unrendered_words`/`_template_cover`) skriver varje ord på etikettraden som inte syns
+som lös text. Ett ord syns om det står i värdet eller i lös text, eller i etiketten men bara när
+fältet skrivs till Markdown. Undantag görs bara genom **justering**, aldrig genom ordlikhet: minst
+80 % av ordets tecken måste täckas, minst hälften av dem lika, mot mallens etikett eller mot den
+tryckta parentes en parentes på raden motsvarar (ord för ord). Återinför inte likhetsundantag; de
+lät inskjutna namn ("Eftersson", "Volvo i parentesen") försvinna. `FormField.source` bär den råa
+raden till ren text (`fields_text`) när mallen skrivit om den. En ny blankettvariant med tryckta
+förklaringsparenteser behöver dem i mallens `printed`, annars blir de lös text på varje sida. Inget får försvinna ur Markdown —
+`assert_label_rests_in_markdown` i `tests/test_form_layout.py` jämför radens ord mot etikett, värde
+och lös text utan att skala av prefix eller parenteser (bara OCR-stavade etikettord undantas) på alla
+riktiga fixturer. Suryas maskeringsmarkör matchas som
+`\[\s*redacted\s*\]` utan skiftläge (`surya_layout.REDACTED_RE`, `has_mask`) både när den skrivs om
+till `[MASKAD]` och när `with_redactions` avgör om ett block redan är maskerat.
 
 **Varför Surya 2 har en egen venv, och varför `text` förblir ren text**: projektets `.venv` kör
 Python 3.14 med `surya-ocr 0.17.1` och `transformers<5` (Gotcha 1); Surya 2 (`surya-ocr==0.22.1`)
@@ -663,6 +703,32 @@ räknar på den; Markdown ligger i `pdf_pages.markdown` och används bara av ing
 utelämnas ur Markdown, `PAGE_HEADER` blir kontextrad (`> Sidhuvud: …`) i varje chunk — båda finns
 kvar i `text`. Standardmotorn är `lines` tills piloten visat att `layout` är minst lika bra; byt den
 inte utan den. Vikterna (`datalab-to/surya-ocr-2-gguf`) har en egen licens — se modellkortet.
+
+**Omskanning av en sida (`src/operations/rescan.py`)**: `rescan-page` är ett
+vanligt skrivande bakgrundsjobb. Validering (PDF finns, `1 ≤ page ≤ sidantal`,
+historisk läsning hör till samma stam/sida) sker före all skrivning; den gällande
+läsningen arkiveras i `pdf_page_readings` precis före OCR:en. **Gällande läsning
+är textfilens sida**, inte `pdf_pages`-raden: äldre rader kan ha `text = NULL`
+(tusentals i arkivet) och raden kan vara inaktuell, så `_archive_current`
+kopierar raden bara när `markdown_is_fresh(rad, filens sida)`; annars arkiveras
+filens sida (motorn `hel-fils-OCR` när raden saknas eller har `NULL`, annars
+radens motor; Markdown/layout/poäng `NULL`). Ändra inte det — annars skriver
+omskanningen över den enda kopian. Misslyckas eller avbryts OCR:en tas den nyss
+skrivna historikraden bort (`db.delete_page_reading`). Återställning kräver inte
+PDF:en (sidan kontrolleras mot textfilen), vägrar läsningar med `text = NULL`,
+och en återställd `hel-fils-OCR`-läsning lämnar ingen `pdf_pages`-rad efter sig
+(`db.delete_page_row`), så sidan inte stängs för Surya-sidoredo. OCR:en körs
+som underprocess `src/ocr_pages.py --pages N --force` via `ctx.run_process` —
+inte `run_ocr_pages` i processen, eftersom det är `ocr_pages.py` som har
+SIGTERM-hanteraren som dödar Surya-workerns processgrupp. `--force` ger exitkod 1
+om en angiven sida inte gick att läsa; rc 3 och övriga icke-noll-koder blir
+`OperationFailed` med den gällande läsningen orörd. Efter OCR/återställning körs
+`operations.ocr.merge_and_normalize` (delas med OCR-stegen) med `only_pages={page}` — bara den sidan slås in i textfilen, så en inaktuell grannrad aldrig skriver över en oarkiverad filsida — och, med omindexering,
+`db.delete_ingest` + inkrementell ingest med registrets standardvärden för
+`ingest` — ingest-raden tas bort eftersom en ny läsning kan ge samma text men ny
+Markdown. `--restore-reading` är CLI-only och döljs i Admin via
+`admin_ui.ADMIN_HIDDEN_PARAMS`; dokumentväljaren använder källan
+`state:pdf_files` (alla dokument, inte bara de med per-sida-rader).
 
 **Pipeline-resume (`scripts/run_pipeline.py`)**: OCR- och ingest-stegen körs alltid, även när download inte hittade nya PDF:er. Stegen är idempotenta och detta gör att en tidigare avbruten körning kan slutföras.
 

@@ -46,6 +46,9 @@ STATUS_EMPTY = "empty"
 STATUS_ERROR = "error"
 STATUS_OK = "ok"
 MAX_RESULT_BYTES = 4 * 1024 * 1024
+# Workerns rastergräns: en större sidbild får PAGE_TOO_LARGE (ocr_pages renderar
+# därför layoutsidor i lägre dpi när de inte ryms).
+MAX_PAGE_PIXELS = 16_777_216
 UNAVAILABLE_CODES = frozenset(
     {"NEEDS_SURYA", "NEEDS_LLAMA_CPP", "NEEDS_SURYA_MODEL", "SURYA_START_FAILED"}
 )

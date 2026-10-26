@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 DEFAULT_DB: Path = Path(os.environ.get("STATE_DB", str(ROOT / "generated" / "db" / "state.db")))
 
-SCHEMA_VERSION: int = 11
+SCHEMA_VERSION: int = 12
 
 LLM_USAGE_SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS llm_usage (
@@ -79,7 +79,25 @@ CREATE TABLE IF NOT EXISTS graph_name_rules (
 );
 """
 
-SCHEMA_SQL = GRAPH_REVIEW_SCHEMA_SQL + LLM_USAGE_SCHEMA_SQL + """
+PAGE_READINGS_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS pdf_page_readings (
+    id              INTEGER PRIMARY KEY,
+    pdf_stem        TEXT NOT NULL,
+    page_num        INTEGER NOT NULL,
+    engine          TEXT NOT NULL,
+    text            TEXT,
+    markdown        TEXT,
+    layout_json     TEXT,
+    engine_identity TEXT,
+    score           REAL,
+    recorded_at     TEXT NOT NULL,
+    reason          TEXT NOT NULL CHECK(reason IN ('rescan', 'restore'))
+);
+CREATE INDEX IF NOT EXISTS idx_page_readings_page
+    ON pdf_page_readings(pdf_stem, page_num)
+"""
+
+SCHEMA_SQL = GRAPH_REVIEW_SCHEMA_SQL + LLM_USAGE_SCHEMA_SQL + PAGE_READINGS_SCHEMA_SQL + ";\n" + """
 CREATE TABLE IF NOT EXISTS schema_version (
     version    INTEGER PRIMARY KEY,
     applied_at TEXT NOT NULL
@@ -529,6 +547,13 @@ def _migration_011_page_layout(conn: sqlite3.Connection) -> None:
         _add_column_if_missing(conn, "pdf_pages", col, "TEXT")
 
 
+def _migration_012_page_readings(conn: sqlite3.Connection) -> None:
+    """Skapa historiktabellen för tidigare läsningar av en sida."""
+    for statement in PAGE_READINGS_SCHEMA_SQL.split(";"):
+        if statement.strip():
+            conn.execute(statement)
+
+
 MIGRATIONS: tuple[_Migration, ...] = (
     _Migration(6, "pdf_files OCR-felstatus", _migration_006_pdf_file_ocr_status),
     _Migration(7, "admin_jobs jobbmodell", _migration_007_admin_jobs),
@@ -536,6 +561,7 @@ MIGRATIONS: tuple[_Migration, ...] = (
     _Migration(9, "globala grafnamnregler", _migration_009_graph_name_rules),
     _Migration(10, "LLM-räknare per profil", _migration_010_llm_usage),
     _Migration(11, "Markdown och layout per sida", _migration_011_page_layout),
+    _Migration(12, "läsningshistorik per sida", _migration_012_page_readings),
 )
 
 

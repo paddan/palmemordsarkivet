@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 import types
 from pathlib import Path
@@ -426,8 +427,150 @@ def test_ocr_surya_layout_returns_pdf_lines(tmp_path) -> None:
     assert list(tmp_path.glob("*.png")) == []
     assert "Rad ett" in text and "Utan ruta" in text
     assert markdown
-    assert layout_json.startswith("[")
+    assert json.loads(layout_json)["dpi"] == 300  # standard när ingen dpi ges
     assert pdf_lines == [{"text": "Rad ett\nrad två", "bbox": [10, 20, 190, 60]}]
+
+
+# --- Renderingstak (beslut BB) ----------------------------------------------------
+
+
+class _BoundedWorker(_FakeWorker):
+    """Som workern: läser PNG:en och vägrar (som PAGE_TOO_LARGE) en bild över gränsen."""
+
+    def __init__(self, pages: dict[int, object], limit: int) -> None:
+        super().__init__(pages)
+        self.limit = limit
+        self.sizes: list[tuple[int, int]] = []
+
+    def read_page(self, pdf_stem: str, page: int, image_path: Path) -> SuryaPage:
+        with Image.open(image_path) as im:
+            self.sizes.append(im.size)
+            assert im.size[0] * im.size[1] <= self.limit, im.size
+        return super().read_page(pdf_stem, page, image_path)
+
+
+@pytest.fixture
+def oversize(setup, monkeypatch):
+    """Sidan är 200×400 px i 300 dpi men gränsen 40 000 px: den måste renderas om."""
+    images, run, errors = setup
+    monkeypatch.setattr(ocr_pages, "LAYOUT_MAX_PIXELS", 40_000)
+    images[1] = _white(400, 200)
+    renders: list[int] = []
+    grow: dict[int, int] = {}  # dpi -> extra bildpunkter i varje led (prövar avrundningen)
+
+    def render_page(path, page, dpi):
+        renders.append(dpi)
+        extra = grow.get(dpi, 0)
+        side = round(200 * dpi / 300) + extra, round(400 * dpi / 300) + extra
+        return Image.new("RGB", side, "white")
+
+    monkeypatch.setattr(ocr_pages, "render_page", render_page)
+    return images, run, renders, grow
+
+
+def test_oversize_page_rendered_at_highest_dpi_that_fits(oversize) -> None:
+    images, run, renders, _ = oversize
+    worker = _BoundedWorker({1: _text_page("Hej")}, 40_000)
+
+    rc, rows, sink = run(worker)
+
+    assert rc == 0
+    expected = int(300 * (40_000 / 80_000) ** 0.5)  # floor(dpi·sqrt(gräns/bildpunkter)) = 212
+    assert renders == [expected] == [212]
+    assert worker.sizes == [(141, 283)]
+    assert json.loads(rows[1]["layout_json"])["dpi"] == 212
+    assert rows[1]["text"] == "Hej"
+    debug = [m for level, m in sink.lines if level == "debug" and "dpi" in m and "doc p1" in m]
+    assert any("300" in m and "212" in m for m in debug), debug
+    assert not [m for level, m in sink.lines if level == "error"]
+
+
+def test_capped_render_rounding_is_rechecked(oversize) -> None:
+    _images, run, renders, grow = oversize
+    grow[212] = 2  # i 212 dpi blir bilden 143×285 = 40 755 px, fortfarande för stor
+    worker = _BoundedWorker({1: _text_page("Hej")}, 40_000)
+
+    rc, rows, _ = run(worker)
+
+    assert rc == 0
+    assert renders == [212, 211]
+    assert json.loads(rows[1]["layout_json"])["dpi"] == 211
+
+
+def test_capped_image_used_for_redactions_and_text_layer(oversize, monkeypatch, tmp_path) -> None:
+    _images, run, _renders, _ = oversize
+    seen: list[tuple[int, int]] = []
+    monkeypatch.setattr(ocr_pages, "detect_redactions_image", lambda image: seen.append(image.size) or [])
+    patched: dict = {}
+
+    def fake_update(src, dst, page_lines, dpi, on_failure=None, page_dpi=None):
+        patched.update(page_lines=page_lines, dpi=dpi, page_dpi=page_dpi)
+        return len(page_lines)
+
+    monkeypatch.setattr(ocr_pages, "update_pdf_text_layer", fake_update)
+    page = SuryaPage("read", [_raw("<p>Hej</p>", "Text", 0, [10, 20, 100, 60])], "m")
+    worker = _BoundedWorker({1: page}, 40_000)
+
+    rc, _rows, _ = run(worker, ocr_dir=str(tmp_path / "ocr"))
+
+    assert rc == 0
+    assert seen == [(141, 283)]  # maskeringarna söks i samma (nedskalade) bild
+    assert patched["page_dpi"] == {1: 212} and patched["dpi"] == 300
+    assert patched["page_lines"][1][0]["bbox"] == [10, 20, 100, 60]
+
+
+def test_page_within_bound_is_not_rerendered(setup, monkeypatch) -> None:
+    images, run, _ = setup
+    monkeypatch.setattr(ocr_pages, "LAYOUT_MAX_PIXELS", 80_000)
+    monkeypatch.setattr(ocr_pages, "render_page", lambda *a: pytest.fail("ingen omrendering"))
+    images[1] = _white(400, 200)
+
+    rc, rows, _ = run(_BoundedWorker({1: _text_page("Hej")}, 80_000))
+
+    assert rc == 0 and json.loads(rows[1]["layout_json"])["dpi"] == 300
+
+
+def test_other_engines_ignore_the_render_cap(setup, monkeypatch) -> None:
+    images, run, _ = setup
+    monkeypatch.setattr(ocr_pages, "LAYOUT_MAX_PIXELS", 10)
+    monkeypatch.setattr(ocr_pages, "render_page", lambda *a: pytest.fail("ingen omrendering"))
+    monkeypatch.setattr(ocr_pages, "ocr_tesseract", lambda png, langs="swe": "Hej")
+    images[1] = _white(400, 200)
+
+    rc, rows, _ = run(None, engine="tesseract")
+
+    assert rc == 0 and rows[1]["layout_json"] is None
+
+
+def test_capped_dpi_with_real_render(tmp_path) -> None:
+    """Riktig rendering (pypdfium2) av en sida som är för stor i 300 dpi."""
+    pymupdf = pytest.importorskip("pymupdf")
+    pdf = tmp_path / "stor.pdf"
+    doc = pymupdf.open()
+    doc.new_page(width=1100, height=1100)  # 4 583² ≈ 21 Mpx i 300 dpi
+    doc.save(str(pdf))
+    doc.close()
+    limit = ocr_pages.LAYOUT_MAX_PIXELS
+    assert limit == 16_777_216
+    first = ocr_pages.render_page(pdf, 1, 300)
+    assert first.width * first.height > limit
+
+    image, used = ocr_pages.cap_layout_image(pdf, 1, first, 300, limit)
+
+    assert used == int(300 * (limit / (first.width * first.height)) ** 0.5)
+    assert image.width * image.height <= limit
+    assert ocr_pages.cap_layout_image(pdf, 1, image, used, limit) == (image, used)
+
+
+def test_pdf_patch_scales_each_page_by_its_own_dpi(tmp_path, fake_pymupdf) -> None:
+    src = tmp_path / "in.pdf"
+    src.write_bytes(b"%PDF")
+    line = {"text": "Hej", "bbox": [0, 0, 100, 150]}
+
+    ocr_pages.update_pdf_text_layer(src, tmp_path / "out.pdf", {1: [line]}, 300, page_dpi={1: 150})
+
+    # skala 72/150 (sidans dpi), inte 72/300
+    assert fake_pymupdf.inserted == [("Hej", pytest.approx(150 * 72 / 150 * 0.85))]
 
 
 # --- PDF-textlagret med en falsk pymupdf ------------------------------------------

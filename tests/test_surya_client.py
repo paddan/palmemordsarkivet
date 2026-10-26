@@ -192,6 +192,7 @@ def test_constants_match_worker():
     assert surya_client.IDENTITY_TYPE == surya_worker.IDENTITY_TYPE
     assert surya_client.IDENTITY_FLAG == surya_worker.IDENTITY_FLAG
     assert surya_client.MAX_RESULT_BYTES == surya_worker.MAX_RESULT_BYTES
+    assert surya_client.MAX_PAGE_PIXELS == surya_worker.MAX_PAGE_PIXELS
     assert surya_client.STATUS_READ == surya_worker.STATUS_READ
     assert surya_client.STATUS_EMPTY == surya_worker.STATUS_EMPTY
     assert surya_client.STATUS_ERROR == surya_worker.STATUS_ERROR

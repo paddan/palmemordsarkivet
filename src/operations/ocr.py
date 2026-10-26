@@ -115,17 +115,13 @@ def _page_count(stem: str) -> int:
 
 def _pdf_page_count(pdf: Path, ctx: OperationContext) -> int | None:
     """Antal sidor i PDF:en via pypdfium2, eller ``None`` om den inte går att läsa."""
-    try:
-        import pypdfium2 as pdfium
+    from page_review import page_count
 
-        doc = pdfium.PdfDocument(str(pdf))
+    try:
+        return int(page_count(pdf))
     except Exception as exc:  # noqa: BLE001 - oläsbar PDF ska aldrig stoppa urvalet
         ctx.log(f"[surya] {pdf.name}: sidantalet gick inte att läsa ({exc})", level="debug")
         return None
-    try:
-        return len(doc)
-    finally:
-        doc.close()
 
 
 def _fallback_reason(
@@ -164,8 +160,21 @@ def _fallback_reason(
 
 def _merge_and_normalize(stem: str, options: OcrOptions) -> bool:
     """Slå ihop sidtexten till ``text/<stem>.txt`` och normalisera; ``True`` om text finns."""
-    merge_pages.merge_one(stem, options.txt, create_missing=True)
-    txt_file = options.txt / f"{stem}.txt"
+    return merge_and_normalize(stem, options.txt)
+
+
+def merge_and_normalize(stem: str, txt_dir: Path, only_pages: set[int] | None = None) -> bool:
+    """``merge_one`` → ``process_file`` → ``mark_normalized`` för en stem.
+
+    Delas med ``rescan-page``, som skickar ``only_pages`` så att bara den
+    omskannade sidan slås in i textfilen. Returnerar ``True`` om textfilen har innehåll
+    (annars normaliseras och markeras ingenting).
+    """
+    if only_pages is None:
+        merge_pages.merge_one(stem, txt_dir, create_missing=True)
+    else:
+        merge_pages.merge_one(stem, txt_dir, create_missing=True, only_pages=only_pages)
+    txt_file = txt_dir / f"{stem}.txt"
     if not _txt_has_content(txt_file):
         return False
     normalize_text.process_file(txt_file)

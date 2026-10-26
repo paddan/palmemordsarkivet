@@ -9,6 +9,7 @@ from db import (
     SCHEMA_VERSION,
     add_llm_usage,
     approve_map_observation_candidate,
+    archive_page_reading,
     clear_ocr_failures,
     clear_tesseract_blacklisted,
     clear_wpu_decisions,
@@ -28,6 +29,8 @@ from db import (
     get_bad_pages,
     get_ingested_mtime,
     get_llm_usage,
+    get_page_reading,
+    get_page_row,
     get_pages_for_stem,
     get_pdf_file,
     init_schema,
@@ -37,12 +40,14 @@ from db import (
     is_tesseract_done,
     is_tesseract_failed,
     list_casebook_entries,
+    list_documents_for_review,
     list_downloads_for_source,
     list_ingested_mtimes,
     list_map_observation_candidates,
     list_map_observations,
     list_map_places,
     list_ocr_page_texts,
+    list_page_readings,
     list_page_stems,
     list_page_texts_for_stem,
     list_pages_matching_text,
@@ -230,7 +235,7 @@ def test_init_schema_migrates_legacy_v4_fixture(tmp_path):
                 "SELECT version FROM schema_version ORDER BY version"
             )
         ]
-        assert versions == [4, 6, 7, 8, 9, 10, SCHEMA_VERSION]
+        assert versions == [4, 6, 7, 8, 9, 10, 11, SCHEMA_VERSION]
     finally:
         conn.close()
 
@@ -1409,3 +1414,81 @@ def test_wpu_decisions_with_ocr_delete_and_clear(tmp_path):
 
     clear_wpu_decisions(conn)
     assert not wpu_decided(conn, "w2")
+
+
+# --- Läsningshistorik (migration 012) ---------------------------------------
+
+def _readings_cols(conn):
+    return [r[1] for r in conn.execute("PRAGMA table_info(pdf_page_readings)")]
+
+
+def test_migration_012_creates_readings(tmp_path):
+    fresh = connect(tmp_path / "fresh.db")
+    init_schema(fresh)
+    legacy = tmp_path / "legacy_v4.db"
+    raw = sqlite3.connect(legacy)
+    raw.executescript(
+        (Path(__file__).parent / "fixtures" / "state_db_v4.sql").read_text(encoding="utf-8")
+    )
+    raw.commit()
+    raw.close()
+    migrated = connect(legacy)
+    try:
+        init_schema(migrated)
+        assert SCHEMA_VERSION == 12
+        assert migrated.execute("PRAGMA user_version").fetchone()[0] == 12
+        assert _readings_cols(migrated) == _readings_cols(fresh)
+        assert "reason" in _readings_cols(fresh)
+        idx = {r[1] for r in migrated.execute("PRAGMA index_list(pdf_page_readings)")}
+        assert any("readings" in i for i in idx)
+    finally:
+        fresh.close()
+        migrated.close()
+
+
+def test_archive_and_list_readings_newest_first(tmp_path):
+    conn = connect(tmp_path / "s.db")
+    init_schema(conn)
+    try:
+        first = archive_page_reading(
+            conn, pdf_stem="a", page_num=1, engine="tesseract", text="gammal",
+            markdown=None, layout_json=None, engine_identity=None, score=50.0,
+            reason="rescan",
+        )
+        second = archive_page_reading(
+            conn, pdf_stem="a", page_num=1, engine="surya", text="nyare",
+            markdown="# nyare", layout_json="[]", engine_identity="id", score=80.0,
+            reason="restore",
+        )
+        archive_page_reading(
+            conn, pdf_stem="a", page_num=2, engine="x", text="annan sida",
+            markdown=None, layout_json=None, engine_identity=None, score=None,
+            reason="rescan",
+        )
+        rows = list_page_readings(conn, "a", 1)
+        assert [r["id"] for r in rows] == [second, first]
+        assert get_page_reading(conn, first)["text"] == "gammal"
+        assert get_page_reading(conn, 9999) is None
+        assert get_page_row(conn, "a", 1) is None
+        record_page(conn, pdf_stem="a", page_num=1, engine="surya", text="t", score=1.0)
+        assert get_page_row(conn, "a", 1)["engine"] == "surya"
+        with pytest.raises(sqlite3.IntegrityError):
+            archive_page_reading(
+                conn, pdf_stem="a", page_num=1, engine="x", text=None, markdown=None,
+                layout_json=None, engine_identity=None, score=None, reason="bogus",
+            )
+    finally:
+        conn.close()
+
+
+def test_list_documents_for_review(tmp_path):
+    conn = connect(tmp_path / "s.db")
+    init_schema(conn)
+    try:
+        upsert_pdf_file(conn, pdf_stem="b", source="palme", pdf_path="/x/b.pdf")
+        upsert_pdf_file(conn, pdf_stem="a", source="wpu", pdf_path="/x/a.pdf")
+        rows = list_documents_for_review(conn)
+        assert [r["pdf_stem"] for r in rows] == ["a", "b"]
+        assert rows[0]["source"] == "wpu" and rows[0]["pdf_path"] == "/x/a.pdf"
+    finally:
+        conn.close()

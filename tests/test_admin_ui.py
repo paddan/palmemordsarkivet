@@ -646,6 +646,8 @@ def test_llm_settings_uses_provider_model_catalog_when_available(tmp_path, monke
 
     config_file = tmp_path / "llm_config.json"
     config_file.write_text(json.dumps({}), encoding="utf-8")
+    # Panelen läser räknaren ur state.db — aldrig utvecklarens riktiga databas.
+    monkeypatch.setenv("STATE_DB", str(tmp_path / "state.db"))
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
     monkeypatch.setattr(config, "CONFIG_FILE", config_file)
     app = AppTest.from_string(
@@ -681,6 +683,8 @@ def test_llm_settings_auto_fills_price_when_provider_reports_it(tmp_path, monkey
 
     config_file = tmp_path / "llm_config.json"
     config_file.write_text(json.dumps({}), encoding="utf-8")
+    # Panelen läser räknaren ur state.db — aldrig utvecklarens riktiga databas.
+    monkeypatch.setenv("STATE_DB", str(tmp_path / "state.db"))
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     monkeypatch.setattr(config, "CONFIG_FILE", config_file)
     # monkeypatch (inte en rå tilldelning i AppTest-skriptet) återställer
@@ -1321,11 +1325,13 @@ def test_help_explains_every_field_in_every_operation() -> None:
         assert not set(explained) & silent, f"{definition.id} förklarar dolda fält"
 
 
-def test_help_bullets_follow_the_field_order() -> None:
+def test_help_bullets_follow_the_field_order(tmp_path, monkeypatch) -> None:
     """Punktlistan ska ha samma ordning som fälten i formuläret."""
     from streamlit.testing.v1 import AppTest
 
-    for operation_id in ("ocr", "ocr-pages", "merge-wpu", "ingest", "run-pipeline"):
+    # rescan-page läser dokumentlistan ur state.db — aldrig projektets riktiga.
+    monkeypatch.setenv("STATE_DB", str(tmp_path / "state.db"))
+    for operation_id in ("ocr", "ocr-pages", "merge-wpu", "ingest", "run-pipeline", "rescan-page"):
         app = AppTest.from_string(
             "import admin_ui\n"
             "from operations.registry import get_registry\n"
@@ -1553,3 +1559,28 @@ def test_llm_settings_sokrutan_ar_grad_for_osokbar_tjanst(tmp_path, monkeypatch)
     )
     assert ruta.disabled is True
     assert "ingen sök-API" in (ruta.help or "")
+
+
+def test_rescan_page_form_hides_restore_and_lists_all_documents(tmp_path, monkeypatch) -> None:
+    """Återställning startas från Sidgranskning, inte från Admin; alla dokument kan väljas."""
+    from operations.registry import get_registry
+
+    _archive(tmp_path)
+    import db
+
+    conn = db.connect(tmp_path / "state.db")
+    db.init_schema(conn)
+    db.upsert_pdf_file(conn, pdf_stem="a — dokument — 2020", source="palme", pdf_path="a.pdf")
+    conn.close()
+
+    fields = [p.name for p in admin_ui.form_fields(get_registry().get("rescan-page"))]
+    assert "restore_reading" not in fields
+    assert fields == ["reindex", "pdf_stem", "engine", "page", "dpi"]
+
+    form = _picker_form(tmp_path, monkeypatch, "rescan-page")
+    assert not form.exception
+    stems = next(box for box in form.selectbox if box.key == "rescan-page__pdf_stem")
+    # a har ingen per-sida-text men finns i pdf_files och ska ändå kunna väljas.
+    assert "a — dokument — 2020" in list(stems.options)
+    assert stems.label == "Dokument"
+    assert [error.value for error in form.error] == ["Välj ett värde för: Dokument"]

@@ -21,7 +21,9 @@ from typing import Any
 MAX_SPAN = 50
 DEFAULT_HEADING_LEVEL = 2
 HEADER_MAX_CHARS = 200
-_MASK_MARKERS = ("[MASKAD]", "[REDACTED]")
+MASK_MARKER = "[MASKAD]"
+# Suryas maskeringsmarkör i alla skrivsätt ("[REDACTED]", "[Redacted]", "[ redacted ]")
+REDACTED_RE = re.compile(r"\[\s*redacted\s*\]", re.IGNORECASE)
 CHECKBOX_OFF = "☐"
 CHECKBOX_ON = "☒"
 
@@ -57,6 +59,9 @@ class FormField:
     label: str
     value: str
     checked: bool | None
+    # etikettradens råa OCR-text när mallen skrivit om den (rättad etikett, ord som
+    # flyttats till värde eller lös text); står bara i ren text, aldrig i Markdown
+    source: str = ""
 
 
 @dataclass(frozen=True)
@@ -540,7 +545,10 @@ def _renumber(blocks: list[LayoutBlock]) -> list[LayoutBlock]:
 
 
 def fields_text(fields: tuple[FormField, ...] | list[FormField]) -> str:
-    """Fältens rena text: ``01 Etikett: värde`` per fält, ``☒ alternativ`` per kryssruta."""
+    """Fältens rena text: ``01 Etikett: värde`` per fält, ``☒ alternativ`` per kryssruta.
+
+    Har mallen skrivit om etikettraden (``source``) följer den råa raden på egen rad.
+    """
     lines = []
     for f in fields:
         if f.checked is not None:
@@ -548,6 +556,8 @@ def fields_text(fields: tuple[FormField, ...] | list[FormField]) -> str:
         else:
             head = f"{f.number} {f.label}" if f.number else f.label
             lines.append(f"{head}: {f.value}")
+            if f.source:
+                lines.append(f.source)  # så att ren text aldrig tappar ett ord från raden
     return "\n".join(lines)
 
 
@@ -705,7 +715,44 @@ def page_markdown(blocks: list[LayoutBlock]) -> str:
 # --- JSON -------------------------------------------------------------------
 
 
+# Layout sparad före beslut BB är en ren blocklista utan dpi; alla sådana sidor
+# renderades i operationernas standard, 300 dpi.
+LEGACY_LAYOUT_DPI = 300
+
+
+def layout_to_json(blocks: list[LayoutBlock], dpi: int) -> str:
+    """``pdf_pages.layout_json``: ``{"dpi": N, "blocks": [...]}``.
+
+    ``dpi`` är upplösningen sidbilden faktiskt renderades i; blockens bbox är i
+    den bildens pixlar. En sida som är för stor för workerns pixelgräns renderas
+    i lägre dpi än den begärda, så dpi:n måste följa med för att ramarna ska
+    kunna skalas rätt.
+    """
+    return json.dumps({"dpi": dpi, "blocks": _blocks_data(blocks)}, ensure_ascii=False)
+
+
+def layout_from_json(s: str) -> tuple[int, list[LayoutBlock]]:
+    """``(dpi, block)`` ur ``layout_json``; det äldre listformatet läses som 300 dpi.
+
+    Höjer ``ValueError`` (även ``json.JSONDecodeError``) för en ogiltig layout.
+    """
+    data = json.loads(s)
+    if isinstance(data, list):
+        return LEGACY_LAYOUT_DPI, _blocks_from_data(data)
+    if not isinstance(data, dict) or not isinstance(data.get("blocks"), list):
+        raise ValueError("layout_json är varken en blocklista eller {dpi, blocks}")
+    dpi = data.get("dpi")
+    if isinstance(dpi, bool) or not isinstance(dpi, int) or dpi <= 0:
+        raise ValueError(f"layout_json har ogiltig dpi: {dpi!r}")
+    return dpi, _blocks_from_data(data["blocks"])
+
+
 def blocks_to_json(blocks: list[LayoutBlock]) -> str:
+    """Bara blocklistan (det äldre formatet, utan dpi); se ``layout_to_json``."""
+    return json.dumps(_blocks_data(blocks), ensure_ascii=False)
+
+
+def _blocks_data(blocks: list[LayoutBlock]) -> list[dict[str, Any]]:
     def conv(b: LayoutBlock) -> dict[str, Any]:
         return {
             "kind": b.kind.value,
@@ -719,12 +766,17 @@ def blocks_to_json(blocks: list[LayoutBlock]) -> str:
             "parts": [list(p) if p is not None else None for p in b.parts] if b.parts is not None else None,
         }
 
-    return json.dumps([conv(b) for b in blocks], ensure_ascii=False)
+    return [conv(b) for b in blocks]
 
 
 def blocks_from_json(s: str) -> list[LayoutBlock]:
+    """Blocken ur ``layout_json`` i båda formaten (dpi:n kastas; se ``layout_from_json``)."""
+    return layout_from_json(s)[1]
+
+
+def _blocks_from_data(data: list[Any]) -> list[LayoutBlock]:
     out: list[LayoutBlock] = []
-    for d in json.loads(s):
+    for d in data:
         rows = d.get("rows")
         fields = d.get("fields")
         parts = d.get("parts")
@@ -747,6 +799,12 @@ def blocks_from_json(s: str) -> list[LayoutBlock]:
 # --- Maskeringar --------------------------------------------------------------
 
 
+def has_mask(text: str) -> bool:
+    """Texten har redan en maskeringsmarkör: ``[MASKAD]`` eller Suryas
+    ``[REDACTED]`` i valfritt skiftläge och med blanksteg innanför hakarna."""
+    return MASK_MARKER in text or REDACTED_RE.search(text) is not None
+
+
 def with_redactions(blocks: list[LayoutBlock], redactions: list[tuple[int, int]]) -> list[LayoutBlock]:
     """Infoga ``[MASKAD]``-stycken för pixeldetekterade maskeringar (y0, y1).
 
@@ -761,9 +819,9 @@ def with_redactions(blocks: list[LayoutBlock], redactions: list[tuple[int, int]]
     for b in blocks:
         if b.fields is not None and b.parts is not None:
             for f, part in zip(b.fields, b.parts, strict=True):
-                if part is not None and any(m in fields_text((f,)) for m in _MASK_MARKERS):
+                if part is not None and has_mask(fields_text((f,))):
                     masked.append(part)
-        elif b.bbox is not None and any(m in _block_text(b) for m in _MASK_MARKERS):
+        elif b.bbox is not None and has_mask(_block_text(b)):
             masked.append(b.bbox)
     for y0, y1 in sorted(redactions, key=lambda r: r[0] + r[1]):
         if any(y0 <= bb[3] and bb[1] <= y1 for bb in masked):
@@ -773,5 +831,5 @@ def with_redactions(blocks: list[LayoutBlock], redactions: list[tuple[int, int]]
         for i, b in enumerate(result):
             if b.bbox is not None and (b.bbox[1] + b.bbox[3]) / 2 <= mid:
                 pos = i + 1
-        result.insert(pos, LayoutBlock(BlockKind.PARAGRAPH, _MASK_MARKERS[0], 0, (0, y0, 0, y1)))
+        result.insert(pos, LayoutBlock(BlockKind.PARAGRAPH, MASK_MARKER, 0, (0, y0, 0, y1)))
     return _renumber(result)

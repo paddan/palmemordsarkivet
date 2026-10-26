@@ -47,7 +47,8 @@ flikar: **Utredning** för frågor (med facett- och OCR-tolerant fuzzy-filter),
 **Utredningspärm** för sparade spår, bokmärken och anteckningar, **Graf** för
 relationer, **Maskeringar** för att utforska svärtad text och **Jämförelse**
 för att ställa källor mot varandra, **Karta** för källhänvisade
-observationer på mordkvällen, samt **Admin** för att starta/övervaka/avbryta
+observationer på mordkvällen, **Sidgranskning** för att jämföra en PDF-sida med
+OCR-texten och skanna om den, samt **Admin** för att starta/övervaka/avbryta
 produktionsflöden och bakgrundsjobb.
 
 ### Utredning
@@ -140,6 +141,12 @@ Fliken **Maskeringar** listar dokument efter hur mycket text som svärtats över
 (`[MASKAD]`). Klicka på en dokumentrad i tabellen för att visa källknappar och
 kontextutdrag runt maskeringarna. Det som dolts är ofta lika intressant som
 innehållet.
+
+### Sidgranskning
+
+Fliken **Sidgranskning** visar en PDF-sida bredvid texten som OCR:en gav (text,
+Markdown, layoutblock och blankettfält), och låter dig skanna om just den sidan
+med en annan motor eller återställa en tidigare läsning.
 
 ### Jämförelse
 

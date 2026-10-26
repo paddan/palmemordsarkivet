@@ -247,6 +247,22 @@ def ocr_pages_adapter(context, params: Mapping) -> None:
     _raise_on_failure("ocr-pages", rc)
 
 
+def rescan_page_adapter(context, params: Mapping) -> None:
+    from .rescan import run_rescan_page
+
+    rc = run_rescan_page(
+        root=Path(params.get("root") or PROJECT_ROOT),
+        pdf_stem=params.get("pdf_stem") or "",
+        page=params["page"],
+        engine=params["engine"],
+        dpi=params["dpi"],
+        reindex=params["reindex"],
+        restore_reading=params.get("restore_reading"),
+        context=context,
+    )
+    _raise_on_failure("rescan-page", rc)
+
+
 def extract_map_observations_adapter(context, params: Mapping) -> None:
     import extract_map_observations
 

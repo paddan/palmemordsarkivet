@@ -136,6 +136,16 @@ FORM_LAYOUT: dict[str, dict[str, Any]] = {
     "llm-correct": {
         "labels": {"test": "Textfil att rätta"},
     },
+    "rescan-page": {
+        "button": "Skanna om",
+        "labels": {
+            "pdf_stem": "Dokument",
+            "page": "Sida",
+            "engine": "Motor",
+            "dpi": "Render-DPI",
+            "reindex": "Indexera om dokumentet",
+        },
+    },
 }
 
 # Formulärets fält grupperas per sort så att likartade fält hamnar intill
@@ -212,6 +222,16 @@ OPERATION_HELP: dict[str, SectionHelp] = {
             ("dpi", "Upplösning när sidan renderas före OCR."),
             ("pages", "T.ex. 1,3,5-7. Tomt betyder alla sidor."),
             ("in", "Väljs ur PDF-arkivet (downloaded/files och downloaded/wpu_files)."),
+        ),
+    ),
+    "rescan-page": SectionHelp(
+        "Skannar om en enda sida och sparar den tidigare läsningen så att den kan återställas från Sidgranskning.",
+        (
+            ("reindex", "Uppdaterar sökindexet för dokumentet direkt efteråt, så att den nya texten och Markdown syns i Utredning."),
+            ("pdf_stem", "Väljs bland alla dokument i state.db, även de som bara har hel-fils-OCR."),
+            ("engine", "surya-layout läser rubriker, tabeller och blanketter och sparar Markdown (kräver separat Surya 2-installation), surya är den gamla radläsningen, tesseract är snabbast och vision använder en bildmodell."),
+            ("page", "Sidnumret i PDF:en, med början på 1."),
+            ("dpi", "Upplösning när sidan renderas före OCR."),
         ),
     ),
     "merge-pages": SectionHelp(
@@ -381,6 +401,13 @@ FILE_PICKERS: dict[tuple[str, str], dict[str, Any]] = {
         "empty": "— välj dokument —",
         "as": "stem",
     },
+    # Alla dokument ska kunna skannas om, även de utan per-sida-rader.
+    ("rescan-page", "pdf_stem"): {
+        "sources": ("state:pdf_files",),
+        "pattern": "",
+        "empty": "— välj dokument —",
+        "as": "stem",
+    },
     ("llm-correct", "test"): {
         "sources": ("generated/text",),
         "pattern": "*.txt",
@@ -392,6 +419,12 @@ FILE_PICKERS: dict[tuple[str, str], dict[str, Any]] = {
 # Äldre modellstyrning som de namngivna LLM-profilerna ersätter. Flaggorna
 # finns kvar i CLI:t men visas inte i adminformulären när profilen styr valet.
 LEGACY_LLM_PARAMS = ("provider", "model", "base_url")
+
+# Parametrar som bara är CLI-flaggor och aldrig blir fält i Admin-formuläret.
+# rescan-page --restore-reading sätts av Sidgranskningens återställningsknapp.
+ADMIN_HIDDEN_PARAMS: dict[str, tuple[str, ...]] = {
+    "rescan-page": ("restore_reading",),
+}
 
 # Värdet för systemloggen i källväljaren (felloggen, se errors_log.py).
 SYSTEM_LOG_OPTION = "system"
@@ -1419,7 +1452,7 @@ def numeric_input_bounds(
     """
     lowered = name.lower()
     if kind == "int":
-        if "dpi" in lowered:
+        if "dpi" in lowered or lowered == "page":
             return 1, None
         if any(marker in lowered for marker in ("jobs", "batch", "chunk", "per_file")):
             return 1, None
@@ -1448,14 +1481,14 @@ def normalize_choice_selection(parameter, selection: str) -> object:
 
 
 def missing_required_paths(definition, params: Mapping[str, object]) -> list[str]:
-    """Returnera namnen på obligatoriska path-parametrar utan angivet värde.
+    """Returnera namnen på obligatoriska path-/textparametrar utan angivet värde.
 
-    Ett tomt fält normaliseras annars till ``Path("")`` (cwd) — det måste
-    stoppas i formuläret i stället.
+    Ett tomt fält normaliseras annars till ``Path("")`` (cwd) respektive en tom
+    sträng (t.ex. inget valt dokument) — det måste stoppas i formuläret i stället.
     """
     missing: list[str] = []
     for parameter in definition.parameters:
-        if not parameter.required or parameter.kind != "path":
+        if not parameter.required or parameter.kind not in ("path", "str"):
             continue
         value = params.get(parameter.name)
         if value is None or str(value).strip() in ("", "."):
@@ -1507,6 +1540,22 @@ def _page_stems() -> list[str]:
     return _cached(("page_stems", os.environ.get("STATE_DB", "")), build)
 
 
+def _document_stems() -> list[str]:
+    """Alla dokument i ``pdf_files`` (underlag för omskanning av en sida)."""
+    import os
+
+    def build() -> list:
+        from contextlib import closing
+
+        import db as state_db
+
+        with closing(state_db.connect()) as conn:
+            state_db.init_schema(conn)
+            return [row["pdf_stem"] for row in state_db.list_documents_for_review(conn)]
+
+    return _cached(("document_stems", os.environ.get("STATE_DB", "")), build)
+
+
 def file_choices(
     sources: tuple[str, ...], pattern: str, *, settings: Mapping[str, str],
 ) -> list[tuple[str, str]]:
@@ -1515,6 +1564,10 @@ def file_choices(
     for source in sources:
         if source == "state:pdf_pages":
             for stem in _page_stems():
+                choices.setdefault(stem, stem)
+            continue
+        if source == "state:pdf_files":
+            for stem in _document_stems():
                 choices.setdefault(stem, stem)
             continue
         directory = Path(str(resolve_path_default(ROOT / source, settings)))
@@ -1588,6 +1641,9 @@ def _render_parameter(
         )
         kind = "int" if parameter.kind == "int" else "float"
         value = int(parameter.default or 0) if kind == "int" else float(parameter.default or 0.0)
+        if min_value is not None and value < min_value:
+            # Obligatoriska tal utan default (t.ex. sidnummer) börjar på minvärdet.
+            value = min_value
         return st.number_input(
             label, value=value, step=1 if kind == "int" else None,
             min_value=min_value, max_value=max_value, disabled=disabled,
@@ -1626,9 +1682,11 @@ def _visible_parameters(definition, key: str) -> list:
         st.session_state.get(f"{key}__with_llm", with_llm.default)
     )
     har_profil = any(p.name == "profile" for p in definition.parameters)
+    dolda = ADMIN_HIDDEN_PARAMS.get(definition.id, ())
     return [
         parameter for parameter in definition.parameters
         if not parameter.secret
+        and parameter.name not in dolda
         and not (parameter.name == "profile" and not profilen_syns)
         and not (har_profil and parameter.name in LEGACY_LLM_PARAMS)
     ]

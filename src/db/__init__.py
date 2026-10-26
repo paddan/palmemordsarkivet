@@ -339,6 +339,9 @@ from .karta import (
     update_map_observation_candidate as update_map_observation_candidate,
 )
 from .pipeline import (
+    archive_page_reading as archive_page_reading,
+)
+from .pipeline import (
     clear_ocr_failures as clear_ocr_failures,
 )
 from .pipeline import (
@@ -355,6 +358,12 @@ from .pipeline import (
 )
 from .pipeline import (
     delete_ingest as delete_ingest,
+)
+from .pipeline import (
+    delete_page_reading as delete_page_reading,
+)
+from .pipeline import (
+    delete_page_row as delete_page_row,
 )
 from .pipeline import (
     delete_wpu_decisions as delete_wpu_decisions,
@@ -381,6 +390,12 @@ from .pipeline import (
     get_page_markdown_map as get_page_markdown_map,
 )
 from .pipeline import (
+    get_page_reading as get_page_reading,
+)
+from .pipeline import (
+    get_page_row as get_page_row,
+)
+from .pipeline import (
     get_pages_for_stem as get_pages_for_stem,
 )
 from .pipeline import (
@@ -402,6 +417,9 @@ from .pipeline import (
     is_tesseract_failed as is_tesseract_failed,
 )
 from .pipeline import (
+    list_documents_for_review as list_documents_for_review,
+)
+from .pipeline import (
     list_downloads_for_source as list_downloads_for_source,
 )
 from .pipeline import (
@@ -412,6 +430,9 @@ from .pipeline import (
 )
 from .pipeline import (
     list_ocr_page_texts as list_ocr_page_texts,
+)
+from .pipeline import (
+    list_page_readings as list_page_readings,
 )
 from .pipeline import (
     list_page_stems as list_page_stems,

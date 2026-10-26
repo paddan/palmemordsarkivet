@@ -49,7 +49,12 @@
         "-dag",
         "-nr",
         "Med feta linjer avgränsade avsnitt ifylls ej av uppgiftsmottagaren",
-        "Ex 2: Till spaningschefens pärm (i nr-följd inom avsnitt)"
+        "Ex 2: Till spaningschefens pärm (i nr-följd inom avsnitt)",
+        "F-år | -mån | -dag | -nr",
+        "(i rätt följd, tilltalsnamnet markeras)",
+        "(arbetsgivare, postadress och telefon arbetet)",
+        "(kort rubricering t ex iakttagelse av person, fordon, gods, skottlossning etc med angivande av tid och plats)",
+        "(anteckna först känd persons yrke, namn, födelsetid, bostad, telefon och arbetsgivare – okänd persons kön, ålder, signalement och klädsel – berört fordons reg nr, fabrikat, typ, årsmodell, färg m m samt annat gods med noggrann beskrivning. Därefter övriga sakuppgifter med angivande av ev hållpunkter för tider och platser samt bedömning av uppgiftslämnarens trovärdighet och ev sprit- eller narkotikapåverkan)"
       ]
     },
     {
@@ -86,7 +91,9 @@
         "-dag",
         "-nr",
         "Med feta linjer avgränsade avsnitt ifylls ej av uppgiftsmottagaren",
-        "Ex 2: Till spaningschefens pärm (i nr-följd inom avsnitt)"
+        "Ex 2: Till spaningschefens pärm (i nr-följd inom avsnitt)",
+        "Uppgiftslämnare (efternamn och förnamn)",
+        "telefon"
       ],
       "aliases": {
         "01": [

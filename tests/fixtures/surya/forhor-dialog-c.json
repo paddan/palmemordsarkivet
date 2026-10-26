@@ -1,0 +1,213 @@
+{
+ "protocol": 2,
+ "type": "page",
+ "unitId": "forhor-dialog-c",
+ "ordinal": 0,
+ "page": 28,
+ "status": "read",
+ "model": "surya-ocr 0.22.1 backend llamacpp model datalab-to/surya-ocr-2 surya-2.gguf 6a3a4c30e5e74446d4f8b6afd05b2f2da970f470:1266400864 surya-2-mmproj.gguf 6a3a4c30e5e74446d4f8b6afd05b2f2da970f470:204986688",
+ "blocks": [
+  {
+   "html": "<p>Sida 9 av 35</p>",
+   "label": "PageHeader",
+   "bbox": [
+    1101,
+    291,
+    1354,
+    344
+   ],
+   "confidence": 0.9862382347171652,
+   "readingOrder": 0
+  },
+  {
+   "html": "<p>DK: Då blev det, då var det inte roligt alls.</p>",
+   "label": "Text",
+   "bbox": [
+    392,
+    533,
+    1205,
+    593
+   ],
+   "confidence": 0.9862382347171652,
+   "readingOrder": 1
+  },
+  {
+   "html": "<p>FHL: Nej.</p>",
+   "label": "Text",
+   "bbox": [
+    392,
+    656,
+    600,
+    716
+   ],
+   "confidence": 0.9862382347171652,
+   "readingOrder": 2
+  },
+  {
+   "html": "<p>DK: Men jag tror det hände... Lennart först men sedan ringer dom då och säger, vi har hört att du har blivit förhörd av polisen o.s.v., o.s.v. så det borde, måste vara Lennart först tycker jag.</p>",
+   "label": "Text",
+   "bbox": [
+    392,
+    779,
+    2031,
+    958
+   ],
+   "confidence": 0.9862382347171652,
+   "readingOrder": 3
+  },
+  {
+   "html": "<p>FHL: Var det bara svensk press som hörde av sig eller var det även så att man började reagera i [REDACTED]?</p>",
+   "label": "Text",
+   "bbox": [
+    392,
+    1021,
+    2014,
+    1140
+   ],
+   "confidence": 0.9862382347171652,
+   "readingOrder": 4
+  },
+  {
+   "html": "<p>DK: Nej, bara svensk press.</p>",
+   "label": "Text",
+   "bbox": [
+    392,
+    1204,
+    928,
+    1263
+   ],
+   "confidence": 0.9862382347171652,
+   "readingOrder": 5
+  },
+  {
+   "html": "<p>FHL: Okej.</p>",
+   "label": "Text",
+   "bbox": [
+    392,
+    1323,
+    620,
+    1383
+   ],
+   "confidence": 0.9862382347171652,
+   "readingOrder": 6
+  },
+  {
+   "html": "<p>DK: Aftonbladet först men sedan Expressen.</p>",
+   "label": "Text",
+   "bbox": [
+    392,
+    1442,
+    1242,
+    1505
+   ],
+   "confidence": 0.9862382347171652,
+   "readingOrder": 7
+  },
+  {
+   "html": "<p>FHL: Mm. Hur, du var inne lite grann på det lite tidigare innan förhöret här, hur ni har påverkats utav allt det här som nu har skett i anledning av dom här uppgifterna. Kan du berätta lite grann vad...</p>",
+   "label": "Text",
+   "bbox": [
+    392,
+    1565,
+    2039,
+    1744
+   ],
+   "confidence": 0.9862382347171652,
+   "readingOrder": 8
+  },
+  {
+   "html": "<p>DK: Det var ju inte alls roligt, så man hoppade då till när Aftonbladet ringer, dom ringer frun först och jag var inte hemma tror jag, och frågade efter mig och hon sa att han kommer hem senare så då... jag tror inte dom sade var dom var ifrån förresten, dom bara sade att dom var... ja, det får du väl fråga henne nästan.</p>",
+   "label": "Text",
+   "bbox": [
+    392,
+    1807,
+    2058,
+    2049
+   ],
+   "confidence": 0.9862382347171652,
+   "readingOrder": 9
+  },
+  {
+   "html": "<p>FHL: Mm.</p>",
+   "label": "Text",
+   "bbox": [
+    392,
+    2109,
+    605,
+    2165
+   ],
+   "confidence": 0.9862382347171652,
+   "readingOrder": 10
+  },
+  {
+   "html": "<p>DK: Hur som helst, när jag kom så sade hon, det är någon som har ringt, dom ringer igen klockan åtta någonting våran tid därnere. Och det gjorde dom och presenterade sig och började direkt fråga så att säga, typ vi har hört att du har blivit förhörd av polisen regarding, inte regarding, vad heter det?</p>",
+   "label": "Text",
+   "bbox": [
+    392,
+    2228,
+    2039,
+    2470
+   ],
+   "confidence": 0.9862382347171652,
+   "readingOrder": 11
+  },
+  {
+   "html": "<p>FHL: Vad sade du att?</p>",
+   "label": "Text",
+   "bbox": [
+    392,
+    2533,
+    826,
+    2586
+   ],
+   "confidence": 0.9862382347171652,
+   "readingOrder": 12
+  },
+  {
+   "html": "<p>DK: Regarding.</p>",
+   "label": "Text",
+   "bbox": [
+    392,
+    2653,
+    697,
+    2712
+   ],
+   "confidence": 0.9862382347171652,
+   "readingOrder": 13
+  },
+  {
+   "html": "<p>FHL: Eh...</p>",
+   "label": "Text",
+   "bbox": [
+    392,
+    2776,
+    610,
+    2832
+   ],
+   "confidence": 0.9862382347171652,
+   "readingOrder": 14
+  },
+  {
+   "html": "<p>DK: Med anledning av...</p>",
+   "label": "Text",
+   "bbox": [
+    392,
+    2895,
+    873,
+    2955
+   ],
+   "confidence": 0.9862382347171652,
+   "readingOrder": 15
+  }
+ ],
+ "source": {
+  "pdf": "Pol-2013-06-14_R21248-10_Förhör-Dan-Kl_fverskj_ld.pdf",
+  "page": 28,
+  "dpi": 300,
+  "size": [
+   2479,
+   3508
+  ],
+  "pilot": "2026-10-26"
+ }
+}

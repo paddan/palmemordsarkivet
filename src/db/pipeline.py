@@ -803,3 +803,79 @@ def reset_pipeline_state_for_stem(conn: sqlite3.Connection, pdf_stem: str) -> No
         (pdf_stem,),
     )
     conn.commit()
+
+
+# --- Läsningshistorik och sidgranskning -------------------------------------
+
+def archive_page_reading(
+    conn: sqlite3.Connection, *,
+    pdf_stem: str, page_num: int, engine: str,
+    text: str | None, markdown: str | None, layout_json: str | None,
+    engine_identity: str | None, score: float | None, reason: str,
+) -> int:
+    """Spara en läsning i historiken (``reason``: ``rescan`` eller ``restore``)."""
+    cur = conn.execute(
+        """
+        INSERT INTO pdf_page_readings(pdf_stem, page_num, engine, text, markdown,
+                                      layout_json, engine_identity, score,
+                                      recorded_at, reason)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (pdf_stem, page_num, engine, text, markdown, layout_json,
+         engine_identity, score, now(), reason),
+    )
+    conn.commit()
+    return int(cur.lastrowid or 0)
+
+
+def delete_page_reading(conn: sqlite3.Connection, reading_id: int) -> None:
+    """Ta bort en historikrad (t.ex. den som sparades före ett misslyckat försök)."""
+    conn.execute("DELETE FROM pdf_page_readings WHERE id=?", (reading_id,))
+    conn.commit()
+
+
+def delete_page_row(conn: sqlite3.Connection, pdf_stem: str, page_num: int) -> None:
+    """Ta bort sidans ``pdf_pages``-rad så att textfilens sida åter är den gällande."""
+    conn.execute(
+        "DELETE FROM pdf_pages WHERE pdf_stem=? AND page_num=?", (pdf_stem, page_num)
+    )
+    conn.commit()
+
+
+def list_page_readings(
+    conn: sqlite3.Connection, pdf_stem: str, page_num: int
+) -> list[sqlite3.Row]:
+    """Historiken för en sida, nyast först."""
+    return list(conn.execute(
+        "SELECT * FROM pdf_page_readings WHERE pdf_stem=? AND page_num=? "
+        "ORDER BY id DESC",
+        (pdf_stem, page_num),
+    ))
+
+
+def get_page_reading(
+    conn: sqlite3.Connection, reading_id: int
+) -> sqlite3.Row | None:
+    """En historisk läsning, eller ``None``."""
+    row: sqlite3.Row | None = conn.execute(
+        "SELECT * FROM pdf_page_readings WHERE id=?", (reading_id,)
+    ).fetchone()
+    return row
+
+
+def get_page_row(
+    conn: sqlite3.Connection, pdf_stem: str, page_num: int
+) -> sqlite3.Row | None:
+    """Den gällande ``pdf_pages``-raden för en sida, eller ``None``."""
+    row: sqlite3.Row | None = conn.execute(
+        "SELECT * FROM pdf_pages WHERE pdf_stem=? AND page_num=?",
+        (pdf_stem, page_num),
+    ).fetchone()
+    return row
+
+
+def list_documents_for_review(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Alla dokument (stem, källa, PDF-sökväg) för sidgranskningens val, sorterat på stem."""
+    return list(conn.execute(
+        "SELECT pdf_stem, source, pdf_path FROM pdf_files ORDER BY pdf_stem"
+    ))

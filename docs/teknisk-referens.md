@@ -12,7 +12,8 @@ Inspektera med t.ex. `sqlite3 generated/db/state.db`. Tabellerna:
 
 - `downloads` — palmemordsarkivet- och wpu-nedladdningar (Drive-ID eller URL, sha1 där det finns, filename, bytes)
 - `pdf_files` — per-PDF-status (redaction_checked_at, merged_at, normalized_at, text_mtime, tesseract_done_at, tesseract_failed, tesseract_blacklisted_at, surya_failed_at)
-- `pdf_pages` — per-sida OCR-resultat (text, engine, score; för motorn `surya-layout` även `markdown` — `NULL` för tom sida —, `layout_json` med blocklayouten och `engine_identity` med workerns `--identity`-svar)
+- `pdf_pages` — per-sida OCR-resultat (text, engine, score; för motorn `surya-layout` även `markdown` — `NULL` för tom sida —, `layout_json` med blocklayouten — `{"dpi": N, "blocks": [...]}`, där `dpi` är upplösningen sidbilden faktiskt renderades i; rader från före renderingstaket är en ren blocklista och läses som 300 dpi — och `engine_identity` med workerns `--identity`-svar). Äldre rader kan ha `text = NULL` (markörer); då är sidan i `generated/text/<stem>.txt` den gällande läsningen
+- `pdf_page_readings` — historik över tidigare läsningar av en sida (motor, text, Markdown, layout, motoridentitet, poäng, `reason` = `rescan`/`restore`). `rescan-page` sparar den gällande läsningen här innan den skrivs över, så att en sämre omskanning kan återställas
 - `quality` / `quality_pages` — kvalitetspoäng per fil och sida
 - `ingest` — vad som indexerats i LanceDB och med vilken text_mtime
 - `llm_corrections` — vilka sidor som LLM-korrigerats
@@ -235,10 +236,19 @@ per dokument. Se `Per-sida OCR` nedan.
 **När den används.** Layoutmotorn passar sidor där radbaserad OCR slår sönder
 strukturen: omkörning av sidor med låg kvalitetspoäng (`--redo --mode pages`),
 SPANINGSUPPSLAG-försidor med numrerade fält och kryssrutor, förhör och tabeller,
-och senare manuell omskanning av enstaka sidor. Standard är `lines` tills piloten
-(`docs/surya-layout-pilot.md`) visat att `layout` är minst lika bra på arkivets
-sidor. Hastigheten är ca 25 s/sida vid 300 dpi; lägre upplösning är inte snabbare
-och tappar blankettfält.
+och senare manuell omskanning av enstaka sidor. Standard är fortfarande `lines`:
+piloten 2026-10-26 (`docs/surya-layout-pilot.md`) klarade 2 av 5 acceptanskriterier.
+Förhörssidorna kom igenom utan tappade repliker, men bara 61 % av
+blankettfälten parades rätt, motorerna var ungefär lika snabba (median 16–18 s per
+sida) och sidor över 16,7 megapixel i 300 dpi (4,2 % av arkivet) gav
+`PAGE_TOO_LARGE`. Lägre upplösning är inte snabbare och tappar blankettfält, så
+den begärda dpi:n sänks bara för de sidor som inte ryms (se *Renderingstak*).
+Efter piloten är tre hinder åtgärdade: renderingstaket, värden som står kvar på
+etikettraden och `[Redacted]` i alla skrivsätt (se *Blankettfält och
+maskeringsmarkörer*). Efter en andra omgång parningsregler (beslut BJ: etikettrader
+och spalter, två nummer på en etikettrad, värden bredvid etiketten och alias) parar
+layoutmotorn 50 av 56 ifyllda fält rätt (89 %) på pilotens fem kontrollerade
+blanketter, mot 68 % före; hastighetskriteriet är fortfarande inte uppfyllt.
 
 **Installation och miljö.** `scripts/install.py --surya-layout` (se
 [Vad install.py gör](#vad-installpy-gör)) skapar worker-venv:en.
@@ -272,7 +282,20 @@ Markdown (`pdf_pages.markdown`, `NULL` för tom sida), blocklayouten
 (`layout_json`) och workerns identitet (`engine_identity`). Pixeldetekterade
 maskeringar läggs in som `[MASKAD]`-block, och PDF-textlagret skrivs per block.
 Workern startas en gång per PDF och bara om någon sida faktiskt ska OCR:as. Ett
-fel på en enskild sida loggas och sidan hoppas. Sidbilden skrivs till en
+fel på en enskild sida loggas och sidan hoppas.
+
+**Renderingstak.** Workern vägrar sidbilder över `MAX_PAGE_PIXELS` =
+16 777 216 bildpunkter (`PAGE_TOO_LARGE`; konstanten speglas i `surya_client` och
+bevakas av ett test). En layoutsida som är större än så i den begärda dpi:n
+(`--dpi`, standard 300) renderas därför om i den högsta dpi som ryms,
+`floor(dpi·sqrt(gräns/bildpunkter))` (`ocr_pages.cap_layout_image`). Den faktiska
+renderade storleken kontrolleras, och ger avrundningen ändå en för stor bild sänks
+dpi:n ett steg i taget. Samma bild används för maskeringsdetekteringen, Surya och
+PDF-textlagret (skala `72/använd dpi`, `update_pdf_text_layer(page_dpi=…)`), och
+den använda dpi:n sparas i `layout_json`. Omskanning (`rescan-page`) går samma väg.
+Med debugloggning på skrivs stam, sida, begärd och använd dpi för varje nedskalad
+sida. Övriga motorer (`tesseract`, `vision`, radbaserad `surya`) renderas som förut
+i den begärda dpi:n. Sidbilden skrivs till en
 tillfällig PNG som tas bort direkt efter läsningen, så layoutvägen lämnar inga
 `page-NNN.png` efter sig och återanvänder aldrig en gammal bild.
 
@@ -297,6 +320,104 @@ Exitkoder från `ocr_pages.py --engine surya-layout`:
 - `2` — argparse avvisade kommandoraden (okänd eller saknad flagga).
 - `130` — avbrutet med Ctrl-C; `143` — avbrutet med SIGTERM (128 + 15), som när
   ett bakgrundsjobb avbryts.
+
+**Blankettfält och maskeringsmarkörer.** Fälten i SPANINGSUPPSLAG tolkas
+geometriskt mot mallarna i `data/formular/` (`src/form_layout.py`). En numrerad
+rad godtas bara som etikett när *hela* raden liknar mallens etikett, så prosa som
+börjar med ett fältnummer ("07 avsnitt i bandet saknas, sa han.") förblir text.
+Står det text efter mallens etikett på en godtagen etikettrad (`07 Avsnitt E`,
+där Surya lagt det handskrivna värdet på etikettraden) blir den texten fältets
+värde när fältet inte fick något värde underifrån och texten är högst 60 tecken
+(`LABEL_REST_MAX_CHARS`), inte mallens fasta tryck (`printed`, t.ex. "Signatur")
+och inte ett fältnummer med text (`04 sekunder`). Annars står den kvar som vanlig
+text i läsordningen — den försvinner aldrig ur Markdown. En etikettrad med två
+fältnummer (`03 Uppgiftsmottagare 04 telefon`, `05 datum 06 klockan`) blir två
+etiketter när det inre numret finns i mallen, är högre än det första och båda
+halvorna liknar sina etiketter; gränsen i x-led uppskattas ur teckenbredden
+(blockets bredd delad med dess längsta rad).
+Var etiketten slutar avgörs genom att raden justeras mot mallens etikett (eller
+alias): etiketten är det radprefix som liknar mallens mest och vars sista ord
+täcks av justeringen, och klippet får ske mitt i ett ord där en bokstav följs av
+en siffra. Ett hopskrivet värde (`07 Avsnitt12`, `08 Löpande nr1974-B`) och text
+efter en förkortad etikett (`12 Uppgiftslämnarens efternamn Andersson`) blir
+därmed kvarlevor i stället för att försvinna med etiketten. Ett ensamt tal (`12`)
+är ett värde, inte ett fältnummer. Inledande förklarande parenteser efter
+etiketten (`I sak. (anteckna …)`, `15 Arbetsplats (arbetsgivare, postadress) Volvo
+AB`) är tryckt etikett och stannar i etiketten; resten (`Volvo AB`) är kvarlevan.
+En etikett som godtas men inte liknar mallens nog för att rättas står kvar som
+den lästes, och är fältet då tomt skrivs raden också som vanlig text — ett tomt
+fält skrivs inte till Markdown och får aldrig vara textens enda bärare.
+Till sist går ett skyddsnät över varje godtagen etikettrad: varje ord som inte
+syns någonstans blir lös text i läsordningen. Ett ord syns när det står i värdet
+eller i lös text, eller i etiketten på ett fält som skrivs till Markdown (fältet
+har ett värde eller en ikryssad ruta). Undantag är bara ord som är mallens text
+enligt en difflib-justering, beslut BI:
+- raden justeras mot mallens etikett,
+- varje parentes som motsvarar en tryckt parentes i mallen (likhet ≥ 0,85)
+  justeras mot just den parentesen, ord för ord och aldrig hela parentesen på en
+  gång,
+- ett ord räknas som täckt när minst 80 % av tecknen täcks och minst hälften är
+  lika tecken (utbytta tecken räknas bara som korta ersättningar av lika längd,
+  t.ex. OCR-felet `rått`/`rätt`).
+
+Ett inskjutet ord täcks därför aldrig och blir lös text. Exempel:
+- `Eftersson` i `12 Uppgiftslämnarens Eftersson efternamn …`
+- `Volvo` i `(… postadress och Volvo arbetet)`
+- `Borg` i `03 Uppgifts Borg mottagare`
+
+v1:s tryckta förklaringsparenteser (12, 15, 17, 18) ligger i mallens `printed`.
+
+*Etikettrader och spalter (beslut BJ).* Etiketter vars rutor överlappar lodrätt
+minst halva den lägre rutans höjd (`ROW_OVERLAP`) står på samma rad och delar
+sidan i spalter: från etikettens vänsterkant till nästa etiketts, men högst
+0,08 × sidbredden till höger om etikettens högerkant (`ROW_VALUE_REACH`). Reglerna:
+- En rad under etikettraden hör till spalten där dess *text* har sin mitt, inte
+  där den börjar. Maskinskrivna värden börjar ofta före den lilla tryckta etiketten
+  (`87-07-17` före `05 datum`) och får börja högst 0,03 × sidbredden till vänster
+  om sin etikett (`ROW_VALUE_LEFT`).
+- Når texten in i grannspalter som saknar eget värde under raden delas den ord för
+  ord efter spalterna, men bara när varje del är *värdeformad*: den har en siffra,
+  eller är högst fyra ord där minst ett börjar med versal och högst ett med gemen
+  (namn, koder, `krinsp Lennart Gustafsson`), och ingen mening slutar mitt i den.
+  På en rad med en siffra räknas också ett ensamt kort gement ord före numret
+  (`krinsp 08-7694169`). En rad som inte kan delas och inte själv är värdeformad är
+  prosa (`springa mot Tunnelgatan`): den blir inget värde och står kvar som vanlig
+  text på sin plats i läsordningen. Spåret räknar dem i `row_prose`. `Ingvar Kjellvås 08-7694169` under 03 och 04 blir två
+  värden, liksom `EBE 10324-1-A` under 07 och 08. Har grannen ett eget värde delas
+  inget, eftersom ett långt namn ofta når in under nästa etikett.
+- Ord i raden som tillsammans liknar en etikett, ett alias eller fast tryck (högst
+  `MAX_LABEL_RUN` ord i följd) är tryck och står kvar som text
+  (`Förhörsprot Promemoria 920114/GT` ger bara datumet som värde).
+- Raden lämnas åt den vanliga kolumnkedjan när den har kryssrutor, när dess mitt
+  inte ligger i någon spalt eller när ett ensamt nummer på etikettraden ännu
+  väntar på sin etikett från raden under.
+- En grannetikett eller tryckt rubrik på samma rad avbryter inte längre en
+  värdekedja, men löptext och avvisade etiketter gör det alltid, liksom fast tryck
+  mellan etiketten och värdet (rubriken `Uppgiftslämnare (efternamn och
+  förnamn)` skiljer 08:s ruta från uppgiftslämnarens).
+- En värdeformad rad som inget fält tog och som står på samma rad som en tom etikett, högst
+  `ROW_VALUE_REACH` till höger om den och inom dess spalt, blir fältets värde
+  (sidfotens `20 Tagit del  860308`, `23 Ärendet tilldelat  0 870980 TS`). En
+  etikettrad bakom rutans linje (`| 25 Spanchef: sign`) blir aldrig ett värde.
+- En onumrerad rad som liknar ett alias för fält N och står till höger om
+  etiketten N på samma rad är en egen etikett för N. Variant 2 trycker
+  `Utskriftsdatum` bredvid `06`, vars etikett `Promemoria` står under numret, så
+  fält 06 får två rader: `06 Promemoria` och `06 Utskriftsdatum: 081013` (pilotsida 9,
+  där OCR läste 881013 som 081013).
+- En rad är fast tryck också när varje del mellan rutornas linjer (lästa som `|`)
+  är det (`| datum`, `Bitr spaningschef | Registrator`).
+
+Spåret räknar besluten utan text: `label_pairs`, `alias_labels`, `row_values`
+(varav delade `row_splits`) och `right_values`.
+Ren text tappar aldrig ett ord från en etikettrad. När mallen har skrivit om
+raden (rättad etikett, eller ord flyttade till värde eller lös text) följer den
+råa raden med i fältets `source` och skrivs på egen rad i `pdf_pages.text`, men
+aldrig i Markdown. Spåret räknar dessa fall i `label_words_text`. Spårets `label_rest_values`/`label_rest_text` räknar
+besluten (utan text). Suryas maskeringsmarkör skrivs om till `[MASKAD]` i alla
+skrivsätt (`\[\s*redacted\s*\]` utan hänsyn till skiftläge: `[REDACTED]`,
+`[Redacted]`, `[ redacted ]`), i text och tabellceller, och kontrollen att ett
+block redan har en maskering (så att en pixeldetekterad maskering inte läggs in
+två gånger) känner igen samma varianter.
 
 **Markdown, sidhuvud och sidfot.** `PAGE_FOOTER` (oftast sidnummer) utelämnas ur
 Markdown och därmed ur embeddings, men finns kvar i `pdf_pages.text` och därför i
@@ -334,6 +455,111 @@ tabellen i state.db. Kombination med `.venv/bin/python scripts/quality.py --per-
 .venv/bin/python scripts/ocr_pages.py --in downloaded/files/foo.pdf --out-dir generated/text_pages --engine surya-layout --pages 3
 .venv/bin/python scripts/ocr_pages.py --help
 ```
+
+`src/ocr_pages.py` (kommandoraden som OCR-stegen startar som underprocess) har
+dessutom `--force`: sidorna i `--pages` OCR:as även om de redan finns i
+`pdf_pages`. Den gamla raden står kvar tills den nya läsningen skrivs, och kunde
+någon av de angivna sidorna inte läsas blir exitkoden `1` (i stället för `0`) så
+att anroparen kan skilja ett misslyckat försök från en lyckad omskanning.
+`--force` utan `--pages` avvisas med exitkod `1`. Flaggan används av
+`rescan-page` och finns inte i registeroperationen `ocr-pages`.
+
+#### Skanna om en sida (`scripts/rescan_page.py`)
+
+Operationen `rescan-page` (Admin → OCR → *Skanna om sida*, CLI
+`./rescan_page.sh`) skannar om **en** sida med vald motor som ett vanligt
+bakgrundsjobb (ett skrivande jobb åt gången) och sparar den tidigare läsningen i
+`pdf_page_readings`, så att den kan återställas från Sidgranskning.
+
+```bash
+.venv/bin/python scripts/rescan_page.py --pdf-stem "<stam>" --page 3
+.venv/bin/python scripts/rescan_page.py --pdf-stem "<stam>" --page 3 --engine tesseract --no-reindex
+.venv/bin/python scripts/rescan_page.py --pdf-stem "<stam>" --page 3 --restore-reading 42
+```
+
+| Flagga | Standard | Betydelse |
+|---|---|---|
+| `--pdf-stem` | (krävs) | Dokumentets filstam; PDF:en söks i `downloaded/files`, sedan `downloaded/wpu_files` |
+| `--page` | (krävs) | Sidnummer, 1-baserat; måste ligga inom PDF:ens sidantal (vid återställning textfilens) |
+| `--engine` | `surya-layout` | `surya-layout`, `surya`, `tesseract` eller `vision` |
+| `--dpi` | `300` | Render-DPI före OCR |
+| `--no-reindex` | av | Hoppa över omindexeringen; annars indexeras dokumentet om direkt |
+| `--restore-reading` | – | Återställ läsningen med detta id ur historiken i stället för att OCR:a. Döljs i Admin-formuläret; sätts av Sidgranskningens *Återställ* |
+| `--root` | projektroten | Projektrot |
+
+Flöde vid omskanning: PDF:en och sidnumret valideras **före all skrivning**
+(saknad PDF eller sida utanför 1–N ger `OperationFailed`, ingen historikrad) →
+den gällande läsningen arkiveras med `reason="rescan"` (se *Vilken läsning
+arkiveras* nedan) →
+`src/ocr_pages.py --pages N --force` körs som underprocess (inte i processen —
+det är `ocr_pages.py` som har SIGTERM-hanteraren som stänger Surya-workerns
+processgrupp vid avbrott) → `merge_one` (`create_missing=True`, `only_pages={N}`: bara den omskannade sidan slås in, så en inaktuell grannrad i `pdf_pages` aldrig skriver över en oarkiverad sida i textfilen) →
+`normalize_text.process_file` → `mark_normalized` → om omindexering är på tas
+dokumentets rad i `ingest` bort (en ny läsning kan ge byte-identisk text men ny
+Markdown, och mtime-jämförelsen hade då hoppat dokumentet) och inkrementell ingest
+körs med registrets standardvärden för operationen `ingest`. Ingen PDF-textlager-
+patch görs (`--ocr-dir` skickas inte), så en återställning lämnar inget
+inaktuellt textlager efter sig.
+
+Exitkoder från underprocessen: `3` (Surya-runtimen kunde inte användas) och alla
+andra icke-noll-koder ger `OperationFailed` och jobbet slutar `failed`; den
+gällande läsningen och textfilen är då orörda. Historikraden som skrevs precis
+före OCR-försöket tas då bort (`delete_page_reading`), liksom när jobbet avbryts
+under OCR:en, så misslyckade försök inte lämnar kopior *sparad vid omskanning*
+efter sig. Hann `pdf_pages`-raden ändå ändras behålls historikraden (varning i
+loggen), eftersom den då är den enda kopian av läsningen som ersattes.
+
+**Vilken läsning arkiveras.** Den gällande läsningen är sidan i
+`generated/text/<stem>.txt` — den som indexeras och citeras. Äldre
+`pdf_pages`-rader kan ha `text = NULL` (markörer från tidiga Surya-körningar; i
+arkivet är det tusentals sidor): då finns läsningen **bara** i textfilen. Även en
+rad med text kan vara inaktuell (LLM-korrigering, `merge_wpu`, manuell
+redigering). Därför:
+
+| `pdf_pages`-raden | Arkiveras |
+|---|---|
+| finns, och `markdown_is_fresh(text, filens sida)` | raden som den är (motor, text, Markdown, layout, motoridentitet, poäng) |
+| finns med text, men avviker från filens sida | **filens sida** som text, radens motor; Markdown, layout, motoridentitet och poäng `NULL` |
+| finns med `text = NULL` | **filens sida**, motorn `hel-fils-OCR`, övrigt `NULL` |
+| saknas | filens sida, motorn `hel-fils-OCR`, poäng `NULL` |
+| finns med text, men textfilen har ingen sida | raden som den är |
+| ingen text någonstans | ingenting (debugrad med orsaken) |
+
+Utan den regeln hade omskanningen skrivit över filens sida och den gamla
+läsningen gått förlorad för gott. Sidgranskningen visar på samma sätt en rad med
+`text = NULL` som *hel-fils-OCR* utan radens poäng, Markdown och layout.
+
+**Återställning** (`--restore-reading ID`): läsningen måste höra till samma
+`pdf_stem` och sida och ha text, annars `OperationFailed` före all skrivning.
+PDF:en behövs inte: sidnumret kontrolleras mot textfilens sidantal (PDF:ens bara
+om textfilen saknas), och `--engine` används inte. Den gällande
+läsningen arkiveras med `reason="restore"`, den historiska läsningens fält skrivs
+som ny `pdf_pages`-rad (`record_page`), och sedan följer samma väg merge →
+normalize → (omindexering). Ingen OCR körs. Därmed hamnar även återställningen i
+historiken och kan i sin tur ångras. Är den återställda läsningen en
+`hel-fils-OCR`-läsning tas `pdf_pages`-raden bort efter sammanslagningen
+(`delete_page_row`): sidan hade ingen OCR-rad från början, och en kvarlämnad rad
+hade stängt den för Surya-sidoredo (`page_exists`) och fått Surya-fallbacken att
+räkna filen som ofullständig. Textfilens sida blir då åter den gällande
+läsningen, byte för byte som före omskanningen.
+
+Att tänka på:
+
+- Omindexeringen är en vanlig inkrementell ingest: den tar alla inaktuella filer,
+  inte bara dokumentet, och laddar embedding-modellen (tar en stund).
+- Efter en omskanning kan ett dokument ha färre `pdf_pages`-rader än PDF:en har
+  sidor. Det spelar bara roll för Tesseract-misslyckade stammar: där läser
+  Surya-fallbacken då de återstående sidorna vid nästa körning.
+- Avbryts jobbet efter att `ocr_pages.py` skrivit sidan men före merge ligger
+  `pdf_pages` före textfilen tills nästa merge eller omskanning.
+- Under `--force` skrivs sidans PNG (Tesseract/vision) alltid om från den färska
+  renderingen, så en kvarlämnad bild med en annan DPI läses aldrig.
+
+Debugloggen visar varje steg med stam, sida, motor, läsnings-id och poäng
+(`rescan <stam> s<sida>: arkiverade läsning <id> (<motor>, poäng <poäng>, …)`),
+aldrig sidtexten, och skälet till vad som arkiverades (raden stämmer, text
+`NULL`, avviker från textfilen). Avbrott kontrolleras före arkiveringen och efter
+OCR:en; en återställning avbryts inte mellan skrivningen och sammanslagningen.
 
 #### Auto-byggda user-words (`scripts/build_user_words.py`)
 
@@ -874,6 +1100,53 @@ så sidan inte bygger hundratals dolda detaljblock vid sidbyte. All aggregering 
 `src/redactions.py` direkt mot `pdf_pages` i state.db (ingen ny pipeline-körning
 behövs).
 
+#### Sidgranskning (Sidgranskning-fliken)
+
+`src/pages/9_Sidgranskning.py` visar en PDF-sida bredvid dess text; all logik
+som inte är Streamlit ligger i `src/page_review.py` (`load_page_view`,
+`render_page_image`, `draw_layout_overlay`, `escape_markdown_dollars`).
+
+- **Val:** dokument (`st.selectbox` över `db.list_documents_for_review`, sökbar)
+  och sida (`st.number_input` 1–sidantal plus *Föregående*/*Nästa*). Query-
+  parametrarna `doc=<pdf_stem>&page=<n>` öppnar en sida direkt och skrivs
+  tillbaka vid varje val, så adressen går att länka till. En `doc` utanför
+  `pdf_files` läggs ändå till i listan.
+- **Sidbild:** renderas bara via `render_page_image` (validerar sidnumret) i
+  110 dpi och cachas med `st.cache_data` på `(pdf-sökväg, sida, dpi, PDF:ens
+  mtime)`. **Visa layoutblock** ritar blockramarna; blockens bbox skalas från
+  layoutens lagrade dpi (`PageView.ocr_dpi` ur `layout_json`, 300 för det äldre
+  listformatet), eftersom en sida över pixelgränsen renderats i lägre dpi. Saknas PDF:en visas *PDF:en
+  saknas — bara texten visas* och textflikarna fungerar ändå.
+- **Flikar:** *Text* är sidan ur `generated/text/<stem>.txt` i `st.code` (radbrytningar
+  och tabbar syns exakt). *Markdown* (renderad, `$` escapat — två `$` blir annars
+  LaTeX) och *Markdown-källa* visas bara när `pdf_pages.markdown` finns, *Layout*
+  (ordning, typ, nivå, bbox, utdrag ≤ 80 tecken) bara med layoutblock och
+  *Formulärfält* (fältnummer, etikett, värde, kryssruta) bara när något block har
+  fält — blankettfält och förhörsmetadata. Ingen dokumenttext renderas med
+  `unsafe_allow_html`.
+- **Metadata:** motor, poäng, tidpunkt och motoridentitet (sidor utan
+  `pdf_pages`-rad, eller med en äldre rad där `text` är `NULL`, visas med motorn
+  *hel-fils-OCR*). Varningen *Texten har ändrats
+  efter OCR — Markdown används inte i sökindexet* visas när sidan har Markdown och
+  `normalize(pdf_pages.text)` skiljer sig från filens sida (samma färskhetsregel
+  som ingest).
+- **Omskanning och Återställ** startar bakgrundsjobbet `rescan-page` via
+  `job_service.start_job` med registrets parameternamn (`root`, `pdf_stem`,
+  `page`, `engine`, `dpi`, `reindex`, och `restore_reading` vid återställning —
+  då skickas ingen motor, registrets standard fylls i); motorlistan och
+  standardvärdena läses ur registret. Saknas PDF:en men textfilen finns är
+  *Skanna om sidan* inaktiverad med en förklaring, medan *Återställ* fungerar.
+  Ett `doc`-värde i länken som innehåller `/`, `\` eller `..` avvisas med en
+  varning och behandlas som inget val. Ingen OCR körs i
+  Streamlit-processen. När `reconcile_active_job()` returnerar ett aktivt jobb är
+  knapparna inaktiverade med en förklaring. Är det aktiva jobbet `rescan-page`
+  för just den här sidan visas status och loggsvans i ett
+  `st.fragment(run_every=2)` tills jobbet är klart; då töms sidbildens cache för
+  sidan och hela sidan ritas om med den nya läsningen (texten läses om från
+  filen vid varje körning och cachas inte).
+- **Historik:** hopfällbar lista över `pdf_page_readings` (tid, motor, poäng,
+  orsak) med *Visa* (texten i `st.code`) och *Återställ*.
+
 #### Vittnesjämförelse (Jämförelse-fliken)
 
 Sidan `pages/6_Jämförelse.py` är ett korsförhörsläge: ange ett ämne, hämta
@@ -1398,6 +1671,7 @@ per-dokumentresultat behålls; ett avbrutet jobb markeras aldrig `succeeded`.
 | `scripts/ocr_tesseract.py` | Bara Tesseract-steget (textextraktion + ocrmypdf) |
 | `src/ocr_db_helper.py` | CLI-hjälpare för tesseract-steget: tesseract-status och `text_mtime`-stämpling i `state.db` |
 | `scripts/ocr_pages.py` → `src/ocr_pages.py` | Per-sida OCR (Tesseract/Surya), lagrar sidtext och metadata i `state.db` |
+| `scripts/rescan_page.py` → `src/operations/rescan.py` | Skanna om en sida (`ocr_pages.py --force`) eller återställ en historisk läsning; historiken i `pdf_page_readings` |
 | `scripts/merge_pages.py` → `src/merge_pages.py` | Slå ihop per-sida-text från `state.db` in i `generated/text/<stem>.txt` |
 | `scripts/build_user_words.py` → `src/build_user_words.py` | Bygg `tessdata/swe.user-words.auto` från `generated/text/*.txt` |
 | `scripts/quality.py` → `src/quality.py` | Heuristisk kvalitetsbedömning av `generated/text/*.txt` (`--per-page` finns) |
@@ -1421,6 +1695,7 @@ per-dokumentresultat behålls; ett avbrutet jobb markeras aldrig `succeeded`.
 | `src/facets.py` | Facetterad sökning: entiteter ur `doc_entities` → filtrera sökträffar |
 | `src/search_fuzzy.py` | OCR-tolerant fuzzy-sökning (difflib token-index över chunk-korpusen) |
 | `src/redactions.py` → `src/pages/5_Maskeringar.py` | Maskeringsutforskaren: aggregera `[MASKAD]` ur `pdf_pages`, visa kontext |
+| `src/page_review.py` → `src/pages/9_Sidgranskning.py` | Sidgranskning: PDF-sida bredvid text/Markdown/layout/blankettfält, omskanning och återställning via `rescan-page` |
 | `src/compare.py` → `src/pages/6_Jämförelse.py` | Vittnesjämförelse (korsförhörsläge — letar motstridiga uppgifter) |
 | `src/karta.py` → `src/pages/7_Karta.py` | Kartmodulen: validera observationer, bygg tidslinje-GeoJSON och rendera karta |
 | `src/map_extract.py` | Ren parsing/tidsnormalisering/platsmatchning för kartobservations-kandidater |
@@ -1480,6 +1755,11 @@ Utredning-sidan headless med Streamlits AppTest och kontrollerar lägesvalet
 varv i det andra läget och att tokenpanelen finns i båda lägena) med fejkad vektor-db, modell och
 state-db.
 Fixturen som genererar en mini-PDF med pymupdf skipas gracefully om pymupdf inte är installerat.
+`tests/test_surya_real.py` är markerat `external` och kör den riktiga Surya 2-workern
+mot en tabellsida som ritas med PIL. Markören registreras i `pyproject.toml`, där
+`addopts = "-m 'not external'"` väljer bort testet i den vanliga sviten. Testet hoppas
+också när layoutmotorn inte går att köra. Kör det uttryckligen med
+`PALME_SURYA_PYTHON=… .venv/bin/pytest -m external tests/test_surya_real.py -v`.
 
 Tre strukturtester vaktar arkitekturen: `tests/test_packaging.py` kräver att
 `py-modules` i `pyproject.toml` är exakt mängden `src/*.py` på toppnivå (en ny

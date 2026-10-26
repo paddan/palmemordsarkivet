@@ -1,0 +1,415 @@
+{
+ "protocol": 2,
+ "type": "page",
+ "unitId": "form-v2-e",
+ "ordinal": 0,
+ "page": 1,
+ "status": "read",
+ "model": "surya-ocr 0.22.1 backend llamacpp model datalab-to/surya-ocr-2 surya-2.gguf 6a3a4c30e5e74446d4f8b6afd05b2f2da970f470:1266400864 surya-2-mmproj.gguf 6a3a4c30e5e74446d4f8b6afd05b2f2da970f470:204986688",
+ "source": {
+  "pdf": "Pol-1992-01-14_HE12435-03_Registerslagning_och_maskerat_foto_av_Werner_Öhrn.pdf",
+  "page": 1,
+  "dpi": 300,
+  "height": 3507,
+  "pilot": "2026-10-26",
+  "sample": 12
+ },
+ "blocks": [
+  {
+   "html": "<p>01 Polismyndighet</p>",
+   "label": "Text",
+   "bbox": [
+    350,
+    196,
+    595,
+    238
+   ],
+   "confidence": 0.9278951883614583,
+   "readingOrder": 0
+  },
+  {
+   "html": "<p>Stockholm</p>",
+   "label": "Text",
+   "bbox": [
+    380,
+    245,
+    615,
+    302
+   ],
+   "confidence": 0.9278951883614583,
+   "readingOrder": 1
+  },
+  {
+   "html": "<p>02 Arbetsenhet</p>",
+   "label": "Text",
+   "bbox": [
+    352,
+    298,
+    553,
+    340
+   ],
+   "confidence": 0.9278951883614583,
+   "readingOrder": 2
+  },
+  {
+   "html": "<p>RKP-A2</p>",
+   "label": "Text",
+   "bbox": [
+    380,
+    347,
+    541,
+    396
+   ],
+   "confidence": 0.9278951883614583,
+   "readingOrder": 3
+  },
+  {
+   "html": "<p>03 Upprättat(d) av* telefon*</p>",
+   "label": "Text",
+   "bbox": [
+    350,
+    393,
+    982,
+    442
+   ],
+   "confidence": 0.9278951883614583,
+   "readingOrder": 4
+  },
+  {
+   "html": "<p>Krinsp Aghede</p>",
+   "label": "Text",
+   "bbox": [
+    380,
+    442,
+    710,
+    502
+   ],
+   "confidence": 0.9278951883614583,
+   "readingOrder": 5
+  },
+  {
+   "html": "<p>09 Brott med vilket uppgiften hör samman*</p>",
+   "label": "Text",
+   "bbox": [
+    350,
+    491,
+    861,
+    540
+   ],
+   "confidence": 0.9278951883614583,
+   "readingOrder": 6
+  },
+  {
+   "html": "<p>Mordet på Olof Palme</p>",
+   "label": "Text",
+   "bbox": [
+    380,
+    537,
+    878,
+    596
+   ],
+   "confidence": 0.9278951883614583,
+   "readingOrder": 7
+  },
+  {
+   "html": "<p>10 | sak</p>",
+   "label": "Text",
+   "bbox": [
+    350,
+    589,
+    476,
+    631
+   ],
+   "confidence": 0.9278951883614583,
+   "readingOrder": 8
+  },
+  {
+   "html": "<p>SPANINGSUPPSLAG</p>",
+   "label": "SectionHeader",
+   "bbox": [
+    1397,
+    224,
+    1861,
+    288
+   ],
+   "confidence": 0.9278951883614583,
+   "readingOrder": 9
+  },
+  {
+   "html": "<p>i grövre brottmål</p>",
+   "label": "Text",
+   "bbox": [
+    1397,
+    284,
+    1677,
+    337
+   ],
+   "confidence": 0.9278951883614583,
+   "readingOrder": 10
+  },
+  {
+   "html": "<p>Sid nr .....</p>",
+   "label": "Text",
+   "bbox": [
+    2208,
+    231,
+    2399,
+    274
+   ],
+   "confidence": 0.9278951883614583,
+   "readingOrder": 11
+  },
+  {
+   "html": "<p>07 Avsnitt</p>",
+   "label": "Text",
+   "bbox": [
+    1972,
+    305,
+    2119,
+    347
+   ],
+   "confidence": 0.9278951883614583,
+   "readingOrder": 12
+  },
+  {
+   "html": "<p>HE</p>",
+   "label": "Text",
+   "bbox": [
+    1997,
+    340,
+    2109,
+    410
+   ],
+   "confidence": 0.9278951883614583,
+   "readingOrder": 13
+  },
+  {
+   "html": "<p>08 Löpande nr</p>",
+   "label": "Text",
+   "bbox": [
+    2208,
+    309,
+    2399,
+    354
+   ],
+   "confidence": 0.9278951883614583,
+   "readingOrder": 14
+  },
+  {
+   "html": "<p>12435-3</p>",
+   "label": "Text",
+   "bbox": [
+    2208,
+    351,
+    2454,
+    421
+   ],
+   "confidence": 0.9278951883614583,
+   "readingOrder": 15
+  },
+  {
+   "html": "<p>04 Fortsätt-<br/>ningsblad Uppgiftslämnare (efternamn och förnamn)</p>",
+   "label": "Text",
+   "bbox": [
+    1389,
+    410,
+    2171,
+    509
+   ],
+   "confidence": 0.9278951883614583,
+   "readingOrder": 16
+  },
+  {
+   "html": "<p>05 Förhörsprot 06 Utskriftsdatum</p>",
+   "label": "Text",
+   "bbox": [
+    1389,
+    509,
+    2119,
+    561
+   ],
+   "confidence": 0.9278951883614583,
+   "readingOrder": 17
+  },
+  {
+   "html": "<p>Förhörsprot Promemoria 920114/GT</p>",
+   "label": "Text",
+   "bbox": [
+    1389,
+    561,
+    2307,
+    614
+   ],
+   "confidence": 0.9278951883614583,
+   "readingOrder": 18
+  },
+  {
+   "html": "<p>Ps</p>",
+   "label": "Text",
+   "bbox": [
+    194,
+    666,
+    293,
+    754
+   ],
+   "confidence": 0.9278951883614583,
+   "readingOrder": 19
+  },
+  {
+   "html": "<p>Slagning beträffande:</p>",
+   "label": "Text",
+   "bbox": [
+    375,
+    680,
+    896,
+    740
+   ],
+   "confidence": 0.9278951883614583,
+   "readingOrder": 20
+  },
+  {
+   "html": "<p>CKR</p>",
+   "label": "Text",
+   "bbox": [
+    375,
+    898,
+    464,
+    950
+   ],
+   "confidence": 0.9278951883614583,
+   "readingOrder": 22
+  },
+  {
+   "html": "<p>CBR</p>",
+   "label": "Text",
+   "bbox": [
+    375,
+    968,
+    464,
+    1021
+   ],
+   "confidence": 0.9278951883614583,
+   "readingOrder": 23
+  },
+  {
+   "html": "<p>PBR</p>",
+   "label": "Text",
+   "bbox": [
+    375,
+    1108,
+    464,
+    1161
+   ],
+   "confidence": 0.9278951883614583,
+   "readingOrder": 24
+  },
+  {
+   "html": "<p>ASP</p>",
+   "label": "Text",
+   "bbox": [
+    375,
+    1252,
+    464,
+    1305
+   ],
+   "confidence": 0.9278951883614583,
+   "readingOrder": 25
+  },
+  {
+   "html": "<p>ISP</p>",
+   "label": "Text",
+   "bbox": [
+    375,
+    1392,
+    464,
+    1445
+   ],
+   "confidence": 0.9278951883614583,
+   "readingOrder": 26
+  },
+  {
+   "html": "<p>APE</p>",
+   "label": "Text",
+   "bbox": [
+    375,
+    1536,
+    464,
+    1589
+   ],
+   "confidence": 0.9278951883614583,
+   "readingOrder": 27
+  },
+  {
+   "html": "<p>NPN</p>",
+   "label": "Text",
+   "bbox": [
+    375,
+    1754,
+    459,
+    1799
+   ],
+   "confidence": 0.9278951883614583,
+   "readingOrder": 28
+  },
+  {
+   "html": "<p>Innehar ej vapen enl. Sthlms pd.</p>",
+   "label": "Text",
+   "bbox": [
+    342,
+    2066,
+    1131,
+    2136
+   ],
+   "confidence": 0.9278951883614583,
+   "readingOrder": 30
+  },
+  {
+   "html": "<p>FPS 463.2.2</p>",
+   "label": "Text",
+   "bbox": [
+    231,
+    3069,
+    265,
+    3205
+   ],
+   "confidence": 0.9278951883614583,
+   "readingOrder": 31
+  },
+  {
+   "html": "<p>* Ifylls ej om blanketten används som fortsättningsblad.</p>",
+   "label": "Footnote",
+   "bbox": [
+    293,
+    3212,
+    950,
+    3265
+   ],
+   "confidence": 0.9278951883614583,
+   "readingOrder": 32
+  },
+  {
+   "html": "<p>Ex 2: Till spaningschefens pärm (i nr-följd inom avsnitt)</p>",
+   "label": "Footnote",
+   "bbox": [
+    1506,
+    3223,
+    2374,
+    3293
+   ],
+   "confidence": 0.9278951883614583,
+   "readingOrder": 33
+  },
+  {
+   "html": "<p>27-92 HCD</p>",
+   "label": "Text",
+   "bbox": [
+    2072,
+    3290,
+    2429,
+    3388
+   ],
+   "confidence": 0.9278951883614583,
+   "readingOrder": 34
+  }
+ ]
+}

@@ -86,6 +86,7 @@ def merge_one(
     conn: sqlite3.Connection | None = None,
     *,
     create_missing: bool = False,
+    only_pages: set[int] | None = None,
 ) -> bool:
     """Slå ihop pdf_pages-sidor för ``stem`` in i ``text/<stem>.txt``.
 
@@ -97,6 +98,11 @@ def merge_one(
 
     Om ``conn`` anges återanvänds den; annars öppnas en egen connection
     som stängs när funktionen returnerar (undviker fd-läck i stora loopar).
+
+    ``only_pages`` begränsar sammanslagningen mot en befintlig textfil till de
+    angivna sidorna (``rescan-page``): övriga sidor i filen lämnas orörda även
+    om deras ``pdf_pages``-rad är inaktuell — annars skrivs en rättad filsida
+    tyst över utan att ha arkiverats. En saknad fil byggs ändå från alla rader.
     """
     txt_path = txt_dir / f"{stem}.txt"
 
@@ -120,6 +126,10 @@ def merge_one(
             txt_path.read_text(encoding="utf-8", errors="replace")
             if txt_path.exists() else ""
         )
+        if original and only_pages is not None:
+            updates = {n: t for n, t in updates.items() if n in only_pages}
+            if not updates:
+                return False
         if original:
             merged = merge_text(original, updates)
         elif create_missing:

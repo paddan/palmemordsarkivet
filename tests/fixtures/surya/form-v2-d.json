@@ -1,0 +1,439 @@
+{
+ "protocol": 2,
+ "type": "page",
+ "unitId": "form-v2-d",
+ "ordinal": 0,
+ "page": 1,
+ "status": "read",
+ "model": "surya-ocr 0.22.1 backend llamacpp model datalab-to/surya-ocr-2 surya-2.gguf 6a3a4c30e5e74446d4f8b6afd05b2f2da970f470:1266400864 surya-2-mmproj.gguf 6a3a4c30e5e74446d4f8b6afd05b2f2da970f470:204986688",
+ "source": {
+  "pdf": "1953.1 — Kvinna ser springande man på Tunnelgatan 1988-10-13 — 2023-08-07 — EBE-10324-01-A — 1.pdf",
+  "page": 1,
+  "dpi": 300,
+  "height": 3507,
+  "pilot": "2026-10-26",
+  "sample": 9
+ },
+ "blocks": [
+  {
+   "html": "<p>01 Polisdistrikt*</p>",
+   "label": "Text",
+   "bbox": [
+    298,
+    186,
+    506,
+    224
+   ],
+   "confidence": 0.9459308762443029,
+   "readingOrder": 0
+  },
+  {
+   "html": "<p>Stockholm</p>",
+   "label": "Text",
+   "bbox": [
+    323,
+    231,
+    581,
+    284
+   ],
+   "confidence": 0.9459308762443029,
+   "readingOrder": 1
+  },
+  {
+   "html": "<p>02 Arbetsenhet*</p>",
+   "label": "Text",
+   "bbox": [
+    298,
+    284,
+    506,
+    319
+   ],
+   "confidence": 0.9459308762443029,
+   "readingOrder": 2
+  },
+  {
+   "html": "<p>RK-A-2</p>",
+   "label": "Text",
+   "bbox": [
+    332,
+    330,
+    499,
+    375
+   ],
+   "confidence": 0.9459308762443029,
+   "readingOrder": 3
+  },
+  {
+   "html": "<p>M 000288-</p>",
+   "label": "Text",
+   "bbox": [
+    950,
+    330,
+    1283,
+    386
+   ],
+   "confidence": 0.9459308762443029,
+   "readingOrder": 4
+  },
+  {
+   "html": "<p>03 Upprätta(d) av*</p>",
+   "label": "Text",
+   "bbox": [
+    298,
+    375,
+    543,
+    417
+   ],
+   "confidence": 0.9459308762443029,
+   "readingOrder": 5
+  },
+  {
+   "html": "<p>telefon*</p>",
+   "label": "Text",
+   "bbox": [
+    814,
+    382,
+    920,
+    417
+   ],
+   "confidence": 0.9459308762443029,
+   "readingOrder": 6
+  },
+  {
+   "html": "<p>krinsp Lennart Gustafsson</p>",
+   "label": "Text",
+   "bbox": [
+    332,
+    424,
+    987,
+    480
+   ],
+   "confidence": 0.9459308762443029,
+   "readingOrder": 7
+  },
+  {
+   "html": "<p>09 Brott med vilket uppgiften hör samman*</p>",
+   "label": "Text",
+   "bbox": [
+    298,
+    473,
+    836,
+    516
+   ],
+   "confidence": 0.9459308762443029,
+   "readingOrder": 8
+  },
+  {
+   "html": "<p>Palmemordet</p>",
+   "label": "Text",
+   "bbox": [
+    434,
+    519,
+    727,
+    568
+   ],
+   "confidence": 0.9459308762443029,
+   "readingOrder": 9
+  },
+  {
+   "html": "<p>10 | sak</p>",
+   "label": "Text",
+   "bbox": [
+    298,
+    568,
+    429,
+    603
+   ],
+   "confidence": 0.9459308762443029,
+   "readingOrder": 10
+  },
+  {
+   "html": "<p>SPANINGSUPPSLAG</p>",
+   "label": "SectionHeader",
+   "bbox": [
+    1307,
+    210,
+    1729,
+    260
+   ],
+   "confidence": 0.9459308762443029,
+   "readingOrder": 11
+  },
+  {
+   "html": "<p>i grövre brottmål</p>",
+   "label": "Text",
+   "bbox": [
+    1307,
+    267,
+    1566,
+    309
+   ],
+   "confidence": 0.9459308762443029,
+   "readingOrder": 12
+  },
+  {
+   "html": "<p>Sid nr .....</p>",
+   "label": "Text",
+   "bbox": [
+    2109,
+    207,
+    2300,
+    242
+   ],
+   "confidence": 0.9459308762443029,
+   "readingOrder": 13
+  },
+  {
+   "html": "<p>07 Avsnitt</p>",
+   "label": "Text",
+   "bbox": [
+    1873,
+    267,
+    2022,
+    305
+   ],
+   "confidence": 0.9459308762443029,
+   "readingOrder": 14
+  },
+  {
+   "html": "<p>08 Löpande nr</p>",
+   "label": "Text",
+   "bbox": [
+    2109,
+    267,
+    2315,
+    309
+   ],
+   "confidence": 0.9459308762443029,
+   "readingOrder": 15
+  },
+  {
+   "html": "<p>EBE 10324-1-A</p>",
+   "label": "Text",
+   "bbox": [
+    1861,
+    298,
+    2394,
+    403
+   ],
+   "confidence": 0.9459308762443029,
+   "readingOrder": 16
+  },
+  {
+   "html": "<p>04 Fortsätt-<br/>ningsblad</p>",
+   "label": "Text",
+   "bbox": [
+    1307,
+    386,
+    1499,
+    470
+   ],
+   "confidence": 0.9459308762443029,
+   "readingOrder": 17
+  },
+  {
+   "html": "<p>Uppgiftslämnare (efternamn och förnamn)</p>",
+   "label": "Text",
+   "bbox": [
+    1566,
+    389,
+    2104,
+    435
+   ],
+   "confidence": 0.9459308762443029,
+   "readingOrder": 18
+  },
+  {
+   "html": "<p>EBE 10324-1-A</p>",
+   "label": "Text",
+   "bbox": [
+    1923,
+    414,
+    2419,
+    498
+   ],
+   "confidence": 0.9459308762443029,
+   "readingOrder": 19
+  },
+  {
+   "html": "<p>05</p>",
+   "label": "Text",
+   "bbox": [
+    1307,
+    484,
+    1374,
+    523
+   ],
+   "confidence": 0.9459308762443029,
+   "readingOrder": 20
+  },
+  {
+   "html": "<p>06</p>",
+   "label": "Text",
+   "bbox": [
+    1566,
+    484,
+    1623,
+    523
+   ],
+   "confidence": 0.9459308762443029,
+   "readingOrder": 21
+  },
+  {
+   "html": "<p>Utskriftsdatum</p>",
+   "label": "Text",
+   "bbox": [
+    1811,
+    487,
+    2027,
+    526
+   ],
+   "confidence": 0.9459308762443029,
+   "readingOrder": 22
+  },
+  {
+   "html": "<p>Förhörsprot</p>",
+   "label": "Text",
+   "bbox": [
+    1382,
+    537,
+    1536,
+    579
+   ],
+   "confidence": 0.9459308762443029,
+   "readingOrder": 23
+  },
+  {
+   "html": "<p>Promemoria</p>",
+   "label": "Text",
+   "bbox": [
+    1630,
+    537,
+    1796,
+    579
+   ],
+   "confidence": 0.9459308762443029,
+   "readingOrder": 24
+  },
+  {
+   "html": "<p>081013</p>",
+   "label": "Text",
+   "bbox": [
+    1881,
+    540,
+    2057,
+    589
+   ],
+   "confidence": 0.9459308762443029,
+   "readingOrder": 25
+  },
+  {
+   "html": "<p>TILLÄGG TILL FÖRHÖR MED</p>",
+   "label": "SectionHeader",
+   "bbox": [
+    938,
+    656,
+    1541,
+    708
+   ],
+   "confidence": 0.9459308762443029,
+   "readingOrder": 26
+  },
+  {
+   "html": "<p>I samband av indektering med förhör med ovan nämnda kvinna bortföll en mening som bör ingå i förhöret.</p>",
+   "label": "Text",
+   "bbox": [
+    471,
+    859,
+    2300,
+    992
+   ],
+   "confidence": 0.9459308762443029,
+   "readingOrder": 29
+  },
+  {
+   "html": "<p>Mannen hon ser komma springande uppfattar hon såsom kommar som från den del av Olofsgatan som hörr om Tunnelgatan.</p>",
+   "label": "Text",
+   "bbox": [
+    471,
+    999,
+    2374,
+    1136
+   ],
+   "confidence": 0.9459308762443029,
+   "readingOrder": 30
+  },
+  {
+   "html": "<p>Mannen springer sedan på Tunnelgatans norra trottoar västerut, och hoppar troligvis in i en bil på Tunelgatans norra sida nästan i höjd med Holländagatan.</p>",
+   "label": "Text",
+   "bbox": [
+    471,
+    1140,
+    2409,
+    1340
+   ],
+   "confidence": 0.9459308762443029,
+   "readingOrder": 31
+  },
+  {
+   "html": "<p>Fotorekonstruktion kommer att bifogas i detta ärende.</p>",
+   "label": "Text",
+   "bbox": [
+    464,
+    1347,
+    1828,
+    1410
+   ],
+   "confidence": 0.9459308762443029,
+   "readingOrder": 32
+  },
+  {
+   "html": "<p>sthlm som ovan, krinsp Lennart Gustafsson.</p>",
+   "label": "Text",
+   "bbox": [
+    1129,
+    1490,
+    2218,
+    1554
+   ],
+   "confidence": 0.9459308762443029,
+   "readingOrder": 33
+  },
+  {
+   "html": "<p>RPS 463 2 1-4 88-01 25 000 set ALLF 400 3 004 Ekonomiryck Blanketten 8008</p>",
+   "label": "PageFooter",
+   "bbox": [
+    223,
+    2357,
+    258,
+    3160
+   ],
+   "confidence": 0.9459308762443029,
+   "readingOrder": 34
+  },
+  {
+   "html": "<p>* Ifylls ej om blanketten används som fortsättningsblad</p>",
+   "label": "PageFooter",
+   "bbox": [
+    293,
+    3153,
+    965,
+    3202
+   ],
+   "confidence": 0.9459308762443029,
+   "readingOrder": 35
+  },
+  {
+   "html": "<p>Ex 1: Till originalpärm (i nr-följd)</p>",
+   "label": "PageFooter",
+   "bbox": [
+    1806,
+    3163,
+    2354,
+    3216
+   ],
+   "confidence": 0.9459308762443029,
+   "readingOrder": 36
+  }
+ ]
+}

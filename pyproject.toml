@@ -44,6 +44,14 @@ graph = [
     "st-link-analysis>=0.4,<0.5",
 ]
 
+[tool.pytest.ini_options]
+# external: kräver en verklig extern runtime (Surya 2-workern). Bortvalda i den
+# vanliga sviten; kör dem med `pytest -m external` (ett senare -m går före).
+markers = [
+    "external: kräver verklig extern runtime (t.ex. Surya 2); körs med -m external",
+]
+addopts = "-m 'not external'"
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"
@@ -68,6 +76,7 @@ py-modules = [
     "download",
     "download_wpu",
     "quality",
+    "page_review",
     "ocr_pages",
     "ocr_db_helper",
     "build_user_words",

@@ -1,0 +1,427 @@
+{
+ "protocol": 2,
+ "type": "page",
+ "unitId": "form-v2-c",
+ "ordinal": 0,
+ "page": 1,
+ "status": "read",
+ "model": "surya-ocr 0.22.1 backend llamacpp model datalab-to/surya-ocr-2 surya-2.gguf 6a3a4c30e5e74446d4f8b6afd05b2f2da970f470:1266400864 surya-2-mmproj.gguf 6a3a4c30e5e74446d4f8b6afd05b2f2da970f470:204986688",
+ "source": {
+  "pdf": "Pol-1990-09-28_A14220-01-A_Erik_Sandin_civil_patrull_2733_pdf.pdf",
+  "page": 1,
+  "dpi": 300,
+  "height": 3509,
+  "pilot": "2026-10-26",
+  "sample": 13
+ },
+ "blocks": [
+  {
+   "html": "<p>01 Polismyndighet</p>",
+   "label": "Text",
+   "bbox": [
+    303,
+    182,
+    559,
+    225
+   ],
+   "confidence": 0.9651256715149454,
+   "readingOrder": 0
+  },
+  {
+   "html": "<p>RPS</p>",
+   "label": "Text",
+   "bbox": [
+    363,
+    228,
+    455,
+    274
+   ],
+   "confidence": 0.9651256715149454,
+   "readingOrder": 1
+  },
+  {
+   "html": "<p>02 Arbetsenhet</p>",
+   "label": "Text",
+   "bbox": [
+    303,
+    277,
+    517,
+    319
+   ],
+   "confidence": 0.9651256715149454,
+   "readingOrder": 2
+  },
+  {
+   "html": "<p>RK-A2</p>",
+   "label": "Text",
+   "bbox": [
+    363,
+    326,
+    499,
+    372
+   ],
+   "confidence": 0.9651256715149454,
+   "readingOrder": 3
+  },
+  {
+   "html": "<p>03 Upprättat(d) av telefon</p>",
+   "label": "Text",
+   "bbox": [
+    303,
+    375,
+    936,
+    421
+   ],
+   "confidence": 0.9651256715149454,
+   "readingOrder": 4
+  },
+  {
+   "html": "<p>Krinsp Per Gustavsson</p>",
+   "label": "Text",
+   "bbox": [
+    363,
+    425,
+    889,
+    481
+   ],
+   "confidence": 0.9651256715149454,
+   "readingOrder": 5
+  },
+  {
+   "html": "<p>09 Brott med vilket uppgiften hör samman</p>",
+   "label": "Text",
+   "bbox": [
+    303,
+    474,
+    852,
+    519
+   ],
+   "confidence": 0.9651256715149454,
+   "readingOrder": 6
+  },
+  {
+   "html": "<p>Mordet på Olof Palme</p>",
+   "label": "Text",
+   "bbox": [
+    363,
+    519,
+    862,
+    575
+   ],
+   "confidence": 0.9651256715149454,
+   "readingOrder": 7
+  },
+  {
+   "html": "<p>10 sak</p>",
+   "label": "Text",
+   "bbox": [
+    303,
+    572,
+    425,
+    607
+   ],
+   "confidence": 0.9651256715149454,
+   "readingOrder": 8
+  },
+  {
+   "html": "<p>SPANINGSUPPSLAG</p>",
+   "label": "SectionHeader",
+   "bbox": [
+    1341,
+    211,
+    1774,
+    263
+   ],
+   "confidence": 0.9651256715149454,
+   "readingOrder": 9
+  },
+  {
+   "html": "<p>i grövre brottmål</p>",
+   "label": "Text",
+   "bbox": [
+    1341,
+    267,
+    1605,
+    309
+   ],
+   "confidence": 0.9651256715149454,
+   "readingOrder": 10
+  },
+  {
+   "html": "<p>Sid nr 1</p>",
+   "label": "Text",
+   "bbox": [
+    2174,
+    211,
+    2310,
+    246
+   ],
+   "confidence": 0.9651256715149454,
+   "readingOrder": 11
+  },
+  {
+   "html": "<table border=\"1\">\n<tr>\n<td>07 Avsnitt</td>\n<td>08 Löpande nr</td>\n</tr>\n<tr>\n<td><b>A 175-A</b></td>\n<td></td>\n</tr>\n</table>",
+   "label": "Form",
+   "bbox": [
+    1925,
+    274,
+    2385,
+    404
+   ],
+   "confidence": 0.9651256715149454,
+   "readingOrder": 12
+  },
+  {
+   "html": "<p>04 Fortsättningsblad Uppgiftslämnare (efternamn och förnamn)</p>",
+   "label": "Text",
+   "bbox": [
+    1341,
+    393,
+    2161,
+    474
+   ],
+   "confidence": 0.9651256715149454,
+   "readingOrder": 13
+  },
+  {
+   "html": "<p>05 06 Utskriftsdatum 1990-09-30 EÅ</p>",
+   "label": "Text",
+   "bbox": [
+    1341,
+    491,
+    2260,
+    597
+   ],
+   "confidence": 0.9651256715149454,
+   "readingOrder": 14
+  },
+  {
+   "html": "<p>Protokoll fört vid förhör med <u>polis-</u><br/><u>inspektör Sandin, ERIK Olof, Född</u></p>",
+   "label": "Text",
+   "bbox": [
+    1341,
+    825,
+    2260,
+    965
+   ],
+   "confidence": 0.9651256715149454,
+   "readingOrder": 15
+  },
+  {
+   "html": "<p>[REDACTED]</p>",
+   "label": "Text",
+   "bbox": [
+    1341,
+    965,
+    2260,
+    1105
+   ],
+   "confidence": 0.9651256715149454,
+   "readingOrder": 16
+  },
+  {
+   "html": "<p>Han är anställd vid <u>Trafikpolisen i</u><br/><u>Stockholm under adress Vretenvägen 6,</u><br/><u>Solna, telefon 08-7696805.</u></p>",
+   "label": "Text",
+   "bbox": [
+    1341,
+    1105,
+    2260,
+    1316
+   ],
+   "confidence": 0.9651256715149454,
+   "readingOrder": 17
+  },
+  {
+   "html": "<p>Han höres i Rikskriminalens lokaler,<br/>Kungsholmsgatan 37, 7 tr, Stockholm,<br/>fredagen den 28 september 1990 med<br/>början klockan 13.05.</p>",
+   "label": "Text",
+   "bbox": [
+    1341,
+    1316,
+    2260,
+    1597
+   ],
+   "confidence": 0.9651256715149454,
+   "readingOrder": 18
+  },
+  {
+   "html": "<p>Förhörsledare: krinsp Per Gustavsson.</p>",
+   "label": "Text",
+   "bbox": [
+    1341,
+    1597,
+    2260,
+    1702
+   ],
+   "confidence": 0.9651256715149454,
+   "readingOrder": 19
+  },
+  {
+   "html": "<p>Förhörsvittne ej tillgängligt.</p>",
+   "label": "Text",
+   "bbox": [
+    1341,
+    1702,
+    2087,
+    1772
+   ],
+   "confidence": 0.9651256715149454,
+   "readingOrder": 20
+  },
+  {
+   "html": "<p>Inga övriga närvarande.</p>",
+   "label": "Text",
+   "bbox": [
+    1341,
+    1772,
+    1913,
+    1842
+   ],
+   "confidence": 0.9651256715149454,
+   "readingOrder": 21
+  },
+  {
+   "html": "<p>Bandupptagning.</p>",
+   "label": "Text",
+   "bbox": [
+    1341,
+    1842,
+    1714,
+    1912
+   ],
+   "confidence": 0.9651256715149454,
+   "readingOrder": 22
+  },
+  {
+   "html": "<p>HT<br/>860228</p>",
+   "label": "Text",
+   "bbox": [
+    50,
+    1860,
+    298,
+    2035
+   ],
+   "confidence": 0.9651256715149454,
+   "readingOrder": 23
+  },
+  {
+   "html": "<p>Erik Sandin informeras om att förhöret ingår i förundersökningen av mordet på<br/>statsminister Olof Palme.</p>",
+   "label": "Text",
+   "bbox": [
+    335,
+    1965,
+    2236,
+    2088
+   ],
+   "confidence": 0.9651256715149454,
+   "readingOrder": 24
+  },
+  {
+   "html": "<p>Erik Sandin kommer fortsättningsvis under förhöret att kallas vid sitt tilltals-<br/>namn Erik.</p>",
+   "label": "Text",
+   "bbox": [
+    335,
+    2176,
+    2310,
+    2298
+   ],
+   "confidence": 0.9651256715149454,
+   "readingOrder": 25
+  },
+  {
+   "html": "<p>Vidare informeras Erik om att han skall höras närmare angående sina iakttagelser<br/>under kvällen den 28 februari 1986.</p>",
+   "label": "Text",
+   "bbox": [
+    335,
+    2386,
+    2310,
+    2526
+   ],
+   "confidence": 0.9651256715149454,
+   "readingOrder": 26
+  },
+  {
+   "html": "<p>Erik uppger, att han kvällen den <u>28 februari 1986 tjänstgjorde i en civil polis-</u><br/><u>bil tillsammans med kollegan Pontus Vikner.</u></p>",
+   "label": "Text",
+   "bbox": [
+    323,
+    2614,
+    2310,
+    2755
+   ],
+   "confidence": 0.9651256715149454,
+   "readingOrder": 27
+  },
+  {
+   "html": "<p>Vidare uppger Erik, att han och kollegan <u>befann sig någonstans kring Odengatan/</u><br/><u>Döbelnsgatan när det utlarmades via polisradion att en skottlossning ägt rum i</u><br/><u>hörnet av Sveavägen/Tunnelgatan i Stockholm. De beger sig då mot platsen genom</u><br/><u>att åka Döbelnsgatan i rikning söderut fram till Apelbergsgatan, vilken man</u></p>",
+   "label": "Text",
+   "bbox": [
+    323,
+    2825,
+    2310,
+    3123
+   ],
+   "confidence": 0.9651256715149454,
+   "readingOrder": 28
+  },
+  {
+   "html": "<p>Pomn<br/>A1-14</p>",
+   "label": "Text",
+   "bbox": [
+    50,
+    2632,
+    248,
+    2807
+   ],
+   "confidence": 0.9651256715149454,
+   "readingOrder": 29
+  },
+  {
+   "html": "<p>RPS 46322</p>",
+   "label": "Text",
+   "bbox": [
+    186,
+    3105,
+    236,
+    3246
+   ],
+   "confidence": 0.9651256715149454,
+   "readingOrder": 30
+  },
+  {
+   "html": "<p>* Ifylls ej om blanketten används som fortsättningsblad</p>",
+   "label": "Footnote",
+   "bbox": [
+    248,
+    3228,
+    944,
+    3281
+   ],
+   "confidence": 0.9651256715149454,
+   "readingOrder": 31
+  },
+  {
+   "html": "<p>Ex 2: Till spaningschefens pärm (i nr-följd inom avsnitt)</p>",
+   "label": "Footnote",
+   "bbox": [
+    1453,
+    3246,
+    2372,
+    3298
+   ],
+   "confidence": 0.9651256715149454,
+   "readingOrder": 32
+  },
+  {
+   "html": "<p>8/10-90 HGD</p>",
+   "label": "Text",
+   "bbox": [
+    2012,
+    3298,
+    2360,
+    3386
+   ],
+   "confidence": 0.9651256715149454,
+   "readingOrder": 33
+  }
+ ]
+}

@@ -276,7 +276,7 @@ def assert_conserved(items: list[dict]) -> None:
     assert got == expected, (expected - got, got - expected)
 
 
-@pytest.mark.parametrize("name", ["form-v1-a", "form-v2-a", "form-v2-b", "forhor-dialog-a", "forhor-dialog-b"])
+@pytest.mark.parametrize("name", ["form-v1-a", "form-v1-c", "form-v1-d", "form-v1-e", "form-v2-a", "form-v2-b", "form-v2-c", "form-v2-d", "form-v2-e", "forhor-dialog-a", "forhor-dialog-b", "forhor-dialog-c"])
 def test_real_fixtures_parse_and_keep_text(name):
     items = load_fixture(name)
     blocks, degraded = sl.parse_blocks(items)
@@ -405,6 +405,21 @@ def test_with_redactions_skips_already_masked_block():
     assert [b.text for b in masked] == ["Stockholm, [MASKAD]."]
 
 
+@pytest.mark.parametrize("marker", ["[Redacted]", "[redacted]", "[ REDACTED ]"])
+def test_with_redactions_recognises_redacted_in_any_case(marker):
+    # Beslut BD: kontrollen "har redan en maskering" (beslut D) känner igen samma
+    # varianter som replace_redacted, även i ett blankettfält
+    blocks, _ = sl.parse_blocks([raw(f"Stockholm, {marker}.", order=0, bbox=(0, 100, 50, 140))])
+    assert [b.text for b in sl.with_redactions(blocks, [(110, 130)])] == [f"Stockholm, {marker}."]
+    form = LayoutBlock(
+        BlockKind.FORM, "", 0, (0, 0, 100, 400),
+        fields=(FormField("01", "L", marker, None), FormField("02", "M", "x", None)),
+        parts=((0, 100, 50, 140), (0, 300, 50, 340)),
+    )
+    out = sl.with_redactions([form], [(110, 130), (310, 330)])
+    assert [b.text for b in out if b.fields is None] == ["[MASKAD]"]
+
+
 def replace_text(block, text):
     import dataclasses
 
@@ -451,3 +466,27 @@ def test_json_roundtrip_keeps_field_parts():
         BlockKind.FORM, "01 L: V", 0, (1, 2, 30, 40), fields=(FormField("01", "L", "V", None),), parts=((1, 2, 30, 20),)
     )
     assert sl.blocks_from_json(sl.blocks_to_json([form])) == [form]
+
+
+def test_layout_json_carries_dpi():
+    # beslut BB: layout_json bär renderingens dpi, så att ramarna kan skalas rätt
+    # även för sidor som renderats i lägre upplösning än den begärda
+    blocks, _ = sl.parse_blocks([raw("<p>Hej</p>", bbox=(1, 2, 30, 40))])
+    data = sl.layout_to_json(blocks, 212)
+    assert json.loads(data)["dpi"] == 212
+    assert sl.layout_from_json(data) == (212, blocks)
+    assert sl.blocks_from_json(data) == blocks
+
+
+def test_layout_json_old_list_format_is_300_dpi():
+    blocks, _ = sl.parse_blocks([raw("<p>Hej</p>", bbox=(1, 2, 30, 40))])
+    old = sl.blocks_to_json(blocks)
+    assert old.startswith("[")
+    assert sl.layout_from_json(old) == (sl.LEGACY_LAYOUT_DPI, blocks)
+    assert sl.LEGACY_LAYOUT_DPI == 300
+
+
+@pytest.mark.parametrize("bad", ['{"dpi": 0, "blocks": []}', '{"dpi": "300", "blocks": []}', '{"blocks": []}', "7"])
+def test_layout_json_rejects_bad_dpi(bad):
+    with pytest.raises(ValueError):
+        sl.layout_from_json(bad)

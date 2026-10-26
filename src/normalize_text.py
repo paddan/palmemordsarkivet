@@ -104,6 +104,18 @@ def normalize(text: str) -> str:
     return '\f'.join(result_pages)
 
 
+def markdown_is_fresh(db_text: str | None, file_page: str) -> bool:
+    """Gäller sidans Markdown fortfarande för sidan i textfilen?
+
+    Sant bara när ``normalize(pdf_pages.text)`` är exakt lika med sidan i
+    ``text/<stem>.txt``; ändrad text (LLM-korrigering, merge_wpu, manuell
+    redigering) eller saknad text (``None``) gör Markdown inaktuell.
+    """
+    if db_text is None:
+        return False
+    return normalize(db_text) == file_page
+
+
 def normalize_markdown(md: str) -> str:
     """Normalisera Markdown från Surya-layout inför chunkning.
 

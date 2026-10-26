@@ -32,13 +32,60 @@ Heuristiker (vad, varför, konstant):
   ändå en spärr för värdekedjor.
 - **Rättning:** en godtagen etikett som liknar mallens tillräckligt ersätts med
   mallens stavning, så OCR-fel inte syns i fältnamnet (``LABEL_MATCH``).
+- **Kvarleva på etikettraden:** text efter mallens etikett på en godtagen rad
+  (``07 Avsnitt E``) blir fältets värde när fältet saknar värde underifrån och
+  texten är kort (``LABEL_REST_MAX_CHARS``), inte fast tryck och inte ett
+  fältnummer; annars står den kvar som vanlig text. Den tappas aldrig. En
+  förklarande parentes efter etiketten hör till etiketten.
+- **Skyddsnät:** ord på en etikettrad som inte syns i värde, lös text eller en
+  skriven etikett (fält med värde eller ikryssad ruta) och som inte är mallens
+  etikett eller tryckta parentes enligt en difflib-justering (minst
+  ``LABEL_WORD_COVER`` av ordets tecken) blir lös text.
 - **Fast tryck:** mallens ``printed`` (bildtexter som "Spaningschef") är aldrig ett
   värde eller ett kryssrutealternativ, eftersom fel värde är värre än inget
-  (``PRINTED_MATCH``).
+  (``PRINTED_MATCH``). En rad räknas också som tryck när varje del mellan rutornas
+  linjer (lästa som ``|``) är det (``| datum``, ``Bitr spaningschef | Registrator``).
 - **Värde:** en rad under etiketten i samma spalt (``COLUMN_TOLERANCE``), högst
   ``VALUE_MAX_GAP`` × sidhöjden under, högst ``VALUE_MAX_CHARS`` tecken och högst
   ``MAX_VALUE_LINES`` rader; repliker och långa rader avbryter kedjan, eftersom
-  de är löptext.
+  de är löptext. Fast tryck mellan etiketten och raden (en ny rutas rubrik)
+  avbryter också kedjan, men inte en grannetikett eller tryckt rubrik på samma
+  rad som etiketten (``07 Avsnitt`` bredvid ``08 Löpande nr``); löptext och
+  avvisade etiketter avbryter alltid.
+- **Samma rad:** två rutor står på samma rad när de överlappar lodrätt minst
+  ``ROW_OVERLAP`` av den lägre rutans höjd.
+- **Två nummer på en etikettrad:** ``05 datum 06 klockan`` blir två etiketter när
+  det inre numret finns i mallen, är högre än det första och båda halvorna liknar
+  sina etiketter; gränsen i x-led uppskattas ur teckenbredden (blockets bredd
+  delad med dess längsta rad).
+- **Etikettrad och spalter:** etiketter på samma rad delar sidan i spalter, från
+  etikettens vänsterkant till nästa etiketts, men högst ``ROW_VALUE_REACH`` ×
+  sidbredden till höger om etikettens högerkant. En rad under etikettraden hör
+  till spalten där dess text har sin mitt (inte där den börjar), och får börja
+  högst ``ROW_VALUE_LEFT`` × sidbredden till vänster om spaltens etikett. Når
+  texten in i grannspalter som saknar eget värde under raden delas den ord för
+  ord efter spalterna (``Ingvar Kjellvås 08-7694169`` under 03 och 04), men bara
+  när varje del är värdeformad (se *Värdeform*; på en rad med en siffra räknas
+  också ett ensamt kort gement ord som ``krinsp`` före numret). Kan raden inte
+  delas och är den inte själv värdeformad är den prosa och står kvar som vanlig
+  text på sin plats i läsordningen; har
+  grannen ett eget värde delas inget, eftersom maskinskrivna värden ofta är
+  bredare än etiketten. Ord i raden som som helhet liknar en etikett, ett alias
+  eller fast tryck (högst ``MAX_LABEL_RUN`` ord i följd) är tryck och står kvar
+  som text. Raden lämnas åt den vanliga kedjan när ett ensamt nummer på
+  etikettraden ännu väntar på sin etikett, när den innehåller kryssrutor, eller
+  när dess mitt inte ligger i någon spalt.
+- **Värdeform:** text med en siffra, eller högst ``VALUE_LIKE_MAX_WORDS`` ord där
+  minst ett börjar med versal och högst ett med gemen (namn, koder, ``krinsp
+  Lennart Gustafsson``), och ingen mening mitt i. ``nej`` och ``sa hon till slut.`` är prosa.
+- **Värde bredvid etiketten:** en värdeformad rad som inte fått något fält och står på samma
+  rad som en tom etikett, högst ``ROW_VALUE_REACH`` × sidbredden till höger om
+  den och inom etikettens spalt, är fältets värde (sidfotens ``20 Tagit del
+  860308``). En etikettrad bakom rutans linje (``| 25 Spanchef: sign``) är aldrig
+  ett värde.
+- **Alias bredvid numret:** en onumrerad rad som liknar ett alias för fält N och
+  står på samma rad som etiketten N, till höger om den, är en egen etikett för N
+  (variant 2: ``06`` med ``Promemoria`` under och ``Utskriftsdatum`` bredvid).
 - **Fritextfält:** mallens ``free_text`` (t.ex. "18 I sak") samlar inget värde,
   och under dess rad godtas bara etiketter med högre nummer, eftersom
   vittnesmålet står där. En fritextcell i en tabell blir ett eget stycke.
@@ -61,13 +108,21 @@ from functools import cache
 from pathlib import Path
 from typing import Any
 
-from surya_layout import CHECKBOX_OFF, CHECKBOX_ON, BlockKind, FormField, LayoutBlock, fields_text
+from surya_layout import (
+    CHECKBOX_OFF,
+    CHECKBOX_ON,
+    MASK_MARKER,
+    REDACTED_RE,
+    BlockKind,
+    FormField,
+    LayoutBlock,
+    fields_text,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 TEMPLATE_DIR = ROOT / "data" / "formular"
 
-MASK = "[MASKAD]"
-REDACTED = "[REDACTED]"
+MASK = MASK_MARKER
 VALUE_MAX_GAP = 0.035  # andel av sidhöjden mellan etikett (eller förra värdet) och värde
 VALUE_MAX_CHARS = 200
 COLUMN_TOLERANCE = 0.015  # andel av sidbredden
@@ -87,6 +142,20 @@ FOOTER_WINDOW = 0.08  # andel av sidhöjden ovanför den lägsta sidfotskandidat
 FOOTER_MIN_NUMBERS = 3  # minsta antal olika sidfotsnummer i klustret
 FOOTER_MAX_RISE = 0.01  # strikt ordning i klustret
 FOOTER_VALUE_MAX_CHARS = 60
+# text efter etiketten på etikettraden ("07 Avsnitt E") blir fältets värde bara när
+# den är kort; längre text är löptext som råkat hamna på raden
+LABEL_REST_MAX_CHARS = 60
+# två rutor står på samma rad när de överlappar lodrätt minst så stor andel av den lägre
+# rutans höjd (etiketterna 03–06 i variant 1, eller en etikett och ett värde bredvid den)
+ROW_OVERLAP = 0.5
+# andel av sidbredden: ett värde får börja högst så långt till höger om etikettens
+# högerkant och ändå höra till etikettens spalt (sidfotens "20 Tagit del 860308")
+ROW_VALUE_REACH = 0.08
+# andel av sidbredden: ett maskinskrivet värde under en etikettrad får börja så långt
+# till vänster om sin etiketts vänsterkant (sida 3: "87-07-17" börjar före "05 datum")
+ROW_VALUE_LEFT = 0.03
+VALUE_LIKE_MAX_WORDS = 4  # ett namn eller en kod utan siffror är kort
+MAX_LABEL_RUN = 8  # längsta ordföljd i en värderad som prövas mot mallens tryck
 MAX_FIELD_NUMBER = 30
 _SKIP_KINDS = {BlockKind.PAGE_FOOTER, BlockKind.CODE, BlockKind.FORMULA, BlockKind.FIGURE}
 _NUMBER_RE = re.compile(r"^(\d{2})(?:\s+(.*))?$", re.S)
@@ -245,27 +314,190 @@ def _accepts(tpl: FormTemplate, number: str, raw_label: str) -> bool:
     return any(_similarity(raw_label, c) >= _threshold(c) for c in _canon_labels(tpl, number))
 
 
-def _label_match(raw: str, canon: str) -> tuple[float, str]:
-    """(likhet, rättad etikett). Mallens etikett får ersätta början av en längre
-    tryckt etikett (``I sak. (anteckna …)``) – resten behålls då."""
-    best = (_ratio(raw, canon), canon)
-    n = len(canon)
-    for cut in range(max(1, n - 2), min(len(raw), n + 2) + 1):
-        rest = raw[cut:]
-        if rest and rest[0].isalnum():
-            continue  # klipp bara vid ordgräns
-        r = _ratio(raw[:cut], canon)
+# en etikett får bara svälja ord som till minst så stor del matchar mallens etikett;
+# annars är ordet ett värde eller annan text efter etiketten (beslut BF)
+LABEL_WORD_MIN_MATCH = 0.5
+
+
+def _label_cuts(raw: str) -> list[int]:
+    """Ställen där etiketten kan sluta: före blanksteg och skiljetecken, vid radens
+    slut och där en bokstav följs av en siffra (hopskrivet värde: ``Avsnitt12``)."""
+    cuts = [
+        i
+        for i in range(1, len(raw))
+        if raw[i].isspace() or raw[i] in "(:;,." or (raw[i - 1].isalpha() and raw[i].isdigit())
+    ]
+    return [*cuts, len(raw)]
+
+
+def _covers_words(prefix: str, canon: str) -> bool:
+    """Prefixets sista ord matchar (i en difflib-justering mot mallens etikett) till
+    minst ``LABEL_WORD_MIN_MATCH``, så att etiketten inte sväljer ett värde som
+    råkar dela några bokstäver med etikettens slut. Ord inne i etiketten får vara
+    OCR-skadade (``Brott med vilkt …``); de rättas till mallens stavning."""
+    pn, cn = _norm(prefix), _norm(canon)
+    last = list(re.finditer(r"\S+", pn))[-1]
+    matched: set[int] = set()
+    for _a, b, size in difflib.SequenceMatcher(None, cn, pn, autojunk=False).get_matching_blocks():
+        matched.update(range(b, b + size))
+    word = range(last.start(), last.end())
+    return sum(j in matched for j in word) >= LABEL_WORD_MIN_MATCH * len(word)
+
+
+def _label_match(raw: str, canon: str) -> tuple[float, str, str]:
+    """(likhet, mallens etikett, rest).
+
+    Raden justeras mot mallens etikett: etiketten är det radprefix (se
+    ``_label_cuts``) som liknar mallens etikett mest och vars sista ord täcks av
+    justeringen; ``rest`` är allt efter det, även ett hopskrivet värde
+    (``Avsnitt12`` → ``12``) eller text efter en förkortad etikett. Vid lika
+    likhet vinner det kortare prefixet, så hellre en för lång rest (som aldrig
+    tappas) än en för lång etikett (som ersätts av mallens).
+    """
+    best = (0.0, canon, raw)
+    for cut in _label_cuts(raw):
+        prefix = raw[:cut]
+        if not _norm(prefix) or not _covers_words(prefix, canon):
+            continue
+        r = _ratio(prefix, canon)
         if r > best[0]:
-            if rest.startswith(":"):
-                rest = " " + rest.lstrip(": ")  # "Registrerat: Signatur" -> ingen dubbel kolon
-            best = (r, (canon + rest).rstrip())
+            best = (r, canon, raw[cut:])
     return best
 
 
+_LEADING_PAREN_RE = re.compile(r"^[\s.,;:]*\([^()]*\)")
+
+
+def _split_rest(rest: str) -> tuple[str, str]:
+    """``(etikettsvans, kvarleva)`` för texten efter mallens etikett.
+
+    Inledande förklarande parenteser (``I sak. (anteckna …)``, ``Arbetsplats
+    (arbetsgivare, postadress) Volvo AB``) är tryckt etikett och blir etikettsvans.
+    Resten är en kvarleva: ett värde som Surya lagt på etikettraden
+    (``07 Avsnitt E``) eller annan text, som aldrig får försvinna.
+    """
+    tail = ""
+    while m := _LEADING_PAREN_RE.match(rest):
+        tail += m.group(0)
+        rest = rest[m.end():]
+    remainder = rest.strip().lstrip(":;,. ").strip()
+    if not remainder:
+        return tail + rest, ""
+    return tail, remainder
+
+
+_WORD_RE = re.compile(r"[^\W\d_]+|\d+")
+_PAREN_GROUP_RE = re.compile(r"\([^()]*\)?")
+# ett ord på etikettraden är mallens (tryckta) text när en difflib-justering mot
+# mallens etikett eller tryckta parentes täcker minst så stor del av ordets tecken
+# (beslut BI); ett inskjutet ord ("Eftersson", "Volvo") täcks inte och blir lös text
+LABEL_WORD_COVER = 0.8
+
+
+def _word_list(text: str) -> list[str]:
+    """Bokstavs- och sifferföljder var för sig, gemener (``Avsnitt12`` -> två ord)."""
+    return [w.lower() for w in _WORD_RE.findall(text)]
+
+
+def _lower_same_length(text: str) -> str:
+    """Gemener tecken för tecken, så att positionerna stämmer med originalet."""
+    return "".join((c.lower() or c)[0] for c in text)
+
+
+# OCR byter ofta enstaka tecken (rätt -> rått, där -> dår): en ersättning av högst så
+# många tecken mot lika många räknas som täckt, ett inskjutet ord gör det aldrig
+MAX_SUBSTITUTION = 2
+
+
+def _aligned(text: str, ref: str, offset: int = 0) -> tuple[set[int], set[int]]:
+    """``(lika, utbytta)``: positioner i ``text`` (plus ``offset``) som en
+    difflib-justering mot ``ref`` täcker med lika tecken respektive med korta
+    ersättningar av lika längd (OCR-fel). Infogad text täcks aldrig."""
+    t, r = _lower_same_length(text), _lower_same_length(ref)
+    equal: set[int] = set()
+    swapped: set[int] = set()
+    for op, i1, i2, j1, j2 in difflib.SequenceMatcher(None, r, t, autojunk=False).get_opcodes():
+        if op == "equal":
+            equal.update(range(offset + j1, offset + j2))
+        elif op == "replace" and i2 - i1 == j2 - j1 <= MAX_SUBSTITUTION:
+            swapped.update(range(offset + j1, offset + j2))
+    return equal, swapped
+
+
+def _template_cover(text: str, canons: list[str], tpl: FormTemplate) -> tuple[set[int], set[int]]:
+    """Tecken på etikettraden som mallen täcker: justeringen mot den etikett (eller
+    det alias) som liknar raden mest, och för varje parentes som är mallens fasta
+    tryck justeringen mot just den tryckta parentesen – ord för ord, aldrig hela
+    parentesen på en gång."""
+    equal: set[int] = set()
+    swapped: set[int] = set()
+    refs: list[tuple[str, str, int]] = []
+    if canons:
+        refs.append((text, max(canons, key=lambda c: _ratio(text, c)), 0))
+    printed = [p for p in tpl.printed if p.startswith("(")]
+    for m in _PAREN_GROUP_RE.finditer(text):
+        ref = _matching_printed_paren(m.group(0), printed)
+        if ref is not None:
+            refs.append((m.group(0), ref, m.start()))
+    for part, ref, offset in refs:
+        e, sw = _aligned(part, ref, offset)
+        equal |= e
+        swapped |= sw
+    return equal, swapped
+
+
+def _unrendered_words(text: str, covered: tuple[set[int], set[int]], rendered: list[str]) -> str:
+    """Ord på etikettraden som varken är mallens text eller syns någon annanstans.
+
+    Ett ord är mallens text när ``covered`` (``_template_cover``: lika och utbytta
+    tecken) täcker minst ``LABEL_WORD_COVER`` av dess tecken och minst hälften av
+    dem är lika tecken (eller ordet är ett enda tecken) – annars räcker några
+    utspridda bokstäver för att ett inskjutet ord ("Volvo" mot "telefon") ska se
+    täckt ut. ``rendered`` är orden som faktiskt syns:
+    värdet, lös text från raden och – bara när fältet skrivs till Markdown –
+    etiketten. Svaret är de saknade orden i radens ordning (tomt när inget saknas);
+    de blir lös text, så att inget ord på en etikettrad försvinner (beslut BG/BI).
+    """
+    have: dict[str, int] = {}
+    for w in rendered:
+        have[w] = have.get(w, 0) + 1
+    missing = []
+    for m in _WORD_RE.finditer(text):
+        w = m.group(0).lower()
+        if have.get(w, 0) > 0:
+            have[w] -= 1
+            continue
+        span = range(m.start(), m.end())
+        n_equal = sum(i in covered[0] for i in span)
+        n_cover = n_equal + sum(i in covered[1] for i in span)
+        if n_cover >= LABEL_WORD_COVER * len(w) and (2 * n_equal >= len(w) or len(w) == 1):
+            continue
+        missing.append(m.group(0))
+    return " ".join(missing)
+
+
+def _matching_printed_paren(text: str, printed: list[str]) -> str | None:
+    """Mallens tryckta parentes som ``text`` motsvarar (likhet ≥ ``PRINTED_MATCH``),
+    annars ``None``. Utan difflibs autojunk, eftersom de tryckta parenteserna är
+    längre än 200 tecken (``18 I sak``) och vanliga tecken då annars räknas bort."""
+    t = _norm(text)
+    scored = [(difflib.SequenceMatcher(None, t, _norm(p), autojunk=False).ratio(), p) for p in printed]
+    best = max(scored, default=(0.0, ""))
+    return best[1] if best[0] >= PRINTED_MATCH else None
+
+
 def _is_printed(text: str, tpl: FormTemplate) -> bool:
+    """Texten är mallens fasta tryck: hela raden, eller varje del mellan rutornas
+    lodräta linjer, som OCR ofta läser som ``|`` (``| datum``, ``Bitr spaningschef |
+    Registrator``)."""
     if not _norm(text):
         return False
-    return any(_ratio(text, p) >= PRINTED_MATCH for p in tpl.printed)
+    if any(_ratio(text, p) >= PRINTED_MATCH for p in tpl.printed):
+        return True
+    parts = [p for p in text.split("|") if _norm(p)]
+    return "|" in text and bool(parts) and all(
+        any(_ratio(part, p) >= PRINTED_MATCH for p in tpl.printed) for part in parts
+    )
 
 
 def _choose_template(
@@ -299,6 +531,9 @@ class _El:
     number: str | None = None
     label: str = ""
     label_el: _El | None = None  # raden under ett ensamt nummer, som bär etikettexten
+    # uppskattad teckenbredd: blockets bredd delad med dess längsta rad (texten antas
+    # vänsterställd), för att placera ord och inre fältnummer i x-led
+    char_w: float = 0.0
 
     @property
     def is_label(self) -> bool:
@@ -323,6 +558,7 @@ class _Field:
     chain: list[_El] = field(default_factory=list)
     free: bool = False
     resolved: bool = False  # etiketten är redan bestämd (ingen rad under tas som etikett)
+    label_src: _El | None = None  # raden som bär etikettexten (annars etikettraden själv)
 
 
 def _number_parts(text: str) -> list[tuple[str, str]]:
@@ -369,11 +605,51 @@ def _elements(blocks: list[LayoutBlock]) -> list[_El]:
         lines = b.text.split("\n")
         x0, y0, x1, y1 = b.bbox
         step = (y1 - y0) / max(1, len(lines))
+        char_w = (x1 - x0) / max(1, *(len(ln.strip()) for ln in lines))
         for j, ln in enumerate(lines):
             if not ln.strip():
                 continue
-            out.append(_El(i, j, ln.strip(), (x0, y0 + j * step, x1, y0 + (j + 1) * step)))
+            out.append(_El(i, j, ln.strip(), (x0, y0 + j * step, x1, y0 + (j + 1) * step), char_w=char_w))
     return out
+
+
+def _same_row(a: _El, b: _El) -> bool:
+    """Rutorna överlappar lodrätt minst ``ROW_OVERLAP`` av den lägre rutans höjd."""
+    overlap = min(a.bbox[3], b.bbox[3]) - max(a.bbox[1], b.bbox[1])
+    lower = min(a.bbox[3] - a.bbox[1], b.bbox[3] - b.bbox[1])
+    return lower > 0 and overlap >= ROW_OVERLAP * lower
+
+
+def _text_right(e: _El) -> float:
+    """Uppskattad högerkant för radens text (blockets ruta kan vara bredare)."""
+    if e.char_w <= 0:
+        return e.bbox[2]
+    return min(e.bbox[2], e.bbox[0] + len(e.text) * e.char_w)
+
+
+def _split_two_labels(e: _El, n1: str, rest: str, tpl: FormTemplate) -> list[_El] | None:
+    """En etikettrad med två fältnummer (``05 datum 06 klockan``) som två etiketter.
+
+    Det inre numret ska finnas i mallen och vara högre än det första, och båda
+    halvorna ska likna sina nummers etiketter. Gränsen i x-led uppskattas ur
+    teckenbredden; ``None`` när raden inte är två etiketter.
+    """
+    offset = len(e.text) - len(rest)
+    for m in re.finditer(r"(?<=\s)(\d{2})(?=\s+\S)", rest):
+        n2 = m.group(1)
+        if n2 not in tpl.labels or int(n2) <= int(n1):
+            continue
+        left, right = rest[: m.start()].strip(), rest[m.end():].strip()
+        if not (_accepts(tpl, n1, left) and _accepts(tpl, n2, right)):
+            continue
+        x = e.bbox[0] + (offset + m.start()) * e.char_w if e.char_w > 0 else (e.bbox[0] + e.bbox[2]) / 2
+        x = min(max(x, e.bbox[0] + 1), e.bbox[2] - 1)
+        x0, y0, x1, y1 = e.bbox
+        return [
+            dataclasses.replace(e, bbox=(x0, y0, x, y1), number=n1, label=left),
+            dataclasses.replace(e, bbox=(x, y0, x1, y1), number=n2, label=right),
+        ]
+    return None
 
 
 def _strip_boxes(text: str) -> str:
@@ -406,6 +682,10 @@ def _label_els(
                 out += [dataclasses.replace(e, number=n1, label=""), dataclasses.replace(e, number=n2, label=l2)]
                 continue
         elif _norm(l1):
+            pair = _split_two_labels(e, n1, l1, tpl)
+            if pair is not None:
+                out += pair
+                continue
             if _accepts(tpl, n1, l1):
                 out.append(dataclasses.replace(e, number=n1, label=l1))
                 continue
@@ -417,6 +697,77 @@ def _label_els(
         if n1 in tpl.labels:
             barriers.append(e)
     return out, barriers
+
+
+# mening mitt i texten: ! ? ; följt av mer text, eller . : följt av ett gement ord
+_SENTENCE_INSIDE_RE = re.compile(r"[!?;]\s+\S|[.:]\s+[a-zåäöéü]")
+
+
+def _value_like(text: str) -> bool:
+    """Texten ser ut som ett ifyllt värde och inte som prosa.
+
+    Den innehåller en siffra (datum, klockslag, telefon, diarienummer), eller består
+    av högst ``VALUE_LIKE_MAX_WORDS`` ord där minst ett börjar med versal och högst
+    ett börjar med gemen (namn, initialer, koder som ``EBE``, en titel som
+    ``krinsp``). Ingen mening får sluta mitt i texten. ``nej``, ``sa hon till slut.``,
+    ``springa mot`` och ``Hon gick sedan hem.`` är prosa.
+    """
+    words = text.split()
+    if not words or _SENTENCE_INSIDE_RE.search(text):
+        return False
+    if any(ch.isdigit() for ch in text):
+        return True
+    upper = sum(w[0].isupper() for w in words)
+    lower = sum(w[0].isalpha() and w[0].islower() for w in words)
+    return len(words) <= VALUE_LIKE_MAX_WORDS and upper >= 1 and lower <= 1
+
+
+def _lone_title(words: list[str]) -> bool:
+    """Ett ensamt kort gement ord (en titel som ``krinsp``) före ett nummer på samma
+    rad; används bara när raden har en siffra (``krinsp 08-7694169``)."""
+    return len(words) == 1 and words[0].isalpha() and len(words[0]) < SHORT_LABEL_CHARS
+
+
+def _label_word_runs(words: list[str], tpl: FormTemplate) -> set[int]:
+    """Index för ord i en värderad som är mallens tryck: en följd av högst
+    ``MAX_LABEL_RUN`` ord som som helhet liknar en etikett, ett alias eller fast
+    tryck ("Förhörsprot Promemoria 920114/GT" under 05/06: bara datumet är ett
+    värde). De står kvar som text i stället för att bli fältvärden."""
+    canons = [c for n in tpl.labels for c in _canon_labels(tpl, n)]
+    out: set[int] = set()
+    i = 0
+    while i < len(words):
+        for n in range(min(MAX_LABEL_RUN, len(words) - i), 0, -1):
+            text = " ".join(words[i : i + n])
+            if any(_similarity(text, c) >= _threshold(c) for c in canons) or _is_printed(text, tpl):
+                out.update(range(i, i + n))
+                i += n
+                break
+        else:
+            i += 1
+    return out
+
+
+def _alias_labels(els: list[_El], labels: list[_El], tpl: FormTemplate, free: set[str]) -> list[_El]:
+    """Mallens alias för ett fält som egen etikett bredvid fältets nummer.
+
+    Variant 2 trycker "Utskriftsdatum" i en ruta till höger om "06", vars etikett
+    ("Promemoria") står under numret. En onumrerad rad som som helhet liknar ett
+    alias för fält N blir en etikett för N när den står på samma rad som en godtagen
+    etikett N och till höger om den; värdet under den hör då till fält N.
+    """
+    used = {id(e.label_el) for e in labels if e.label_el is not None}
+    out = []
+    for c in els:
+        if _number_parts(c.text) or id(c) in used:
+            continue
+        for number, names in tpl.aliases.items():
+            if number in free or not any(_similarity(c.text, a) >= _threshold(a) for a in names):
+                continue
+            if any(e.number == number and _same_row(e, c) and c.bbox[0] > e.bbox[2] for e in labels):
+                out.append(dataclasses.replace(c, number=number, label=c.text))
+                break
+    return out
 
 
 def _order_outliers(labels: list[_El], rise: float, tol: float = 0.0) -> list[_El]:
@@ -585,9 +936,20 @@ def extract_form_fields(
     utan mall eller etiketter returneras blocken oförändrade, eftersom numrerade
     rader i vanlig text (datum, tider, antal) annars skulle flyttas ur läsordningen.
     ``trace`` får mallens namn och antal godtagna/avvisade etiketter, spärrar och
-    fält (ingen dokumenttext).
+    fält, samt antal kvarlevor på etikettrader som blev värden
+    (``label_rest_values``) respektive stod kvar som text (``label_rest_text``),
+    etikettrader med två nummer (``label_pairs``), aliasetiketter
+    (``alias_labels``), värden som tagits ur en etikettrads spalter
+    (``row_values``, varav delade: ``row_splits``), prosarader under en etikettrad
+    som lämnades som text (``row_prose``) och värden bredvid etiketten
+    (``right_values``); ingen dokumenttext.
     """
-    stats: dict[str, Any] = {"template": None, "accepted_labels": 0, "fields": 0, "rejected_labels": 0, "barriers": 0}
+    stats: dict[str, Any] = {
+        "template": None, "accepted_labels": 0, "fields": 0, "rejected_labels": 0, "barriers": 0,
+        "label_rest_values": 0, "label_rest_text": 0, "label_words_text": 0,
+        "label_pairs": 0, "alias_labels": 0, "row_values": 0, "row_splits": 0, "right_values": 0,
+        "row_prose": 0,
+    }
     if trace is not None:
         trace.update(stats)
         stats = trace
@@ -663,6 +1025,11 @@ def extract_form_fields(
     if rejected:
         labels = [e for e in labels if not any(e is r for r in rejected)]
         barriers += rejected
+    aliases = _alias_labels(els, labels, template, free)
+    labels += aliases
+    stats["alias_labels"] = len(aliases)
+    # rader med två fältnummer som blev två etiketter (samma rad bär båda)
+    stats["label_pairs"] = len(labels) - len({(e.block, e.line) for e in labels})
     tables = [
         t
         for t in _table_fields(blocks, template)
@@ -673,6 +1040,9 @@ def extract_form_fields(
         return blocks, []
     # repliker och långa rader är löptext och avbryter därför värdekedjor
     stoppers = [e for e in els if not _number_parts(e.text) and (_is_turn(e.text) or len(e.text) > VALUE_MAX_CHARS)]
+    # fast tryck (en rutas rubrik, "Uppgiftslämnare (efternamn och förnamn)") inleder en
+    # ny ruta och avbryter därför värdekedjor som passerar den
+    printed_els = [e for e in els if not _number_parts(e.text) and _is_printed(_strip_boxes(e.text), template)]
 
     consumed: set[tuple[int, int | None]] = {(e.block, e.line) for e in labels}
     fields = []
@@ -681,7 +1051,10 @@ def extract_form_fields(
         if e.label_el is not None:
             # ett ensamt nummer: raden under är den tryckta etiketten (ev. med kryssruta)
             prefix, options = _split_boxes(e.label_el.text)
-            f = _Field(e, number, "" if options else prefix, options=options, free=number in free, resolved=True)
+            f = _Field(
+                e, number, "" if options else prefix, options=options, free=number in free, resolved=True,
+                label_src=e.label_el,
+            )
             f.chain.append(e.label_el)
             consumed.add((e.label_el.block, e.label_el.line))
         else:
@@ -690,22 +1063,188 @@ def extract_form_fields(
         fields.append(f)
 
     def blocked(f: _Field, a: _El, e: _El) -> bool:
+        """En etikett, spärr, löptext eller tryckt rubrik mellan ``a`` och ``e`` i
+        samma spalt avbryter kedjan; en godtagen etikett på samma rad som ``a``
+        (grannfältet bredvid) eller en tryckt rubrik på samma rad ("telefon*") gör det
+        inte, men en spärr (avvisad etikett) eller löptext gör det alltid."""
+        def exempt(other: _El, is_label: bool) -> bool:
+            return is_label and _same_row(other, a)  # grannetiketter och tryckta rubriker, aldrig löptext eller spärrar
+
         return any(
-            other.bbox != f.el.bbox and overlaps(other, e) and a.cy < other.cy < e.cy
-            for other in [*labels, *barriers, *stoppers]
+            other.bbox != f.el.bbox and overlaps(other, e) and a.cy < other.cy < e.cy and not exempt(other, is_label)
+            for others, is_label in ((labels, True), (printed_els, True), (barriers, False), (stoppers, False))
+            for other in others
         )
 
     def collectable(e: _El) -> bool:
-        if len(e.text) > VALUE_MAX_CHARS or _number_parts(e.text) or _is_turn(e.text):
+        # en etikettrad bakom rutans linje ("| 25 Spanchef: sign") är inte heller ett värde
+        if len(e.text) > VALUE_MAX_CHARS or _number_parts(e.text.lstrip("| ")) or _is_turn(e.text):
             return False
         prefix, options = _split_boxes(e.text)
         if options and not all(lbl for lbl, _ in options):
             return False  # en kryssruta utan text är inget alternativ
         return not any(_is_printed(t, template) for t in [prefix, *(lbl for lbl, _ in options)])
 
+    reach = ROW_VALUE_REACH * width
+    label_keys = set(consumed)
+    # kvarlevor på förbrukade rader (etikettrader, tryckta ord i en värderad):
+    # (block, rad) -> text i läsordning
+    leftovers: dict[tuple[int, int | None], list[str]] = {}
+
+    def can_take(f: _Field, e: _El) -> bool:
+        """Fältet kan ta ``e`` som (ännu ett) värde enligt fritext-, sidfots- och kedjereglerna."""
+        if f.free or len(f.values) >= MAX_VALUE_LINES:
+            return False
+        if free and int(f.number) > free_max and len(e.text) > FOOTER_VALUE_MAX_CHARS:
+            return False
+        if cutoff is not None and f.el.bbox[1] < cutoff < e.bbox[1]:
+            return False
+        return bool(f.raw_label) or f.resolved  # ett ensamt nummer väntar på sin etikett
+
+    def right_edge(f: _Field) -> float:
+        src = f.label_src
+        return max(f.el.bbox[2], src.bbox[2] if src is not None and _same_row(src, f.el) else 0)
+
+    def row_of(f: _Field) -> list[_Field]:
+        return sorted((g for g in fields if not g.free and _same_row(g.el, f.el)), key=lambda g: g.el.bbox[0])
+
+    def spans(row: list[_Field]) -> list[tuple[float, float]]:
+        """Etikettens spalt: från dess vänsterkant till nästa etikett på raden, men
+        högst ``reach`` till höger om etikettens högerkant."""
+        out = []
+        for k, g in enumerate(row):
+            end = right_edge(g) + reach
+            if k + 1 < len(row):
+                end = min(end, row[k + 1].el.bbox[0] - tol)
+            out.append((g.el.bbox[0] - tol, end))
+        return out
+
+    def column(x: float, sp: list[tuple[float, float]]) -> int | None:
+        return next((k for k, (a, b) in enumerate(sp) if a <= x < b), None)
+
+    def centre(e: _El) -> float:
+        return (e.bbox[0] + _text_right(e)) / 2
+
+    def words_x(e: _El) -> list[tuple[str, float, float]]:
+        """Radens ord med uppskattad vänster- och högerkant (teckenbredden)."""
+        cw = e.char_w if e.char_w > 0 else (e.bbox[2] - e.bbox[0]) / max(1, len(e.text))
+        return [(m.group(0), e.bbox[0] + m.start() * cw, e.bbox[0] + m.end() * cw) for m in re.finditer(r"\S+", e.text)]
+
+    def row_above(e: _El) -> list[_Field] | None:
+        """Etikettraden (minst två etiketter) närmast ovanför ``e``, när ``e`` står under den."""
+        near = [
+            (e.bbox[1] - f.el.bbox[3], f)
+            for f in fields
+            if not f.free and below(f.el, e) and not blocked(f, f.el, e)
+        ]
+        if not near:
+            return None
+        row = row_of(min(near, key=lambda t: t[0])[1])
+        return row if len(row) >= 2 else None
+
+    def taken_columns(row: list[_Field], e: _El) -> set[int]:
+        """Spalter som har ett eget värde under raden (en annan rad än ``e``). Här
+        räcker att radens mitt står mellan etikettens och nästa etiketts vänsterkant."""
+        sp = [(g.el.bbox[0] - tol, row[k + 1].el.bbox[0] - tol if k + 1 < len(row) else float("inf"))
+              for k, g in enumerate(row)]
+        out = set()
+        for c in els:
+            if c is e or (c.block, c.line) in label_keys or _BOX_RE.search(c.text) or not collectable(c):
+                continue
+            if any(below(g.el, c) and not blocked(g, g.el, c) for g in row):
+                k = column(centre(c), sp)
+                if k is not None:
+                    out.add(k)
+        return out
+
+    def row_assign(e: _El) -> bool:
+        """Värde under en etikettrad: hör till spalten där radens text har sin mitt.
+        Når texten in i grannspalter som saknar eget värde delas den ord för ord efter
+        spalterna ("Ingvar Kjellvås 08-7694169" under 03 och 04)."""
+        if _BOX_RE.search(e.text):
+            return False  # kryssrutor tolkas av den vanliga kedjan (alternativ, inte värde)
+        row = row_above(e)
+        if row is None or any(not g.raw_label and not g.resolved for g in row):
+            return False  # ett ensamt nummer på raden väntar på sin etikett från raden under
+        sp = spans(row)
+        own = column(centre(e), sp)
+        if own is None or not can_take(row[own], e):
+            return False
+        words = words_x(e)
+        printed = _label_word_runs([w for w, _, _ in words], template)
+        if all(i in printed or not any(ch.isalnum() for ch in w) for i, (w, _, _) in enumerate(words)):
+            return False  # bara tryckt text (och skiljetecken): ingen radregel
+        cols = [column((x0 + x1) / 2, sp) for _, x0, x1 in words]
+        split = None not in cols and len(set(cols)) > 1 and cols == sorted(c or 0 for c in cols)
+        if split:
+            taken = taken_columns(row, e)
+            split = all(k == own or (k not in taken and can_take(row[k], e)) for k in set(cols) if k is not None)
+        if split:
+            # delas bara i värdeformade delar (siffror, koder, namn); prosa hålls ihop
+            parts: dict[int, list[str]] = {}
+            for (word, _, _), k in zip(words, cols, strict=True):
+                parts.setdefault(k or 0, []).append(word)
+            has_digit = any(ch.isdigit() for ch in e.text)
+            split = all(_value_like(" ".join(ws)) or (has_digit and _lone_title(ws)) for ws in parts.values())
+            if not split and not _value_like(e.text):
+                # prosa som når över flera spalter är inget värde: raden står kvar som
+                # vanlig text på sin plats i läsordningen (beslut BL)
+                stats["row_prose"] += 1
+                return True
+        if not split:
+            cols = [own] * len(words)
+        if e.bbox[0] < row[cols[0] or 0].el.bbox[0] - ROW_VALUE_LEFT * width:
+            return False  # börjar långt till vänster om sin spalt: inte radens värde
+        groups: list[tuple[int, list[tuple[str, float, float]]]] = []
+        kept_text: list[str] = []  # tryckta ord står kvar som text på radens plats
+        for i, (w, k) in enumerate(zip(words, cols, strict=True)):
+            if i in printed:
+                if i - 1 in printed and kept_text:
+                    kept_text[-1] += " " + w[0]
+                else:
+                    kept_text.append(w[0])
+                continue
+            if groups and groups[-1][0] == k and i - 1 not in printed:
+                groups[-1][1].append(w)
+            else:
+                groups.append((k or 0, [w]))
+        if kept_text:
+            leftovers.setdefault((e.block, e.line), []).extend(kept_text)
+        stats["row_values"] += 1
+        stats["row_splits"] += len(groups) > 1
+        for k, ws in groups:
+            f = row[k]
+            part = e if len(groups) == 1 else dataclasses.replace(e, bbox=(ws[0][1], e.bbox[1], ws[-1][2], e.bbox[3]))
+            f.values.append(" ".join(w for w, _, _ in ws))
+            f.chain.append(part)
+        consumed.add((e.block, e.line))
+        return True
+
+    def right_of(e: _El) -> _Field | None:
+        """Ett tomt fält vars etikett står på samma rad till vänster om ``e``, högst
+        ``reach`` bort och inom etikettens spalt (sidfotens "20 Tagit del  860308")."""
+        if _BOX_RE.search(e.text) or not _value_like(e.text):
+            return None  # bara värdeformad text (siffror, koder, namn), aldrig prosa
+        best: tuple[float, _Field] | None = None
+        for f in fields:
+            if f.values or f.options or not can_take(f, e) or not _same_row(f.el, e):
+                continue
+            gap = e.bbox[0] - right_edge(f)
+            if not -tol <= gap <= reach:
+                continue
+            row = row_of(f)
+            k = next(i for i, g in enumerate(row) if g is f)
+            if k + 1 < len(row) and centre(e) >= row[k + 1].el.bbox[0] - tol:
+                continue
+            if best is None or gap < best[0]:
+                best = (gap, f)
+        return best[1] if best else None
+
     rest = sorted((e for e in els if (e.block, e.line) not in consumed), key=lambda e: (e.bbox[1], e.bbox[0]))
     for e in rest:
         if not collectable(e):
+            continue
+        if row_assign(e):
             continue
         best: tuple[float, float, _Field] | None = None
         for f in fields:
@@ -728,11 +1267,18 @@ def extract_form_fields(
                 if best is None or key[:2] > best[:2]:
                     best = key
         if best is None:
+            right = right_of(e)
+            if right is not None:
+                stats["right_values"] += 1
+                right.values.append(e.text)
+                right.chain.append(e)
+                consumed.add((e.block, e.line))
             continue
         f = best[2]
         prefix, options = _split_boxes(e.text)
         if not f.raw_label and not f.chain and not options and not f.resolved:
             f.raw_label = prefix  # numret står ovanför den tryckta etiketten
+            f.label_src = e
         else:
             if prefix:
                 f.values.append(prefix)
@@ -741,34 +1287,126 @@ def extract_form_fields(
         consumed.add((e.block, e.line))
 
     result: list[tuple[str, FormField, list[FormField], tuple[int, int, int, int] | None]] = []
+    table_left: dict[int, list[str]] = {}
+    rest_stats = {"label_rest_values": 0, "label_rest_text": 0, "label_words_text": 0}
 
-    def label_for(number: str, raw_label: str) -> str:
+    def label_for(number: str, raw_label: str) -> tuple[str, str, bool]:
+        """(etikett, kvarleva, rå): mallens stavning och texten efter den på raden.
+
+        ``rå`` betyder att etiketten inte liknade mallens tillräckligt för att
+        rättas och står kvar som den lästes (hela raden, ingen kvarleva).
+        """
         raw_label = _join_inline_hyphens(_clean_label(raw_label))
         canons = _canon_labels(template, number)
         if not canons:
-            return raw_label
+            return raw_label, "", bool(raw_label)
         if not raw_label:
-            return canons[0]
-        ratio, fixed = max((_label_match(raw_label, c) for c in canons), key=lambda m: m[0])
-        return _clean_label(fixed) if ratio >= LABEL_MATCH else raw_label
+            return canons[0], "", False
+        ratio, canon, rest = max((_label_match(raw_label, c) for c in canons), key=lambda m: m[0])
+        if ratio < LABEL_MATCH:
+            return raw_label, "", True
+        tail, remainder = _split_rest(rest)
+        return _clean_label(canon + tail), remainder, False
+
+    def loose_text(number: str, value: str, label: str, remainder: str, raw: bool) -> str | None:
+        """Text som ska stå kvar som vanlig text: en kvarleva som inte blev värdet,
+        eller en orättad etikett vars fält är tomt (ett tomt fält skrivs inte till
+        Markdown och får aldrig vara textens enda bärare)."""
+        if remainder and value != remainder:
+            return remainder
+        if raw and not value:
+            return f"{number} {label}"
+        return None
+
+    def safety_net(
+        number: str, raw_label: str, label: str, value: str, options: list[tuple[str, bool]], loose: list[str]
+    ) -> str:
+        """Beslut BG/BI: ord på etikettraden som inte syns någonstans (inte i värdet,
+        inte i lös text och inte i etiketten på ett fält som skrivs till Markdown) och
+        som justeringen mot mallen inte täcker. Ett fält skrivs bara när det har ett
+        värde eller en ikryssad ruta (``surya_layout._form_md``)."""
+        rendered_field = bool(value.strip()) or any(c for _, c in options)
+        shown = _word_list(value) + [w for t in loose for w in _word_list(t)]
+        if rendered_field:
+            shown += _word_list(label)
+        text = _join_inline_hyphens(_clean_label(raw_label))
+        covered = _template_cover(text, _canon_labels(template, number), template)
+        return _unrendered_words(text, covered, shown)
+
+    def source_line(number: str, raw_label: str, label: str, value: str) -> str:
+        """Etikettradens råa text när något ord i den saknas i fältets rad
+        (``NN etikett: värde``), annars tom: ren text får aldrig tappa ett ord från
+        raden, vad Markdown än gör (beslut BI)."""
+        raw = _join_inline_hyphens(_clean_label(raw_label))
+        have: dict[str, int] = {}
+        for w in _word_list(f"{number} {label} {value}"):
+            have[w] = have.get(w, 0) + 1
+        for w in _word_list(raw):
+            if have.get(w, 0) <= 0:
+                return f"{number} {raw}"
+            have[w] -= 1
+        return ""
+
+    def place_rest(number: str, value: str, remainder: str) -> str:
+        """Fältets värde: kvarlevan blir värdet när fältet inte fick något värde
+        underifrån och kvarlevan ser ut som ett ifyllt värde (kort, inte fast
+        tryck, inte ett fältnummer med etikett som ``04 telefon`` – ett ensamt tal som
+        ``12`` är ett värde). Annars returneras ``value`` och anroparen
+        behåller kvarlevan som vanlig text."""
+        if (
+            remainder
+            and not value
+            and number not in free
+            and len(remainder) <= LABEL_REST_MAX_CHARS
+            and not _is_printed(remainder, template)
+            and not (_number_parts(remainder) and not re.fullmatch(r"\d{2}", remainder))
+        ):
+            rest_stats["label_rest_values"] += 1
+            return _join_inline_hyphens(remainder)
+        return value
 
     for f in fields:
         value = _join_inline_hyphens(" ".join(v for v in f.values if v)) if not f.free else ""
-        head = FormField(f.number, label_for(f.number, f.raw_label), value, None)
+        label, remainder, raw = label_for(f.number, f.raw_label)
+        new_value = place_rest(f.number, value, remainder)
+        loose = loose_text(f.number, new_value, label, remainder, raw and not f.options)
+        texts = [loose] if loose is not None else []
+        extra = safety_net(f.number, f.raw_label, label, new_value, f.options, texts)
+        if extra:
+            texts.append(extra)
+            rest_stats["label_words_text"] += 1
+        if texts:
+            src = f.label_src or f.el
+            leftovers.setdefault((src.block, src.line), []).extend(texts)
+            rest_stats["label_rest_text"] += loose is not None
+        head = FormField(f.number, label, new_value, None, source_line(f.number, f.raw_label, label, new_value))
         opts = [FormField(f.number, _join_inline_hyphens(lbl), "", checked) for lbl, checked in f.options]
         result.append((f.number, head, opts, _union([f.el.bbox, *(c.bbox for c in f.chain)])))
     for t, found, _ in tables:
         for number, lbl, value in found:
             value = "" if number in free else _join_inline_hyphens(value)
+            label, remainder, raw = label_for(number, lbl)
+            new_value = place_rest(number, value, remainder)
+            loose = loose_text(number, new_value, label, remainder, raw)
+            texts = [loose] if loose is not None else []
+            extra = safety_net(number, lbl, label, new_value, [], texts)
+            if extra:
+                texts.append(extra)
+                rest_stats["label_words_text"] += 1
+            if texts:
+                table_left.setdefault(t, []).extend(texts)
+                rest_stats["label_rest_text"] += loose is not None
             # tabellceller har ingen egen geometri: fältets ruta är tabellens
-            result.append((number, FormField(number, label_for(number, lbl), value, None), [], blocks[t].bbox))
+            head = FormField(number, label, new_value, None, source_line(number, lbl, label, new_value))
+            result.append((number, head, [], blocks[t].bbox))
+    stats.update(rest_stats)
     result.sort(key=lambda r: int(r[0]))
     out_fields = [x for _, head, opts, _ in result for x in (head, *opts)]
     out_parts = tuple(bb for _, _, opts, bb in result for _ in range(1 + len(opts)))
     stats["fields"] = len(out_fields)
 
     # bygg om blocklistan: förbrukade rader bort, FORM-blocket där första etiketten stod
-    table_rest = {i: rest_texts for i, _, rest_texts in tables}
+    table_rest = {i: table_left.get(i, []) + rest_texts for i, _, rest_texts in tables}
     label_blocks = {e.block for e in labels} | set(table_rest)
     first = min(label_blocks)
     used_blocks = {k[0] for k in consumed} | set(table_rest)
@@ -786,7 +1424,13 @@ def extract_form_fields(
             continue
         if i in used_blocks:
             lines = b.text.split("\n")
-            left = [ln for j, ln in enumerate(lines) if ln.strip() and (i, j) not in consumed]
+            # en förbrukad etikettrad lämnar sin kvarleva (om den inte blev ett värde)
+            left = [
+                t
+                for j, ln in enumerate(lines)
+                if ln.strip()
+                for t in ([ln] if (i, j) not in consumed else leftovers.get((i, j), []))
+            ]
             if left:
                 out.append(dataclasses.replace(b, text="\n".join(left)))
             continue
@@ -891,15 +1535,21 @@ def resolve_checkbox_masks(blocks: list[LayoutBlock], image: Any) -> list[Layout
 
 
 def replace_redacted(blocks: list[LayoutBlock]) -> list[LayoutBlock]:
-    """Suryas ``[REDACTED]`` heter ``[MASKAD]`` i arkivet (även i tabellceller)."""
+    """Suryas ``[REDACTED]`` heter ``[MASKAD]`` i arkivet (även i tabellceller).
+
+    Skiftläge och blanksteg innanför hakarna spelar ingen roll (``[Redacted]``,
+    ``[ redacted ]``): piloten fann ``[Redacted]`` på en blankett.
+    """
+
+    def mask(text: str) -> str:
+        return str(REDACTED_RE.sub(MASK, text))
+
     out = []
     for b in blocks:
         rows = b.rows
         if rows is not None:
-            rows = tuple(
-                tuple(dataclasses.replace(c, text=c.text.replace(REDACTED, MASK)) for c in row) for row in rows
-            )
-        out.append(dataclasses.replace(b, text=b.text.replace(REDACTED, MASK), rows=rows))
+            rows = tuple(tuple(dataclasses.replace(c, text=mask(c.text)) for c in row) for row in rows)
+        out.append(dataclasses.replace(b, text=mask(b.text), rows=rows))
     return out
 
 

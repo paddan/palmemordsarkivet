@@ -357,3 +357,37 @@ print('ocr-per-file', {p.name: p.default for p in get_registry().get('ocr').para
         "llm-correct 7", "extract-entities 7", "extract-map-observations 7",
         "ocr-per-file 3",
     ]
+
+
+def test_rescan_page_parameters_and_defaults() -> None:
+    from operations.registry import get_registry
+
+    definition = get_registry().get("rescan-page")
+
+    assert (definition.label, definition.group, definition.mutating) == (
+        "Skanna om sida", "OCR", True)
+    by_name = {parameter.name: parameter for parameter in definition.parameters}
+    assert by_name["pdf_stem"].required and by_name["pdf_stem"].kind == "str"
+    assert by_name["page"].required and by_name["page"].kind == "int"
+    assert by_name["engine"].choices == ("surya-layout", "surya", "tesseract", "vision")
+    assert _defaults("rescan-page") | {"root": None} == {
+        "root": None, "pdf_stem": None, "page": None, "engine": "surya-layout",
+        "restore_reading": None, "dpi": 300, "reindex": True,
+    }
+
+
+def test_rescan_page_cli_flags() -> None:
+    from operations.registry import get_registry
+
+    definition = get_registry().get("rescan-page")
+
+    params = parse_operation_args(definition, ["--pdf-stem", "doc", "--page", "2"])
+    assert (params["pdf_stem"], params["page"], params["engine"]) == ("doc", 2, "surya-layout")
+    assert params["reindex"] is True and params["restore_reading"] is None
+
+    params = parse_operation_args(definition, [
+        "--pdf-stem", "doc", "--page", "2", "--restore-reading", "7", "--no-reindex",
+        "--engine", "tesseract",
+    ])
+    assert params["restore_reading"] == 7 and params["reindex"] is False
+    assert params["engine"] == "tesseract"

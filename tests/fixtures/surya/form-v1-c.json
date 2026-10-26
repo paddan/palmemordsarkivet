@@ -1,0 +1,405 @@
+{
+ "protocol": 2,
+ "type": "page",
+ "unitId": "form-v1-c",
+ "ordinal": 0,
+ "page": 1,
+ "status": "read",
+ "model": "surya-ocr 0.22.1 backend llamacpp model datalab-to/surya-ocr-2 surya-2.gguf 6a3a4c30e5e74446d4f8b6afd05b2f2da970f470:1266400864 surya-2-mmproj.gguf 6a3a4c30e5e74446d4f8b6afd05b2f2da970f470:204986688",
+ "blocks": [
+  {
+   "html": "<p>01 Polisdistrikt (där uppslaget mottagits)</p>",
+   "label": "Text",
+   "bbox": [
+    315,
+    238,
+    846,
+    281
+   ],
+   "confidence": 0.9700304130392972,
+   "readingOrder": 0
+  },
+  {
+   "html": "<p><b>SPANINGSUPPSLAG<br/>i grövre brottmål</b></p>",
+   "label": "SectionHeader",
+   "bbox": [
+    1350,
+    238,
+    1769,
+    333
+   ],
+   "confidence": 0.9700304130392972,
+   "readingOrder": 1
+  },
+  {
+   "html": "<table border=\"1\">\n<tr>\n<td>07 Avsnitt<br/><b>E</b></td>\n<td>08 Löpande nr<br/><b>1974-B</b></td>\n</tr>\n<tr>\n<td colspan=\"2\">09 Plats för förtursstämpel<br/><b>EAC 1580 B</b></td>\n</tr>\n</table>",
+   "label": "Form",
+   "bbox": [
+    1861,
+    238,
+    2382,
+    526
+   ],
+   "confidence": 0.9700304130392972,
+   "readingOrder": 2
+  },
+  {
+   "html": "<p><b>S tockholm</b><br/>02 Arbetsenhet</p>",
+   "label": "Text",
+   "bbox": [
+    285,
+    298,
+    806,
+    368
+   ],
+   "confidence": 0.9700304130392972,
+   "readingOrder": 3
+  },
+  {
+   "html": "<p><b>KSA</b><br/>03 Uppgiftsmottagare 04 telefon</p>",
+   "label": "Text",
+   "bbox": [
+    285,
+    386,
+    980,
+    456
+   ],
+   "confidence": 0.9700304130392972,
+   "readingOrder": 4
+  },
+  {
+   "html": "<p><b>Krinsp A Lindahl</b></p>",
+   "label": "Text",
+   "bbox": [
+    285,
+    456,
+    732,
+    509
+   ],
+   "confidence": 0.9700304130392972,
+   "readingOrder": 5
+  },
+  {
+   "html": "<p>05 datum 06 klockan<br/><b>86-03-10 1430</b></p>",
+   "label": "Text",
+   "bbox": [
+    1315,
+    421,
+    1762,
+    509
+   ],
+   "confidence": 0.9700304130392972,
+   "readingOrder": 6
+  },
+  {
+   "html": "<p>10 Brott med vilket uppslaget hör samman</p>",
+   "label": "Text",
+   "bbox": [
+    310,
+    509,
+    881,
+    561
+   ],
+   "confidence": 0.9700304130392972,
+   "readingOrder": 7
+  },
+  {
+   "html": "<p>11 Spaningsuppslaget lämnat</p>",
+   "label": "Text",
+   "bbox": [
+    1340,
+    509,
+    1749,
+    561
+   ],
+   "confidence": 0.9700304130392972,
+   "readingOrder": 8
+  },
+  {
+   "html": "<p><b>Palme mordet.</b></p>",
+   "label": "Text",
+   "bbox": [
+    285,
+    579,
+    633,
+    631
+   ],
+   "confidence": 0.9700304130392972,
+   "readingOrder": 9
+  },
+  {
+   "html": "<p><input type=\"checkbox\"/> vid person-ligt besök <input type=\"checkbox\"/> per telefon</p>",
+   "label": "Text",
+   "bbox": [
+    1340,
+    561,
+    1811,
+    631
+   ],
+   "confidence": 0.9700304130392972,
+   "readingOrder": 10
+  },
+  {
+   "html": "<p><input type=\"checkbox\"/> per brev <input type=\"checkbox\"/> per brev<br/>| F-år | -mån | -dag | -nr</p>",
+   "label": "Text",
+   "bbox": [
+    1861,
+    561,
+    2183,
+    666
+   ],
+   "confidence": 0.9700304130392972,
+   "readingOrder": 11
+  },
+  {
+   "html": "<p>12 Uppgiftslämnarens efternamn och alla förnamn (i rått följd, tilltalsnamnet markeras)</p>",
+   "label": "Text",
+   "bbox": [
+    310,
+    614,
+    1476,
+    666
+   ],
+   "confidence": 0.9700304130392972,
+   "readingOrder": 12
+  },
+  {
+   "html": "<p>[Redacted]</p>",
+   "label": "Text",
+   "bbox": [
+    310,
+    666,
+    782,
+    719
+   ],
+   "confidence": 0.9700304130392972,
+   "readingOrder": 13
+  },
+  {
+   "html": "<p>13 Yrke/titel</p>",
+   "label": "Text",
+   "bbox": [
+    310,
+    719,
+    484,
+    754
+   ],
+   "confidence": 0.9700304130392972,
+   "readingOrder": 14
+  },
+  {
+   "html": "<p>14 Postadress (utdelningsadress och ortsadress), telefon bostaden</p>",
+   "label": "Text",
+   "bbox": [
+    831,
+    719,
+    1724,
+    754
+   ],
+   "confidence": 0.9700304130392972,
+   "readingOrder": 15
+  },
+  {
+   "html": "<p>[Redacted]</p>",
+   "label": "Text",
+   "bbox": [
+    310,
+    754,
+    1303,
+    807
+   ],
+   "confidence": 0.9700304130392972,
+   "readingOrder": 16
+  },
+  {
+   "html": "<p>15 Arbetsplats (arbetsgivare, postadress och telefon arbetet)</p>",
+   "label": "Text",
+   "bbox": [
+    310,
+    807,
+    1129,
+    842
+   ],
+   "confidence": 0.9700304130392972,
+   "readingOrder": 17
+  },
+  {
+   "html": "<p>[Redacted]</p>",
+   "label": "Text",
+   "bbox": [
+    310,
+    842,
+    1253,
+    894
+   ],
+   "confidence": 0.9700304130392972,
+   "readingOrder": 18
+  },
+  {
+   "html": "<p>16 Uppslaget avser</p>",
+   "label": "Text",
+   "bbox": [
+    310,
+    894,
+    583,
+    929
+   ],
+   "confidence": 0.9700304130392972,
+   "readingOrder": 19
+  },
+  {
+   "html": "<p><input type=\"checkbox\"/> misstänkt person <input type=\"checkbox\"/> fordon</p>",
+   "label": "Text",
+   "bbox": [
+    310,
+    929,
+    732,
+    999
+   ],
+   "confidence": 0.9700304130392972,
+   "readingOrder": 20
+  },
+  {
+   "html": "<p>17 Händelse (kort rubricering t ex laktlagelse av person, fordon, gods, skottlossning etc med angivande av tid och plats)</p>",
+   "label": "Text",
+   "bbox": [
+    831,
+    894,
+    2357,
+    964
+   ],
+   "confidence": 0.9700304130392972,
+   "readingOrder": 21
+  },
+  {
+   "html": "<p><input type=\"checkbox\"/> gods</p>",
+   "label": "Text",
+   "bbox": [
+    310,
+    1035,
+    484,
+    1087
+   ],
+   "confidence": 0.9700304130392972,
+   "readingOrder": 22
+  },
+  {
+   "html": "<p>18 I sak. (anteckna först känd persons yrke, namn, födelsetid, bostad, telefon och arbetsgivare – okänd persons kön, ålder, signalement och klädsel – berört fordons reg nr, fabrikat, typ, årsmodell, färg m m samt annat gods med noggrann beskrivning. Därefter övriga sakuppgifter med angivande av ev hållpunkter för tider och platser samt bedömning av uppgiftslämnarens trovärdighet och ev sprit- eller narkotikapåverkan)</p>",
+   "label": "Text",
+   "bbox": [
+    310,
+    1087,
+    2357,
+    1175
+   ],
+   "confidence": 0.9700304130392972,
+   "readingOrder": 23
+  },
+  {
+   "html": "<p>Vid samtal per tel. med [Redacted] den 86-03-10 Kl 1430 framkom, att han strax före 23-tiden mordkvällen observerat 2 st. män-till synes\"tryckande\"-i 30 års åldern, ej knarkartyper, stående på Regeringsgatan intill David Bagaresgata. [Redacted] fick uppfattningen att männen stod och \"avvaktade\" på något och [Redacted], varför han vek av och tog en annan väg hem än den väg han hade tänkt sig. Något signalement förutom ålder kunde han icke ange.</p>",
+   "label": "Text",
+   "bbox": [
+    285,
+    1227,
+    2419,
+    1561
+   ],
+   "confidence": 0.9700304130392972,
+   "readingOrder": 24
+  },
+  {
+   "html": "<p>[Redacted] var på hemväg från Cafe Opera.</p>",
+   "label": "Text",
+   "bbox": [
+    310,
+    1596,
+    1427,
+    1666
+   ],
+   "confidence": 0.9700304130392972,
+   "readingOrder": 25
+  },
+  {
+   "html": "<p>/Anders Lindahl KSA.</p>",
+   "label": "Text",
+   "bbox": [
+    1365,
+    1701,
+    1923,
+    1771
+   ],
+   "confidence": 0.9700304130392972,
+   "readingOrder": 26
+  },
+  {
+   "html": "<p><input type=\"checkbox\"/> Forts-blad</p>",
+   "label": "Text",
+   "bbox": [
+    2109,
+    2893,
+    2332,
+    2946
+   ],
+   "confidence": 0.9700304130392972,
+   "readingOrder": 27
+  },
+  {
+   "html": "<table border=\"1\">\n<tr>\n<td colspan=\"2\">19 Ovanstående uppslag<br/><input type=\"checkbox\"/> kan anknyta till uppslag nr</td>\n<td colspan=\"2\">20 Tagit del</td>\n</tr>\n<tr>\n<td>21</td>\n<td>anknyter till uppslag nr</td>\n<td>Spaningschef</td>\n<td>Bitr spaningschef</td>\n</tr>\n<tr>\n<td></td>\n<td></td>\n<td>Signatur</td>\n<td>Signatur</td>\n</tr>\n<tr>\n<td>22 Registrerat:<br/>Signatur</td>\n<td>23 Årendet tilldelat</td>\n<td>datum</td>\n<td>24 Färdigbearbetat: datum</td>\n</tr>\n<tr>\n<td></td>\n<td></td>\n<td></td>\n<td>25 Spanchef: sign</td>\n</tr>\n</table>",
+   "label": "Form",
+   "bbox": [
+    285,
+    2946,
+    2382,
+    3244
+   ],
+   "confidence": 0.9700304130392972,
+   "readingOrder": 28
+  },
+  {
+   "html": "<p>RPS 463.1.2</p>",
+   "label": "Text",
+   "bbox": [
+    236,
+    3069,
+    285,
+    3244
+   ],
+   "confidence": 0.9700304130392972,
+   "readingOrder": 29
+  },
+  {
+   "html": "<p>Med feta linjer avgränsade avsnitt ifylls ej av uppgiftsmottagaren</p>",
+   "label": "Text",
+   "bbox": [
+    310,
+    3244,
+    782,
+    3332
+   ],
+   "confidence": 0.9700304130392972,
+   "readingOrder": 30
+  },
+  {
+   "html": "<p>Ex 2: Till spaningschefens pärm (i nr-följd inom avsnitt)</p>",
+   "label": "Text",
+   "bbox": [
+    1439,
+    3244,
+    2394,
+    3314
+   ],
+   "confidence": 0.9700304130392972,
+   "readingOrder": 31
+  }
+ ],
+ "source": {
+  "pdf": "Pol-1986-03-10_1430_EAC1580-00-B_Förhör-Hans-Gyllenhammar.pdf",
+  "page": 1,
+  "dpi": 300,
+  "size": [
+   2480,
+   3507
+  ],
+  "pilot": "2026-10-26"
+ }
+}

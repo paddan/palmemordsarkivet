@@ -285,6 +285,29 @@ def _register_page_ocr_operations() -> None:
         run=adapters.ocr_pages_adapter,
     ))
 
+    _registry.register(OperationDefinition(
+        id="rescan-page", label="Skanna om sida", group="OCR",
+        description=(
+            "Skanna om en enda sida med vald motor och spara den tidigare läsningen "
+            "i historiken, eller återställ en historisk läsning (--restore-reading)."
+        ),
+        parameters=(
+            _p("root", "--root", "path", ROOT, "Projektrot"),
+            _p("pdf_stem", "--pdf-stem", "str", None, "Dokumentets filstam", required=True),
+            _p("page", "--page", "int", None, "Sidnummer (1-baserat)", required=True),
+            _p("engine", "--engine", "choice", "surya-layout", "OCR-motor",
+               choices=("surya-layout", "surya", "tesseract", "vision")),
+            # Sätts bara av Sidgranskning (Återställ); dolt i Admin-formuläret.
+            _p("restore_reading", "--restore-reading", "int", None,
+               "Återställ historisk läsning med detta id i stället för att OCR:a"),
+            _p("dpi", "--dpi", "int", 300, "Render-DPI"),
+            _p("reindex", "--no-reindex", "bool", True,
+               "Hoppa över omindexeringen av dokumentet efteråt"),
+        ),
+        admin_visible=True, mutating=True, confirmation=None,
+        run=adapters.rescan_page_adapter,
+    ))
+
 
 def _register_graph_operations() -> None:
     """Registrera grafens laddning, granskning och synk mot Neo4j."""

@@ -56,10 +56,17 @@ except Exception:  # pragma: no cover
 
 from surya_client import (  # noqa: E402 — ren klient, ingen Surya-import
     EXIT_SURYA_UNAVAILABLE,
+    MAX_PAGE_PIXELS,
     UNAVAILABLE_CODES,
     SuryaPageError,
     SuryaUnavailable,
 )
+
+# Största sidbild (bildpunkter) som skickas till Surya 2-workern. En sida som är
+# större i den begärda dpi:n renderas i stället i högsta dpi som ryms (motorn
+# surya-layout); annars hade workern svarat PAGE_TOO_LARGE (4,2 % av arkivets sidor
+# i 300 dpi enligt piloten).
+LAYOUT_MAX_PIXELS = MAX_PAGE_PIXELS
 
 # Så många dödsfall (WORKER_DIED/PROTOCOL_MISMATCH) i rad tål en fil innan den
 # avbryts med EXIT_SURYA_UNAVAILABLE; däremellan startas workern om per sida.
@@ -84,6 +91,37 @@ def render_pages(pdf_path: Path, dpi: int):
                 print(f"  [render_pages] sida {i + 1} kunde inte laddas: {exc}", file=sys.stderr)
     finally:
         pdf.close()
+
+
+def render_page(pdf_path: Path, page_num: int, dpi: int):
+    """Rendera en enda sida (1-baserad) i ``dpi`` som PIL-bild."""
+    import pypdfium2 as pdfium  # local import — Surya/Vision-pad kanske saknar
+    pdf = pdfium.PdfDocument(str(pdf_path))
+    try:
+        return pdf[page_num - 1].render(scale=dpi / 72).to_pil()
+    finally:
+        pdf.close()
+
+
+def cap_layout_image(pdf_path: Path, page_num: int, image, dpi: int, limit: int):
+    """``(bild, använd dpi)``: sidan i högsta dpi vars bild ryms inom ``limit`` bildpunkter.
+
+    Ryms ``image`` (renderad i ``dpi``) returneras den orörd. Annars renderas sidan
+    om i ``floor(dpi·sqrt(limit/bildpunkter))``, och om avrundningen i renderingen
+    ändå ger en för stor bild sänks dpi:n ett steg i taget tills den faktiska
+    bilden ryms.
+    """
+    import math
+
+    pixels = image.width * image.height
+    if pixels <= limit:
+        return image, dpi
+    used = max(1, math.floor(dpi * math.sqrt(limit / pixels)))
+    while True:
+        capped = render_page(pdf_path, page_num, used)
+        if capped.width * capped.height <= limit or used == 1:
+            return capped, used
+        used -= 1
 
 
 def ocr_tesseract(png_path: Path, langs: str = "swe") -> str:
@@ -159,6 +197,7 @@ def ocr_surya_layout(
     page: int,
     redactions: list[tuple[int, int]],
     trace: dict[str, Any] | None = None,
+    dpi: int = 300,
 ) -> tuple[str, str | None, str, list[dict]]:
     """Läs en sida med Surya 2-workern och tolka blocken.
 
@@ -170,7 +209,10 @@ def ocr_surya_layout(
     block med en verklig ruta och text, för ``update_pdf_text_layer``.
     ``[MASKAD]``-block som pixeldetektorn lagt in saknar bredd och tas inte med i
     textlagret. ``trace`` fylls av ``parse_page`` med en textfri sammanfattning
-    (bl.a. ``degraded``). Höjer ``SuryaUnavailable``/``SuryaPageError`` orörda.
+    (bl.a. ``degraded``). ``dpi`` är upplösningen ``image`` renderades i; den
+    sparas i ``layout_json`` (``{"dpi", "blocks"}``) och blockens och
+    ``pdf_lines`` rutor är i den bildens pixlar. Höjer
+    ``SuryaUnavailable``/``SuryaPageError`` orörda.
     """
     import surya_layout  # lokalt: ren modul, men behövs bara för den här motorn
 
@@ -201,7 +243,7 @@ def ocr_surya_layout(
     return (
         text,
         markdown if markdown.strip() else None,
-        surya_layout.blocks_to_json(blocks),
+        surya_layout.layout_to_json(blocks, dpi),
         pdf_lines,
     )
 
@@ -212,6 +254,7 @@ def update_pdf_text_layer(
     page_lines: dict[int, list[dict]],
     dpi: int,
     on_failure: Callable[[int, int], None] | None = None,
+    page_dpi: dict[int, int] | None = None,
 ) -> int:
     """Skriv ny PDF där angivna sidor får Surya-rader som osynligt textlager.
 
@@ -225,17 +268,21 @@ def update_pdf_text_layer(
     patchen, utom när ``on_failure`` ges — då anropas den med ``(sida, index)``
     och resten av posterna skrivs ändå (layoutvägen).
 
+    ``page_dpi`` anger per sida den dpi raderna faktiskt mättes i (en layoutsida
+    som renderats under den begärda dpi:n för att rymmas i workerns pixelgräns);
+    övriga sidor skalas med ``dpi``.
+
     Returnerar antal sidor som faktiskt patchades.
     """
     import pymupdf  # local import — pymupdf är optional
 
-    scale = 72.0 / dpi
     doc = pymupdf.open(str(src_pdf))
     patched = 0
     try:
         for page_num, lines in page_lines.items():
             if page_num < 1 or page_num > len(doc) or not lines:
                 continue
+            scale = 72.0 / (page_dpi or {}).get(page_num, dpi)
             page = doc[page_num - 1]
             # Rensa befintligt textlager på sidan
             for block in page.get_text("dict")["blocks"]:
@@ -525,6 +572,7 @@ def run_ocr_pages(
     txt_dir: str | None,
     context=None,
     surya_worker=None,
+    force: bool = False,
 ) -> int:
     """OCR:a en PDF per sida. Returnerar exitkod.
 
@@ -535,6 +583,12 @@ def run_ocr_pages(
     och exitkoden blir ``EXIT_SURYA_UNAVAILABLE`` (3) — ett miljöfel som anroparen
     inte ska bokföra på filen. Ett enstaka dödsfall hoppar bara sidan; klienten
     startar workern igen vid nästa sida.
+
+    ``force`` (kräver ``pages``): sidorna i ``pages`` OCR:as även om de redan finns
+    i ``pdf_pages`` (omskanning, operationen ``rescan-page``). Den gamla raden står
+    kvar tills den nya läsningen skrivs, och kunde en sådan sida inte läsas blir
+    exitkoden 1 — annars hade anroparen inte kunnat skilja ett misslyckat försök
+    från en lyckad omskanning.
     """
     ctx = _ctx(context)
     pdf = Path(inp)
@@ -566,13 +620,18 @@ def run_ocr_pages(
         except ValueError:
             ctx.log("--pages ska vara kommaseparerade heltal", level="error")
             return 1
+    if force and only_pages is None:
+        ctx.log("--force kräver --pages (bara angivna sidor skannas om)", level="error")
+        return 1
 
     page_lines: dict[int, list[dict]] = {}
+    page_dpi: dict[int, int] = {}  # layoutsidor som renderats under den begärda dpi:n
     want_pdf_patch = engine in ("surya", "surya-layout") and bool(ocr_dir) and not no_update_pdf
     n_total = 0
     n_skipped = 0
     n_done = 0
     skipped_pages: list[int] = []
+    recorded_pages: set[int] = set()
     aborted = False
     worker_deaths = 0
     conn = state_db.connect()
@@ -594,10 +653,25 @@ def run_ocr_pages(
 
             png_path = stem_dir / f"page-{page_num:03d}.png"
 
-            if state_db.page_exists(conn, pdf.stem, page_num):
+            if force:
+                ctx.log(f"  [{pdf.stem} p{page_num}] --force: OCR:as om även om sidan "
+                        "redan finns i pdf_pages", level="debug")
+            elif state_db.page_exists(conn, pdf.stem, page_num):
                 n_skipped += 1
                 skipped_pages.append(page_num)
                 continue
+
+            used_dpi = dpi
+            if engine == "surya-layout":
+                # samma (ev. nedskalade) bild används för maskeringar, Surya och textlagret
+                try:
+                    image, used_dpi = _cap_layout_render(ctx, pdf, page_num, image, dpi)
+                except Exception as e:  # noqa: BLE001
+                    ctx.log(f"  [{pdf.stem} p{page_num}] FEL vid omrendering: {e}", level="error")
+                    log_error("ocr_pages", f"{pdf.name}#p{page_num}", str(e))
+                    continue
+                if used_dpi != dpi:
+                    page_dpi[page_num] = used_dpi
 
             redaction_blocks: list[tuple[int, int]] = []
             if not no_detect_redactions:
@@ -618,7 +692,7 @@ def run_ocr_pages(
                     trace: dict[str, Any] = {}
                     text, markdown, layout_json, lines = ocr_surya_layout(
                         layout_worker, image, stem_dir, pdf.stem, page_num,
-                        redaction_blocks, trace=trace,
+                        redaction_blocks, trace=trace, dpi=used_dpi,
                     )
                     worker_deaths = 0
                     _log_layout_trace(ctx, pdf.stem, page_num, trace, markdown)
@@ -639,7 +713,9 @@ def run_ocr_pages(
                                 text, redaction_blocks, image.height
                             )
                 else:
-                    if not png_path.exists():
+                    # Under --force skrivs den färska renderingen alltid: en kvarlämnad
+                    # PNG (kanske med annan DPI) får aldrig läsas i stället för den nya.
+                    if force or not png_path.exists():
                         image.save(str(png_path))
                     if engine == "vision":
                         text = ocr_vision(png_path)
@@ -694,6 +770,7 @@ def run_ocr_pages(
                 engine_identity=identity if engine == "surya-layout" else None,
             )
             n_done += 1
+            recorded_pages.add(page_num)
             ctx.log(f"  [{pdf.stem} p{page_num:03d}] {len(text):5d} tecken "
                     f"score={scored.get('score', 0)}{redact_suffix}")
 
@@ -738,12 +815,34 @@ def run_ocr_pages(
                               f"block {index} rymdes inte i textlagret")
             try:
                 n = update_pdf_text_layer(ocr_pdf, ocr_pdf, page_lines, dpi,
-                                          on_failure=on_failure)
+                                          on_failure=on_failure, page_dpi=page_dpi)
                 ctx.log(f"  [pdf-patch] {ocr_pdf.name}: patchade {n} sidor")
             except Exception as e:  # noqa: BLE001
                 ctx.log(f"  [pdf-patch] FEL: {e}", level="error")
                 log_error("ocr_pages.pdf_patch", pdf.name, str(e))
-    return EXIT_SURYA_UNAVAILABLE if aborted else 0
+    if aborted:
+        return int(EXIT_SURYA_UNAVAILABLE)  # konstanten är Any för mypy
+    if force and only_pages is not None:
+        unread = sorted(p for p in only_pages if p <= n_total and p not in recorded_pages)
+        if unread:
+            ctx.log(f"  [{pdf.stem}] --force: sidorna {unread} kunde inte läsas om — "
+                    "den tidigare läsningen står kvar", level="error")
+            return 1
+    return 0
+
+
+def _cap_layout_render(ctx, pdf: Path, page_num: int, image, dpi: int):
+    """``cap_layout_image`` med debugloggning när sidan renderas om i lägre dpi."""
+    limit = LAYOUT_MAX_PIXELS
+    capped, used = cap_layout_image(pdf, page_num, image, dpi, limit)
+    if used != dpi:
+        ctx.log(
+            f"  [{pdf.stem} p{page_num}] sidan är {image.width}x{image.height} px i {dpi} dpi, "
+            f"över workerns gräns på {limit} px — renderas i {used} dpi "
+            f"({capped.width}x{capped.height} px)",
+            level="debug",
+        )
+    return capped, used
 
 
 def _open_layout_worker(stack: contextlib.ExitStack, injected):
@@ -814,6 +913,9 @@ def main() -> int:
                     help="stäng av PDF-textlager-patchen även om --ocr-dir är satt")
     ap.add_argument("--no-detect-redactions", action="store_true",
                     help="stäng av automatisk detektering av maskeringsblock")
+    ap.add_argument("--force", action="store_true",
+                    help="OCR:a sidorna i --pages även om de redan finns i pdf_pages "
+                         "(omskanning); exitkod 1 om någon av dem inte kunde läsas")
     ap.add_argument("--txt-dir",
                     default=os.environ.get("TXT_DIR"),
                     help="text-katalog för detect-only (default: <root>/generated/text)")
@@ -830,6 +932,7 @@ def main() -> int:
         no_update_pdf=args.no_update_pdf,
         no_detect_redactions=args.no_detect_redactions,
         txt_dir=args.txt_dir,
+        force=args.force,
     )
 
 

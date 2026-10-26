@@ -228,3 +228,12 @@ def test_merge_one_rewrites_txt_after_layout_page(tmp_path: Path, monkeypatch) -
     row = state_db.get_pdf_file(conn, "doc")
     conn.close()
     assert row["text_mtime"] == path.stat().st_mtime
+
+
+def test_merge_one_only_pages_leaves_other_file_pages(tmp_path: Path, monkeypatch) -> None:
+    txt_dir = _setup(tmp_path, monkeypatch, "rättad ett\fgammal två")
+    _add_page("doc", 1, "INAKTUELL")
+    _add_page("doc", 2, "NY")
+    assert merge_one("doc", txt_dir, only_pages={2}) is True
+    assert (txt_dir / "doc.txt").read_text(encoding="utf-8") == "rättad ett\fNY"
+    assert merge_one("doc", txt_dir, only_pages={3}) is False

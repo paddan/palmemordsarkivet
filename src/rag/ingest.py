@@ -27,7 +27,7 @@ from sentence_transformers import SentenceTransformer
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import db as state_db  # noqa: E402
-from normalize_text import normalize, normalize_markdown  # noqa: E402
+from normalize_text import markdown_is_fresh, normalize_markdown  # noqa: E402
 
 try:
     from errors_log import log_error
@@ -817,7 +817,7 @@ def _chunka_fil(
             db_text, md = page_markdown[page_idx]
             if not (md or "").strip():
                 pass  # tom Markdown (t.ex. blank sida) — ren text som i dag
-            elif normalize(db_text) == page:
+            elif markdown_is_fresh(db_text, page):
                 chunks = chunk_markdown(normalize_markdown(md), chunk_chars, chunk_overlap)
                 markdown = True
                 from_md += 1

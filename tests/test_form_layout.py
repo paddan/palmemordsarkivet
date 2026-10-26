@@ -13,7 +13,12 @@ import form_layout as fl
 import surya_layout as sl
 from surya_layout import BlockKind, FormField
 
-FIXTURES = ["form-v1-a", "form-v2-a", "form-v2-b", "forhor-dialog-a", "forhor-dialog-b"]
+FIXTURES = [
+    "form-v1-a", "form-v1-c", "form-v1-d", "form-v1-e", "form-v2-a", "form-v2-b", "form-v2-c", "form-v2-d", "form-v2-e",
+    "forhor-dialog-a", "forhor-dialog-b", "forhor-dialog-c",
+]
+# sidor med blankettfält (forhor-dialog-c är en ren dialogsida utan blankett och mall)
+FORM_FIXTURES = [n for n in FIXTURES if n != "forhor-dialog-c"]
 
 
 def form_fields(blocks):
@@ -182,6 +187,28 @@ def test_redacted_becomes_maskad():
     assert "[REDACTED]" not in sl.page_markdown(blocks)
 
 
+@pytest.mark.parametrize("marker", ["[REDACTED]", "[Redacted]", "[redacted]", "[ Redacted ]", "[\tREDACTED  ]"])
+def test_redacted_any_case_becomes_maskad(marker):
+    # Beslut BD: piloten fann "[Redacted]" (sida 5), som tidigare stod kvar orört
+    table = f"<table><tr><td>{marker}</td><td>x</td></tr></table>"
+    blocks, _ = sl.parse_blocks([raw(f"<p>Stockholm, {marker}.</p>"), raw(table, "Table", 1)])
+    out = fl.replace_redacted(blocks)
+    assert out[0].text == "Stockholm, [MASKAD]."
+    assert out[1].rows[0][0].text == "[MASKAD]"
+    assert "edacted" not in sl.page_markdown(out).lower()
+
+
+def test_redacted_variants_on_pilot_form():
+    # sida 5 i piloten (form-v1-c): Surya skrev "[Redacted]" i fält 12, 13 och 15
+    blocks, _ = sl.parse_page(load_fixture("form-v1-c"), page_height=3507)
+    fields = form_fields(blocks)
+    for number in ("12", "13", "15"):
+        assert field(fields, number).value == "[MASKAD]", number
+    md = sl.page_markdown(blocks)
+    assert "edacted" not in md.lower()
+    assert "**[MASKAD]** var på hemväg" in md or "[MASKAD] var på hemväg" in md
+
+
 def test_dehyphenate():
     assert fl.dehyphenate("polis-\ninspektören") == "polisinspektören"
     assert fl.dehyphenate("Palme-\nUtredningen") == "Palme-\nUtredningen"
@@ -214,8 +241,14 @@ def test_template_fixes_ocr_label():
     )
     blocks, _ = sl.parse_blocks(items)
     rest, fields = fl.extract_form_fields(blocks, fl.load_templates(), page_height=3500)
-    assert fields[0] == FormField("01", "Polisdistrikt (där uppslaget mottagits)", "Stockholm", None)
+    # beslut BI: den råa OCR-raden följer med (bara i ren text), eftersom mallen rättat den
+    assert fields[0] == FormField(
+        "01", "Polisdistrikt (där uppslaget mottagits)", "Stockholm", None,
+        source="01 Poliodistrikt (där uppslaget mottagits)",
+    )
     assert [b.text for b in rest if b.fields is None] == ["SPANINGSUPPSLAG"]
+    md = sl.page_markdown(rest)
+    assert "Poliodistrikt" not in md and "Poliodistrikt" in sl.page_text(rest)
 
 
 def test_template_needs_three_accepted_labels():
@@ -396,18 +429,28 @@ def _strings(value):
             yield from _strings(v)
 
 
-@pytest.mark.parametrize("name", FIXTURES)
+@pytest.mark.parametrize("name", FORM_FIXTURES)
 def test_trace_summarises_decisions_without_text(name):
     trace: dict = {}
     blocks, degraded = sl.parse_page(load_fixture(name), trace=trace)
     assert set(trace) == {
         "template", "accepted_labels", "fields", "rejected_labels", "barriers", "masks_resolved", "degraded",
+        "label_rest_values", "label_rest_text", "label_words_text",
+        # beslut BJ: etikettpar, aliasetiketter, värden ur etikettrader (och delade), värden bredvid etiketten
+        "label_pairs", "alias_labels", "row_values", "row_splits", "right_values", "row_prose",
     }
     names = {t.name for t in fl.load_templates()}
     assert trace["template"] in names
     assert trace["fields"] == sum(len(b.fields) for b in blocks if b.fields and b.fields[0].number)
     assert trace["degraded"] is degraded
-    assert all(isinstance(trace[k], int) for k in ("accepted_labels", "fields", "rejected_labels", "barriers", "masks_resolved"))
+    assert all(
+        isinstance(trace[k], int)
+        for k in (
+            "accepted_labels", "fields", "rejected_labels", "barriers", "masks_resolved",
+            "label_rest_values", "label_rest_text", "label_words_text",
+            "label_pairs", "alias_labels", "row_values", "row_splits", "right_values", "row_prose",
+        )
+    )
     # inga dokumentord: bara nycklar och mallens namn är strängar
     assert set(_strings(trace)) - set(trace) <= names
 
@@ -514,6 +557,19 @@ def _like(a: str, b: str) -> bool:
     return difflib.SequenceMatcher(None, a, b).ratio() >= (0.8 if len(b) < 8 else 0.6)
 
 
+def _inner_label(rest: str, first: str, numbers: dict[str, str]) -> tuple[str, int] | None:
+    """Beslut BJ: en etikettrad med två fältnummer (``03 Uppgiftsmottagare 04 telefon``).
+    Svaret är det inre numret och dess position i ``rest`` när båda halvorna liknar
+    sina fälts etiketter, annars ``None``."""
+    for m in re.finditer(r"(?<=\s)(\d{2})(?=\s+\S)", rest):
+        n2 = m.group(1)
+        if n2 in numbers and int(n2) > int(first) and _like(rest[: m.start()], numbers[first]) and _like(
+            rest[m.end():], numbers[n2]
+        ):
+            return n2, m.start()
+    return None
+
+
 def _consumed_label_line(line: str, next_line: str, numbers: dict[str, str]) -> bool:
     """En indatarad som faktiskt blivit en etikett: numret finns bland fälten och
     etikettexten (eller raden under ett ensamt nummer) liknar fältets etikett."""
@@ -525,6 +581,8 @@ def _consumed_label_line(line: str, next_line: str, numbers: dict[str, str]) -> 
         return first in numbers and second in numbers and _like(rest, numbers[second])
     if first not in numbers:
         return False
+    if _inner_label(rest, first, numbers) is not None:
+        return True
     if rest:
         return _like(rest, numbers[first])
     return _like(next_line.replace("☐", "").replace("☒", ""), numbers[first])
@@ -533,7 +591,7 @@ def _consumed_label_line(line: str, next_line: str, numbers: dict[str, str]) -> 
 def assert_conserved_page(items, image=None, masked_boxes=0):
     """Allt synligt finns kvar i ``page_text``.
 
-    Tillåtna skillnader: ``[REDACTED]`` → ``[MASKAD]``, avstavningens ``-`` vid
+    Tillåtna skillnader: ``[REDACTED]`` (alla skrivsätt) → ``[MASKAD]``, avstavningens ``-`` vid
     radbrott, ``masked_boxes`` kryssrutor som blivit ``[MASKAD]`` och tecken i
     rader som faktiskt blivit mallens fältetiketter (mallen rättar OCR-fel):
     raden börjar med ett fältnummer som finns bland sidans fält och står inte
@@ -546,7 +604,7 @@ def assert_conserved_page(items, image=None, masked_boxes=0):
     expected: Counter = Counter()
     allowed: Counter = Counter()
     for it in items:
-        lines = [ln.replace("[REDACTED]", "[MASKAD]") for ln in _lines(it["html"])]
+        lines = [re.sub(r"\[\s*redacted\s*\]", "[MASKAD]", ln, flags=re.I) for ln in _lines(it["html"])]
         for i, ln in enumerate(lines):
             expected += Counter("".join(ln.split()))
             if _consumed_label_line(ln, lines[i + 1] if i + 1 < len(lines) else "", numbers) and (
@@ -561,6 +619,7 @@ def assert_conserved_page(items, image=None, masked_boxes=0):
     lost = expected - got
     assert not (lost - allowed), lost - allowed
     assert_markdown_conserved(blocks)
+    assert_label_rests_in_markdown(items, blocks)
 
 
 def assert_markdown_conserved(blocks):
@@ -574,12 +633,158 @@ def assert_markdown_conserved(blocks):
     assert not (need - md), need - md
 
 
+def _words(text: str) -> list[str]:
+    """Ord för jämförelsen: bokstavsföljder och sifferföljder var för sig, så att ett
+    hopskrivet värde (``Avsnitt12``) räknas som två ord."""
+    return re.findall(r"[^\W\d_]+|\d+", text.replace("\\", "").lower())
+
+
+def _lower(text: str) -> str:
+    return "".join((c.lower() or c)[0] for c in text)
+
+
+def _cover(text: str, ref: str, offset: int = 0) -> tuple[set[int], set[int]]:
+    """(lika, utbytta) positioner i ``text`` enligt en difflib-justering mot ``ref``;
+    utbytta = ersättning av högst två tecken mot lika många (OCR-fel)."""
+    equal: set[int] = set()
+    swapped: set[int] = set()
+    for op, i1, i2, j1, j2 in difflib.SequenceMatcher(None, _lower(ref), _lower(text), autojunk=False).get_opcodes():
+        if op == "equal":
+            equal.update(range(offset + j1, offset + j2))
+        elif op == "replace" and i2 - i1 == j2 - j1 <= 2:
+            swapped.update(range(offset + j1, offset + j2))
+    return equal, swapped
+
+
+def _template_words(text: str, canons: list[str], tpl) -> set[int]:
+    """Startpositioner för ord på raden som mallen täcker (beslut BI): minst 80 % av
+    ordets tecken täcks av justeringen mot mallens etikett eller mot den tryckta
+    parentes en parentes på raden motsvarar (ord för ord), och minst hälften är lika
+    tecken (eller ordet är ett tecken)."""
+    def norm(t):
+        return " ".join(t.lower().replace("*", "").split())
+
+    refs = []
+    if canons:
+        refs.append((text, max(canons, key=lambda c: difflib.SequenceMatcher(None, norm(text), norm(c)).ratio()), 0))
+    printed = [p for p in tpl.printed if p.startswith("(")]
+    for m in re.finditer(r"\([^()]*\)?", text):
+        scored = [(difflib.SequenceMatcher(None, norm(m.group(0)), norm(p), autojunk=False).ratio(), p) for p in printed]
+        ratio, ref = max(scored, default=(0.0, ""))
+        if ratio >= 0.85:
+            refs.append((m.group(0), ref, m.start()))
+    equal: set[int] = set()
+    swapped: set[int] = set()
+    for part, ref, offset in refs:
+        e, sw = _cover(part, ref, offset)
+        equal |= e
+        swapped |= sw
+    out = set()
+    for m in re.finditer(r"[^\W\d_]+|\d+", text):
+        span = range(m.start(), m.end())
+        n_eq = sum(i in equal for i in span)
+        n = n_eq + sum(i in swapped for i in span)
+        if n >= 0.8 * len(span) and (2 * n_eq >= len(span) or len(span) == 1):
+            out.add(m.start())
+    return out
+
+
+def assert_label_rests_in_markdown(items, blocks):
+    """Beslut BC/BF/BG: inget på en godtagen etikettrad försvinner ur Markdown.
+
+    Raderna tas ur ``parse_blocks`` (före blankettlagret; en tabellcell är en rad).
+    Varje ord på en rad som blivit ett fälts etikett ska *synas*: i värdet (eller
+    ett ikryssat alternativ), i sidans lösa Markdown-text, eller i etiketten – men
+    etiketten räknas bara för fält som skrivs till Markdown (värde eller ikryssad
+    ruta). Undantag är bara ord som justeringen mot mallens etikett eller tryckta
+    parentes täcker (``_template_words``, samma regel som modulen: ≥ 80 % av
+    tecknen, minst hälften lika). Inget prefix skalas av och ingen parentes stryks
+    i sin helhet. Dessutom ska ren text (``page_text``) ha varje ord från alla
+    etikettrader.
+    """
+    trace: dict = {}
+    sl.parse_page(items, trace=trace)
+    if trace["template"] is None:
+        return
+    tpl = {t.name: t for t in fl.load_templates()}[trace["template"]]
+    md = sl.page_markdown(blocks)
+    loose = Counter(_words(" ".join(p for p in md.split("\n\n") if not p.startswith("- **"))))
+    by_number: dict[str, list] = {}
+    for b in blocks:
+        for f in b.fields or ():
+            if f.number:
+                by_number.setdefault(f.number, []).append(f)
+    numbers = _form_numbers(blocks)
+    raw_blocks, _ = sl.parse_blocks(items)
+    lines = []
+    for b in raw_blocks:
+        if b.rows is not None:
+            lines += [c.text for row in b.rows for c in row]
+        else:
+            lines += fl.dehyphenate(b.text).split("\n")  # avstavning slås ihop före tolkningen
+    all_label_words: Counter = Counter()
+    for line in lines:
+        line = re.sub(r"\[\s*redacted\s*\]", "[MASKAD]", line, flags=re.I).strip()
+        m = re.match(r"(\d{2})(?:\s+(\d{2}))?(?:\s+(.*))?$", line)
+        if not m or not _consumed_label_line(line, "", numbers):
+            continue
+        nums = [n for n in (m.group(1), m.group(2)) if n]
+        inner = None if m.group(2) else _inner_label(m.group(3) or "", m.group(1), numbers)
+        if inner is not None:
+            nums.append(inner[0])
+        have = Counter(nums) + loose
+        for n in nums:
+            group = by_number.get(n, [])
+            heads = [f for f in group if f.checked is None]
+            rendered = any(f.value.strip() for f in heads) or any(f.checked for f in group)
+            for f in group:
+                have += Counter(_words(f.value))
+                if rendered or f.checked:
+                    have += Counter(_words(f.label))
+        text = m.group(3) or ""
+
+        def canons_of(numbers_):
+            return [c for n in numbers_ for c in [tpl.labels.get(n, ""), *tpl.aliases.get(n, ())] if c]
+
+        if inner is not None:
+            # två etiketter på raden: varje halva jämförs med sitt eget fälts etikett
+            cut = inner[1]
+            covered = _template_words(text[:cut], canons_of(nums[:1]), tpl) | {
+                cut + i for i in _template_words(text[cut:], canons_of(nums[1:]), tpl)
+            }
+        else:
+            covered = _template_words(text, canons_of(nums), tpl)
+        missing = []
+        for w in re.finditer(r"[^\W\d_]+|\d+", text.replace("\\", "")):
+            word = w.group(0).lower()
+            if have[word] > 0:
+                have[word] -= 1
+            elif w.start() not in covered:
+                missing.append(word)
+        all_label_words += Counter(_words(line))
+        assert not missing, (line, missing)
+    # beslut BI: ren text behåller varje ord från alla etikettrader, vad Markdown än gör
+    lost_text = all_label_words - Counter(_words(sl.page_text(blocks)))
+    assert not lost_text, lost_text
+
+
 @pytest.mark.parametrize("name", FIXTURES)
 def test_real_fixtures_keep_text_through_parse_page(name):
     assert_conserved_page(load_fixture(name))
     blocks, _ = sl.parse_page(load_fixture(name))
     sl.page_markdown(blocks)
     assert sl.blocks_from_json(sl.blocks_to_json(blocks)) == blocks
+
+
+def test_dialog_c_keeps_every_turn_in_order():
+    # Piloten (2026-10-26): förhörssida med treställig talarmarkör (FHL) och en
+    # maskering mitt i en replik; alla 15 repliker kontrollerades mot sidbilden.
+    assert_conserved_page(load_fixture("forhor-dialog-c"))
+    blocks, _ = sl.parse_page(load_fixture("forhor-dialog-c"))
+    md = sl.page_markdown(blocks)
+    speakers = re.findall(r"^\*\*([A-ZÅÄÖ]{1,3}):\*\*", md, re.M)
+    assert speakers == ["DK", "FHL"] * 7 + ["DK"]
+    assert "[MASKAD]" in md and "[REDACTED]" not in md
 
 
 def test_dialog_b_with_image_keeps_text():
@@ -768,8 +973,11 @@ def test_printed_captions_are_not_values():
         assert printed in text
     md = sl.page_markdown(blocks)
     assert "Med feta linjer avgränsade avsnitt ifylls ej av uppgiftsmottagaren" in md.split("\n\n")
-    assert "- **22 Registrerat Signatur:**" not in md  # tomt fält, ingen dubbel kolon
-    assert field(fields, "22").label == "Registrerat Signatur"
+    assert "- **22 Registrerat" not in md  # tomt fält
+    # beslut BC: "Signatur" efter etiketten på raden "22 Registrerat: Signatur" är fast
+    # tryck, alltså inget värde – men den står kvar som text i stället för att försvinna
+    assert field(fields, "22").label == "Registrerat"
+    assert "Signatur" in md.split("\n\n")
     assert not any(f.label.endswith(":") for f in fields)
 
 
@@ -829,7 +1037,8 @@ def test_dialog_a_bare_numbers_take_label_from_line_below():
     blocks, _ = sl.parse_page(load_fixture("forhor-dialog-a"))
     fields = form_fields(blocks)
     assert field(fields, "05").label == "Förhörsprot"
-    assert field(fields, "06").label == "Promemoria"
+    # "Utskriftsdatum" bredvid 06 på samma rad är mallens alias och en egen etikett (beslut BJ)
+    assert [f.label for f in _heads(fields, "06")] == ["Promemoria", "Utskriftsdatum"]
 
 
 @pytest.mark.parametrize("shift", [0, 5, 10, 30])
@@ -988,6 +1197,359 @@ def test_whole_line_label_match():
     assert not fl._accepts(v1, "05", "data")  # kvot 0,67: räcker för långa etiketter, inte för korta (0,8)
 
 
+def _v1_page(*extra):
+    """En v1-sida med tre godtagna etiketter (mallen gäller) plus ``extra``."""
+    return _page(
+        ("<p>SPANINGSUPPSLAG</p>", (1300, 100, 1700, 150)),
+        ("<p>01 Polisdistrikt (där uppslaget mottagits)</p>", (100, 200, 700, 240)),
+        ("<p>Stockholm</p>", (110, 245, 400, 285)),
+        ("<p>02 Arbetsenhet</p>", (100, 300, 500, 340)),
+        ("<p>KCV</p>", (110, 345, 400, 385)),
+        ("<p>10 Brott med vilket uppslaget hör samman</p>", (100, 600, 900, 640)),
+        ("<p>Mordet på Olof Palme</p>", (110, 645, 700, 685)),
+        *extra,
+    )
+
+
+def test_value_on_label_line_becomes_value():
+    # beslut BC: "07 Avsnitt E" – värdet står på etikettraden och inget under den
+    items = _v1_page(
+        ("<p>07 Avsnitt E</p>", (1800, 200, 2100, 240)),
+        ("<p>08 Löpande nr 1974-B</p>", (2150, 200, 2400, 240)),
+    )
+    blocks, _ = sl.parse_page(items, page_height=3500)
+    fields = form_fields(blocks)
+    assert field(fields, "07", "Avsnitt").value == "E"
+    assert field(fields, "08", "Löpande nr").value == "1974-B"
+    md = sl.page_markdown(blocks)
+    assert "- **07 Avsnitt:** E" in md and "- **08 Löpande nr:** 1974-B" in md
+    assert_conserved_page(items)
+
+
+def test_label_line_rest_kept_as_text_when_not_a_value():
+    items = _v1_page(
+        # värde finns redan under etiketten: resten står kvar som text
+        ("<p>07 Avsnitt E</p>", (1800, 200, 2100, 240)),
+        ("<p>F</p>", (1810, 245, 2000, 285)),
+        # ett fältnummer är inget värde ("04 telefon" vore en egen etikett, beslut BJ,
+        # så resten här är ett fältnummer vars text inte är mallens etikett)
+        ("<p>03 Uppgiftsmottagare 04 sekunder</p>", (100, 400, 900, 440)),
+        ("<p>Krinsp A Lindahl</p>", (110, 445, 600, 485)),
+        # fast tryck ("Signatur") är inget värde
+        ("<p>22 Registrerat: Signatur</p>", (1800, 3000, 2100, 3040)),
+        ("<p>23 Ärendet tilldelat</p>", (100, 3000, 500, 3040)),
+        ("<p>24 Färdigbearbetat datum</p>", (600, 3000, 1000, 3040)),
+    )
+    blocks, _ = sl.parse_page(items, page_height=3500)
+    fields = form_fields(blocks)
+    assert field(fields, "07", "Avsnitt").value == "F"
+    assert field(fields, "03", "Uppgiftsmottagare").value == "Krinsp A Lindahl"
+    assert field(fields, "22", "Registrerat").value == ""
+    paragraphs = _md_paragraphs(blocks)
+    for rest in ("E", "04 sekunder", "Signatur"):
+        assert rest in paragraphs, rest
+    assert_conserved_page(items)
+
+
+@pytest.mark.parametrize("length,is_value", [(60, True), (61, False)])
+def test_label_line_rest_length_limit(length, is_value):
+    # bara en lång malletikett godtar en så lång rad (hela raden ska likna etiketten)
+    label = "Lång etikett " * 10
+    rest = "v" * length
+    items = _page(
+        ("<p>01 Ett</p>", (100, 100, 500, 140)),
+        ("<p>02 Två</p>", (100, 300, 500, 340)),
+        (f"<p>03 {label.strip()} {rest}</p>", (100, 500, 2400, 540)),
+    )
+    blocks, _ = sl.parse_blocks(items)
+    tpl = fl.FormTemplate("test", (), {"01": "Ett", "02": "Två", "03": label.strip()})
+    out, fields = fl.extract_form_fields(blocks, [tpl], page_height=3500)
+    assert [f.value for f in fields if f.number == "03"] == [rest if is_value else ""]
+    assert ([b.text for b in out if b.fields is None] == [rest]) is not is_value
+
+
+def test_label_line_rest_in_table_cell():
+    # sida 5 i piloten: "07 Avsnitt<br/><b>E</b>" i en tabellcell
+    table = (
+        "<table><tr><td>07 Avsnitt<br/><b>E</b></td><td>08 Löpande nr<br/>1974-B</td></tr>"
+        "<tr><td>09 Plats för förtursstämpel<br/>EAC 1580 B</td></tr></table>"
+    )
+    items = _v1_page((table, (1800, 200, 2400, 500)))
+    items[-1]["label"] = "Form"
+    blocks, _ = sl.parse_page(items, page_height=3500)
+    fields = form_fields(blocks)
+    assert [(field(fields, n).label, field(fields, n).value) for n in ("07", "08", "09")] == [
+        ("Avsnitt", "E"), ("Löpande nr", "1974-B"), ("Plats för förtursstämpel", "EAC 1580 B"),
+    ]
+    assert_conserved_page(items)
+
+
+@pytest.mark.parametrize(
+    "line,bbox,number,label,value",
+    [
+        # granskarens prober (beslut BF): hopskrivet värde och förkortad etikett
+        ("07 Avsnitt12", (1800, 200, 2100, 240), "07", "Avsnitt", "12"),
+        ("08 Löpande nr1974-B", (2150, 200, 2400, 240), "08", "Löpande nr", "1974-B"),
+        ("12 Uppgiftslämnarens efternamn Andersson", (100, 400, 1500, 440), "12",
+         "Uppgiftslämnarens efternamn och alla förnamn", "Andersson"),
+        # inledande tryckt parentes hör till etiketten, inte till värdet
+        ("15 Arbetsplats (arbetsgivare, postadress) Volvo AB", (100, 450, 1500, 490), "15",
+         "Arbetsplats (arbetsgivare, postadress)", "Volvo AB"),
+        ("12 Uppgiftslämnarens efternamn och alla förnamn (i rätt följd, tilltalsnamnet markeras) "
+         "Andersson Karl", (100, 400, 2400, 440), "12",
+         "Uppgiftslämnarens efternamn och alla förnamn (i rätt följd, tilltalsnamnet markeras)",
+         "Andersson Karl"),
+    ],
+)
+def test_label_line_tail_is_never_swallowed(line, bbox, number, label, value):
+    items = _v1_page((f"<p>{line}</p>", bbox))
+    blocks, _ = sl.parse_page(items, page_height=3500)
+    f = field(form_fields(blocks), number)
+    assert (f.label, f.value) == (label, value)
+    assert f"- **{number} {label}:** {value}" in sl.page_markdown(blocks).split("\n")
+    assert_conserved_page(items)
+
+
+@pytest.mark.parametrize(
+    "line,bbox,number,loose",
+    [
+        # granskarens prober (beslut BG): en parentes som inte är mallens tryck, i ett tomt fält
+        ("15 Arbetsplats (Volvo AB)", (100, 450, 1500, 490), "15", "Volvo AB"),
+        ("12 Uppgiftslämnarens efternamn och alla förnamn (Andersson Karl)", (100, 400, 1500, 440), "12",
+         "Andersson Karl"),
+        # ord inne i etiketten som mallen annars rättat bort
+        ("12 Uppgiftslämnarens efternamn qzx alla förnamn", (100, 400, 1500, 440), "12", "qzx"),
+        ("12 Uppgiftslämnarens Karlsson och alla förnamn", (100, 400, 1500, 440), "12", "Karlsson"),
+        ("03 Uppgifts Borg mottagare", (100, 400, 900, 440), "03", "Borg"),
+    ],
+)
+def test_unrendered_label_words_become_loose_text(line, bbox, number, loose):
+    items = _v1_page((f"<p>{line}</p>", bbox))
+    blocks, _ = sl.parse_page(items, page_height=3500)
+    assert field(form_fields(blocks), number).value == ""  # tomt fält: skrivs inte till Markdown
+    assert loose in _md_paragraphs(blocks)
+    assert loose in sl.page_text(blocks).split("\n")
+    assert_conserved_page(items)
+
+
+# granskarens prober (beslut BI): (rad, ord som måste synas i Markdown och ren text)
+_BI_PROBES = [
+    # förut tappade: inskjutna ord i en parentes som liknar mallens tryck, och ett ord
+    # som liknar ett etikettord
+    ("15 Arbetsplats (arbetsgivare, postadress och telefon arbetet Volvo)", ["Volvo"]),
+    ("15 Arbetsplats (arbetsgivare, postadress och Volvo arbetet)", ["Volvo"]),
+    ("15 Arbetsplats (arbetsgivare postadress och telefon arbetsgivaren)", ["arbetsgivaren"]),
+    ("17 Händelse (kort rubricering t ex iakttagelse av person, fordon Nilsson, gods, skottlossning etc "
+     "med angivande av tid och plats)", ["Nilsson"]),
+    ("12 Uppgiftslämnarens Eftersson efternamn och alla förnamn", ["Eftersson"]),
+    # fungerade redan och ska fortsätta göra det
+    ("15 Arbetsplats (arbetsgivare, postadress och telefon arbetet) Volvo", ["Volvo"]),
+    ("15 Arbetsplats (arbetsgivare, postadress och telefon arbetet) Volvo Persson", ["Volvo", "Persson"]),
+    ("03 Uppgiftsmottagaren Persson", ["Persson"]),
+    ("03 Uppgiftsmottagare Persson", ["Persson"]),
+    ("03 Uppgifts Persson mottagare", ["Persson"]),
+    ("03 Uppgiftsmottagare Uppgiftsmottagarn", ["Uppgiftsmottagarn"]),
+    ("03 Persson Uppgiftsmottagare", ["Persson"]),
+    ("20 Tagit Dell del", ["Dell"]),
+    ("20 Tagit Dell", ["Dell"]),
+    ("20 Tagit Karl del Dell", ["Dell", "Karl"]),
+    ("20 Dell Tagit del", ["Dell"]),
+    ("20 Tagit Dell del Karl", ["Dell"]),
+    ("13 Yrke Titelius/titel", ["Titelius"]),
+    ("12 Uppgiftslämnarens Karlsson efternamn och alla förnamn", ["Karlsson"]),
+    ("15 Arbetsplats (Volvo AB) (arbetsgivare, postadress och telefon arbetet)", ["Volvo"]),
+    ("15 Arbetsplats (arbetsgivare, postadress och telefon arbetet) (Volvo AB)", ["Volvo"]),
+    ("12 Uppgiftslämnarens efternamn och alla förnamn (i rätt följd, tilltalsnamnet markeras) Berg Anna",
+     ["Berg", "Anna"]),
+    ("14 Postadress Gatan (utdelningsadress och ortsadress), telefon bostaden", ["Gatan"]),
+    ("15 Arbetsplatsen Volvo", ["Volvo"]),
+]
+
+
+@pytest.mark.parametrize("line,names", _BI_PROBES)
+def test_inserted_words_on_label_line_are_never_dropped(line, names):
+    items = _v1_page((f"<p>{line}</p>", (100, 450, 1500, 490)))
+    blocks, _ = sl.parse_page(items, page_height=3500)
+    md, text = sl.page_markdown(blocks), sl.page_text(blocks)
+    for name in names:
+        assert name in md and name in text, name
+    assert_conserved_page(items)
+
+
+def test_label_rest_check_uses_alignment_not_similarity():
+    # kontrollen: ett ord som bara liknar ett etikettord ("Eftersson" ~ "efternamn")
+    # räknas inte som etikett, och ren text måste ha den råa raden
+    import dataclasses
+
+    items = _v1_page(("<p>12 Uppgiftslämnarens Eftersson efternamn och alla förnamn</p>", (100, 450, 1500, 490)))
+    blocks, _ = sl.parse_page(items, page_height=3500)
+    without_loose = [b for b in blocks if b.text != "Eftersson"]
+    with pytest.raises(AssertionError, match="eftersson"):
+        assert_label_rests_in_markdown(items, without_loose)
+    # ett OCR-stavat etikettord får saknas i Markdown men aldrig i ren text
+    items = _page(
+        ("<p>SPANINGSUPPSLAG</p>", (1300, 200, 1700, 260)),
+        ("<p>01 Poliodistrikt (där uppslaget mottagits)</p>", (290, 193, 826, 239)),
+        ("<p><b>Stockholm</b></p>", (310, 240, 568, 284)),
+        *_OTHER_LABELS,
+    )
+    blocks, _ = sl.parse_page(items, page_height=3500)
+    assert_label_rests_in_markdown(items, blocks)
+    without_source = [
+        dataclasses.replace(b, fields=tuple(dataclasses.replace(f, source="") for f in b.fields))
+        if b.fields else b
+        for b in blocks
+    ]
+    with pytest.raises(AssertionError, match="poliodistrikt"):
+        assert_label_rests_in_markdown(items, without_source)
+
+
+def test_page_text_keeps_raw_label_line():
+    # beslut BI: ren text behåller etikettradens råa OCR-text när mallen skrivit om den
+    items = _v1_page(("<p>12 Uppgiftslämnarens Eftersson efternamn och alla förnamn</p>", (100, 450, 1500, 490)))
+    blocks, _ = sl.parse_page(items, page_height=3500)
+    lines = sl.page_text(blocks).split("\n")
+    assert "12 Uppgiftslämnarens Eftersson efternamn och alla förnamn" in lines
+    assert "12 Uppgiftslämnarens efternamn och alla förnamn: " in lines
+    assert "Eftersson efternamn" not in sl.page_markdown(blocks)
+
+
+def test_printed_parenthesis_is_not_loose_text():
+    # mallens fasta tryck i parentes står kvar i etiketten och blir ingen lös text
+    items = _v1_page(
+        ("<p>15 Arbetsplats (arbetsgivare, postadress och telefon arbetet)</p>", (100, 450, 1500, 490)),
+        ("<p>17 Händelse (kort rubricering t ex lakttagelse av person, fordon, gods, skottlossning etc "
+         "med angivande av tid och plats)</p>", (100, 700, 2400, 740)),
+    )
+    trace: dict = {}
+    blocks, _ = sl.parse_page(items, page_height=3500, trace=trace)
+    assert trace["label_words_text"] == 0
+    assert [t for t in _md_paragraphs(blocks) if not t.startswith("- **")] == ["SPANINGSUPPSLAG"]
+    assert_conserved_page(items)
+
+
+def test_label_rest_check_counts_label_only_for_rendered_fields():
+    # kontrollen: ett ord som bara står i etiketten på ett tomt (oskrivet) fält räknas inte
+    import dataclasses
+
+    items = _v1_page(("<p>03 Uppgifts Borg mottagare</p>", (100, 400, 900, 440)))
+    blocks, _ = sl.parse_page(items, page_height=3500)
+    hidden = [
+        dataclasses.replace(
+            b, fields=tuple(dataclasses.replace(f, label="Uppgiftsmottagare Borg") if f.number == "03" else f
+                            for f in b.fields)
+        ) if b.fields else b
+        for b in blocks
+        if b.text != "Borg"
+    ]
+    with pytest.raises(AssertionError, match="borg"):
+        assert_label_rests_in_markdown(items, hidden)
+
+
+def test_unrewritten_label_with_empty_field_stays_text():
+    # beslut BF: "10 Brott med vilket Kalle" godtas (helradslikhet ≥ 0,6) men liknar
+    # inte mallens etikett nog för att rättas (< 0,75). Etiketten står kvar som den
+    # lästes och fältet är tomt – då får fältet inte vara textens enda bärare.
+    items = _page(
+        ("<p>SPANINGSUPPSLAG</p>", (1300, 100, 1700, 150)),
+        ("<p>01 Polisdistrikt (där uppslaget mottagits)</p>", (100, 200, 700, 240)),
+        ("<p>Stockholm</p>", (110, 245, 400, 285)),
+        ("<p>02 Arbetsenhet</p>", (100, 300, 500, 340)),
+        ("<p>KCV</p>", (110, 345, 400, 385)),
+        ("<p>03 Uppgiftsmottagare</p>", (100, 400, 500, 440)),
+        ("<p>Krinsp Borg</p>", (110, 445, 400, 485)),
+        ("<p>10 Brott med vilket Kalle</p>", (100, 600, 900, 640)),
+    )
+    blocks, _ = sl.parse_page(items, page_height=3500)
+    f = field(form_fields(blocks), "10")
+    assert (f.label, f.value) == ("Brott med vilket Kalle", "")
+    assert "10 Brott med vilket Kalle" in _md_paragraphs(blocks)
+    assert_conserved_page(items)
+
+
+def test_label_rest_check_catches_a_lost_tail():
+    # själva bevarandekontrollen: tappas värdet ur fältet (som före beslut BF) fälls den
+    import dataclasses
+
+    items = _v1_page(("<p>07 Avsnitt12</p>", (1800, 200, 2100, 240)))
+    blocks, _ = sl.parse_page(items, page_height=3500)
+    lost = [
+        dataclasses.replace(
+            b, fields=tuple(dataclasses.replace(f, value="") if f.number == "07" else f for f in b.fields)
+        ) if b.fields else b
+        for b in blocks
+    ]
+    with pytest.raises(AssertionError, match="12"):
+        assert_label_rests_in_markdown(items, lost)
+
+
+def test_explanatory_parenthesis_stays_in_label():
+    items = _v1_page(
+        ("<p>12 Uppgiftslämnarens efternamn och alla förnamn (i rätt följd, tilltalsnamnet markeras)</p>",
+         (100, 400, 1500, 440)),
+    )
+    blocks, _ = sl.parse_page(items, page_height=3500)
+    f = field(form_fields(blocks), "12")
+    assert f.label == "Uppgiftslämnarens efternamn och alla förnamn (i rätt följd, tilltalsnamnet markeras)"
+    assert f.value == ""
+
+
+@pytest.mark.parametrize(
+    "line",
+    ["07 avsnitt i bandet saknas, sa han.", "08 löpande räkning visade att han betalat."],
+)
+def test_prose_after_label_number_is_still_rejected(line):
+    # beslut L: hela raden måste likna etiketten – kvarleveregeln ändrar inte det
+    items = _v1_page((f"<p>{line}</p>", (100, 400, 1500, 440)))
+    blocks, _ = sl.parse_page(items, page_height=3500)
+    fields = form_fields(blocks)
+    assert not [f for f in fields if f.number in ("07", "08")]
+    assert line in _md_paragraphs(blocks)
+
+
+def test_pilot_forms_values_on_label_lines():
+    # piloten (2026-10-26), sida 5 (form-v1-c): värdena i rutan för avsnitt, löpnummer
+    # och förtursstämpel stod i etiketterna och saknades i Markdown (bilden: E / 1974-B /
+    # EAC 1580 B). Sida 13 (form-v2-c): utskriftsdatumet stod i etiketten för 06.
+    blocks, _ = sl.parse_page(load_fixture("form-v1-c"), page_height=3507)
+    fields = form_fields(blocks)
+    assert [(field(fields, n).label, field(fields, n).value) for n in ("03", "07", "08", "09")] == [
+        ("Uppgiftsmottagare", "Krinsp A Lindahl"),
+        ("Avsnitt", "E"),
+        ("Löpande nr", "1974-B"),
+        ("Plats för förtursstämpel", "EAC 1580 B"),
+    ]
+    md = sl.page_markdown(blocks)
+    for line in ("- **07 Avsnitt:** E", "- **08 Löpande nr:** 1974-B", "- **09 Plats för förtursstämpel:** EAC 1580 B"):
+        assert line in md.split("\n"), line
+    # beslut BJ: "04 telefon" på 03:s etikettrad är nu en egen (tom) etikett, inte lös text;
+    # raden finns kvar i ren text som fältraden "04 telefon: "
+    assert field(fields, "04", "telefon").value == ""
+    assert "04 telefon: " in sl.page_text(blocks).split("\n")
+
+    blocks, _ = sl.parse_page(load_fixture("form-v2-c"), page_height=3509)
+    fields = form_fields(blocks)
+    assert field(fields, "06", "Utskriftsdatum").value == "1990-09-30 EÅ"
+    assert field(fields, "03", "Upprättat(d) av").value == "Krinsp Per Gustavsson"
+    assert field(fields, "04", "Fortsättningsblad").value == ""
+    paragraphs = sl.page_markdown(blocks).split("\n\n")
+    assert "telefon" in paragraphs and "Uppgiftslämnare (efternamn och förnamn)" in paragraphs
+
+
+def test_pilot_form_without_label_rests_unchanged():
+    # sida 1 i piloten (form-v1-d) har inga värden på etikettraderna: fälten är
+    # desamma som före beslut BC
+    fields = form_fields(sl.parse_page(load_fixture("form-v1-d"), page_height=3507)[0])
+    got = {f.number: f.value for f in fields if f.checked is None and f.value}
+    assert got == {
+        "01": "Stockholm", "02": "KCV", "03": "Krinsp T Borg", "04": "4390", "05": "86-03-04",
+        "06": "23.20", "08": "1094", "09": "EAD", "10": "Mordet på Olof Palme", "16": "person",
+        "24": "B61112", "25": "A.T.",
+        # beslut BJ: värdet i 17:s nedre halva och datumet till höger om "20 Tagit del"
+        "17": "MISSTänkt person, iaktagelser av-.", "20": "860308 A.T.",
+    }
+
+
 def test_lower_number_far_below_higher_label_is_prose():
     # nummerordningen: "05 datum" långt under fält 09 är prosa, inte fält 05
     items = _page(
@@ -1023,7 +1585,7 @@ def test_real_footer_values_survive_numbered_prose():
 
 def test_order_resolution_never_rejects_real_fixture_labels(monkeypatch):
     # ordningsupplösningen får inte ta bort någon riktig etikett
-    for name in FIXTURES:
+    for name in FORM_FIXTURES:
         expected = form_fields(sl.parse_page(load_fixture(name))[0])
         with monkeypatch.context() as m:
             m.setattr(fl, "ORDER_MAX_RISE", 100.0)  # ingen inversion räknas
@@ -1200,7 +1762,7 @@ def test_real_v1_footer_unchanged():
         ("20", "Tagit del", "", None),
         ("21", "Anknyter till uppslag nr", "", None),
         ("21", "anknyter till uppslag nr", "", False),
-        ("22", "Registrerat Signatur", "", None),
+        ("22", "Registrerat", "", None),  # "Signatur" står kvar som text (beslut BC)
         ("23", "Ärendet tilldelat", "Kormard", None),
         ("24", "Färdigbearbetat datum", "860407", None),
         ("25", "Spaningschef sign", "", None),
@@ -1214,3 +1776,319 @@ def test_v1_field_14_uses_printed_label():
     assert fl._similarity("Postadress (utdelnings-adress och ortsadress), telefon bostaden", v1.labels["14"]) == 1.0
     blocks, _ = sl.parse_page(load_fixture("form-v1-a"))
     assert field(form_fields(blocks), "14").label == "Postadress (utdelningsadress och ortsadress), telefon bostaden"
+
+
+# --- Fältparning, andra omkörningen (beslut BJ) ----------------------------------------
+# Pilotens sida 1 (form-v1-d), 3 (form-v1-e), 5 (form-v1-c) och 9 (form-v2-d); värdena
+# är kontrollerade mot sidbilderna (OCR-fel som 870980 för 870904 står kvar som de lästes).
+
+
+def _heads(fields, number):
+    return [f for f in fields if f.number == number and f.checked is None]
+
+
+def test_label_line_with_two_field_numbers_is_split():
+    # sida 5: "03 Uppgiftsmottagare 04 telefon" och "05 datum 06 klockan" är två
+    # etiketter var; datum och klockslag står på raden under och delas per spalt
+    items = load_fixture("form-v1-c")
+    blocks, _ = sl.parse_page(items, page_height=3507)
+    fields = form_fields(blocks)
+    assert field(fields, "03", "Uppgiftsmottagare").value == "Krinsp A Lindahl"
+    assert field(fields, "04", "telefon").value == ""
+    assert field(fields, "05", "datum").value == "86-03-10"
+    assert field(fields, "06", "klockan").value == "1430"
+    md = sl.page_markdown(blocks).split("\n")
+    assert "- **05 datum:** 86-03-10" in md and "- **06 klockan:** 1430" in md
+    assert_conserved_page(items)
+
+
+def test_two_numbers_split_only_when_both_labels_match():
+    # "05 datum 06 minuter senare" är inte två etiketter: raden blir inget fält 05/06
+    items = _v1_page(
+        ("<p>05 datum 06 minuter senare kom han</p>", (1300, 400, 1900, 440)),
+        ("<p>86-03-10 1430</p>", (1300, 445, 1700, 485)),
+    )
+    blocks, _ = sl.parse_page(items, page_height=3500)
+    assert not {"05", "06"} & set(_form_numbers(blocks))
+    assert "05 datum 06 minuter senare kom han" in sl.page_text(blocks).split("\n")
+    assert_conserved_page(items)
+
+
+def test_value_spanning_two_label_columns_is_split():
+    # sida 3: "Ingvar Kjellvås 08-7694169" står under 03 och 04, "87-07-17 10.00"
+    # under 05 och 06 (och börjar till vänster om 05:s etikett)
+    items = load_fixture("form-v1-e")
+    blocks, _ = sl.parse_page(items, page_height=3507)
+    fields = form_fields(blocks)
+    assert [field(fields, n).value for n in ("01", "02", "03", "04", "05", "06")] == [
+        "Stockholm", "KK 1", "Ingvar Kjellvås", "08-7694169", "87-07-17", "10.00",
+    ]
+    assert_conserved_page(items)
+
+
+def _row_page(*values):
+    """v1-sida med etikettraden 03–06 och ``values`` = [(text, (x0, x1))] under den
+    (sidbredd 2 400 bildpunkter som i 300 dpi, via rutan för 08)."""
+    return _v1_page(
+        ("<p>08 Löpande nr</p>", (2100, 200, 2400, 240)),
+        ("<p>03 Uppgiftsmottagare</p>", (300, 700, 600, 740)),
+        ("<p>04 telefon</p>", (820, 700, 960, 740)),
+        ("<p>05 datum</p>", (1330, 700, 1470, 740)),
+        ("<p>06 klockan</p>", (1580, 700, 1740, 740)),
+        *((f"<p>{t}</p>", (x0, 750, x1, 795)) for t, (x0, x1) in values),
+    )
+
+
+def test_value_is_not_split_into_neighbour_with_own_value():
+    # namnet når in under 04, men 04 har ett eget värde: inget delas
+    items = _row_page(("Krinsp Karl-Otto Pålstig", (300, 960)), ("4107", (1050, 1170)), ("87-04-14", (1280, 1500)))
+    blocks, _ = sl.parse_page(items, page_height=3500)
+    fields = form_fields(blocks)
+    assert [field(fields, n).value for n in ("03", "04", "05")] == ["Krinsp Karl-Otto Pålstig", "4107", "87-04-14"]
+    assert_conserved_page(items)
+
+
+def test_value_outside_every_label_column_stays_text():
+    # text långt till höger om radens sista etikett hör inte till raden
+    items = _row_page(("Insp Persson", (300, 640)), ("i grövre brottmål", (2100, 2400)))
+    blocks, _ = sl.parse_page(items, page_height=3500)
+    fields = form_fields(blocks)
+    assert field(fields, "03").value == "Insp Persson"
+    assert field(fields, "06").value == ""
+    assert "i grövre brottmål" in _md_paragraphs(blocks)
+    assert_conserved_page(items)
+
+
+def test_same_row_label_is_no_barrier_but_printed_caption_is():
+    # sida 9: handskriften "EBE 10324-1-A" står över både 07 och 08; grannens etikett
+    # på samma rad spärrade tidigare. Samma text i rutan för uppgiftslämnaren (under
+    # den tryckta rubriken) är inget värde för 08.
+    items = load_fixture("form-v2-d")
+    blocks, _ = sl.parse_page(items, page_height=3507)
+    fields = form_fields(blocks)
+    assert field(fields, "07").value == "EBE"
+    assert field(fields, "08").value == "10324-1-A"
+    assert "EBE 10324-1-A" in _md_paragraphs(blocks)
+    assert_conserved_page(items)
+
+
+def test_alias_caption_beside_number_is_a_label():
+    # sida 9: "06" tar etiketten Promemoria från raden under; "Utskriftsdatum" bredvid
+    # på samma rad är mallens alias för 06, och datumet under den är fältets värde
+    items = load_fixture("form-v2-d")
+    blocks, _ = sl.parse_page(items, page_height=3507)
+    fields = form_fields(blocks)
+    labels = {f.label: f.value for f in _heads(fields, "06")}
+    assert labels == {"Promemoria": "", "Utskriftsdatum": "081013"}
+    assert "- **06 Utskriftsdatum:** 081013" in sl.page_markdown(blocks).split("\n")
+
+
+def test_alias_caption_needs_its_number_in_the_row():
+    # "Utskriftsdatum" utan 06 på samma rad blir ingen etikett
+    items = _page(
+        ("<p>SPANINGSUPPSLAG</p>", (1300, 100, 1700, 150)),
+        ("<p>01 Polisdistrikt*</p>", (300, 200, 500, 240)),
+        ("<p>Stockholm</p>", (310, 245, 600, 285)),
+        ("<p>02 Arbetsenhet*</p>", (300, 300, 500, 340)),
+        ("<p>RK-A-2</p>", (310, 345, 500, 385)),
+        ("<p>03 Upprättat(d) av*</p>", (300, 400, 540, 440)),
+        ("<p>Utskriftsdatum</p>", (1800, 800, 2000, 840)),
+        ("<p>881013</p>", (1850, 845, 2050, 885)),
+    )
+    blocks, _ = sl.parse_page(items, page_height=3500)
+    assert "06" not in _form_numbers(blocks)
+    assert "881013" in _md_paragraphs(blocks)
+    assert_conserved_page(items)
+
+
+def test_value_right_of_label_in_same_row():
+    # sidfoten: datumet står till höger om "20 Tagit del" (sida 1 och 3) och
+    # "0 870980 TS" till höger om "23 Ärendet tilldelat" (sida 3)
+    # (på sida 1 följer signaturen i rutan för biträdande spaningschef med: den hör till 20)
+    fields = form_fields(sl.parse_page(load_fixture("form-v1-d"), page_height=3507)[0])
+    assert field(fields, "20").value == "860308 A.T."
+    items = load_fixture("form-v1-e")
+    fields = form_fields(sl.parse_page(items, page_height=3507)[0])
+    assert field(fields, "20").value == "870980"
+    assert field(fields, "23").value == "0 870980 TS"
+    assert field(fields, "01").value == "Stockholm"  # rubriken till höger blir inget värde
+
+
+def test_value_right_of_label_beyond_reach_stays_text():
+    items = _v1_page(
+        ("<p>07 Avsnitt</p>", (1800, 700, 1950, 740)),
+        ("<p>D 2775</p>", (2300, 700, 2450, 740)),
+    )
+    blocks, _ = sl.parse_page(items, page_height=3500)
+    assert field(form_fields(blocks), "07").value == ""
+    assert "D 2775" in _md_paragraphs(blocks)
+    assert_conserved_page(items)
+
+
+def test_value_in_row_band_below_neighbour_label():
+    # sida 1: 17:s etikett är två rader hög; värdet står i dess nedre halva, under
+    # grannetiketten 16 i samma rad, och hör till spalten för 17
+    fields = form_fields(sl.parse_page(load_fixture("form-v1-d"), page_height=3507)[0])
+    assert field(fields, "17").value == "MISSTänkt person, iaktagelser av-."
+    assert field(fields, "16").value == "person"
+
+
+def test_printed_caption_between_box_rules():
+    v1 = {t.name: t for t in fl.load_templates()}["spaningsuppslag-1"]
+    assert fl._is_printed("| datum", v1)
+    assert fl._is_printed("Bilt spaningschef | Registrator", v1)
+    assert not fl._is_printed("860308 | Registrator", v1)
+
+
+def test_printed_words_in_value_row_stay_text():
+    # pilotens sida 12 (form-v2-e): "05 Förhörsprot 06 Utskriftsdatum" är två etiketter,
+    # och raden under ("Förhörsprot Promemoria 920114/GT") är tryck plus datumet; bara
+    # datumet är ett värde (bilden: 920114/GT i rutan Utskriftsdatum)
+    items = load_fixture("form-v2-e")
+    blocks, _ = sl.parse_page(items, page_height=3507)
+    fields = form_fields(blocks)
+    assert field(fields, "05", "Förhörsprot").value == ""
+    assert field(fields, "06", "Utskriftsdatum").value == "920114/GT"
+    assert "Förhörsprot Promemoria" in _md_paragraphs(blocks)
+    assert_conserved_page(items)
+
+
+def test_row_waits_for_bare_number_label():
+    # "05 06 Utskriftsdatum 900905/GT": 05 är ett ensamt nummer vars etikett står på
+    # raden under; den raden tolkas som förut och tar inte 06:s datum (pilotens sida 15)
+    items = _page(
+        ("<p>SPANINGSUPPSLAG</p>", (1300, 200, 1700, 250)),
+        ("<p>01 Polismyndighet*</p>", (280, 200, 550, 240)),
+        ("<p>Stockholm</p>", (357, 240, 590, 290)),
+        ("<p>02 Arbetsenhet*</p>", (285, 295, 505, 335)),
+        ("<p>Rk-A2</p>", (357, 340, 495, 385)),
+        ("<p>09 Brott med vilket uppgiften hör samman*</p>", (285, 491, 845, 533)),
+        ("<p>05 06 Utskriftsdatum 900905/GT</p>", (1345, 491, 2171, 579)),
+        ("<p>Förhörsprot Promemoria</p>", (1345, 554, 1824, 597)),
+        ("<p>08 Löpande nr</p>", (2171, 270, 2400, 309)),
+    )
+    blocks, _ = sl.parse_page(items, page_height=3509)
+    fields = form_fields(blocks)
+    assert field(fields, "06", "Utskriftsdatum").value == "900905/GT"
+    assert "Förhörsprot" not in field(fields, "06").value
+    assert_conserved_page(items)
+
+
+def test_label_behind_box_rule_is_not_a_value():
+    # sida 3: "| 25 Spanchef: sign" (rutans linje läst som |) står till höger om 24 men
+    # är en etikett, inte 24:s värde
+    blocks, _ = sl.parse_page(load_fixture("form-v1-e"), page_height=3507)
+    assert field(form_fields(blocks), "24").value == ""
+    assert "| 25 Spanchef: sign" in _md_paragraphs(blocks)
+
+
+# --- Beslut BK: prosa blir inga värden via radreglerna --------------------------------
+# (granskarens syntetiska prober; riktiga korta värden paras fortfarande, se ovan)
+
+
+@pytest.mark.parametrize(
+    "text,bbox",
+    [
+        ("och sen gick han", (1800, 700, 2100, 740)),  # till höger om 06
+        ("nej", (980, 700, 1100, 740)),  # mellan 04 och 05
+    ],
+)
+def test_prose_beside_empty_label_stays_text(text, bbox):
+    items = _row_page() + [raw(f"<p>{text}</p>", "Text", 99, bbox)]
+    blocks, _ = sl.parse_page(items, page_height=3500)
+    fields = form_fields(blocks)
+    assert all(text not in f.value for f in fields)
+    assert text in _md_paragraphs(blocks)
+    assert_conserved_page(items)
+
+
+def _footer_prose_page(*extra):
+    return _v1_page(
+        ("<p>18 I sak</p>", (100, 1000, 400, 1040)),
+        ("<p>Vittnet berättade att hon gick hem.</p>", (150, 1100, 1500, 1140)),
+        ("<p>19 Ovanstående uppslag</p>", (290, 2956, 613, 2998)),
+        ("<p>20 Tagit del</p>", (1573, 2953, 1752, 2991)),
+        ("<p>21 anknyter till uppslag nr</p>", (290, 3058, 648, 3100)),
+        ("<p>22 Registrerat</p>", (290, 3139, 500, 3180)),
+        ("<p>23 Ärendet tilldelat</p>", (538, 3139, 796, 3184)),
+        ("<p>24 Färdigbearbetat datum</p>", (1573, 3132, 1938, 3170)),
+        *extra,
+    )
+
+
+@pytest.mark.parametrize(
+    "text,bbox",
+    [("sa hon till slut.", (700, 3058, 1000, 3100)), ("Hon gick sedan hem.", (650, 2950, 1000, 2995))],
+)
+def test_prose_beside_footer_label_stays_text(text, bbox):
+    items = _footer_prose_page((f"<p>{text}</p>", bbox))
+    blocks, _ = sl.parse_page(items, page_height=3500)
+    assert all(text not in f.value for f in form_fields(blocks))
+    assert text in _md_paragraphs(blocks)
+    assert_conserved_page(items)
+
+
+def test_value_beside_footer_label_still_pairs():
+    items = _footer_prose_page(("<p>860308</p>", (1836, 2953, 2079, 3000)))
+    blocks, _ = sl.parse_page(items, page_height=3500)
+    assert field(form_fields(blocks), "20").value == "860308"
+
+
+def test_prose_under_label_row_is_not_split_across_columns():
+    # "springa mot Tunnelgatan" når in under 04 men är prosa: raden delas inte
+    items = _row_page(("Han sa att han sett mannen", (300, 1200)))
+    items.append(raw("<p>springa mot Tunnelgatan</p>", "Text", 99, (300, 805, 1100, 845)))
+    blocks, _ = sl.parse_page(items, page_height=3500)
+    fields = form_fields(blocks)
+    assert field(fields, "04").value == ""
+    assert "springa mot Tunnelgatan" not in field(fields, "03").value
+    paras = _md_paragraphs(blocks)
+    assert "springa mot Tunnelgatan" in paras
+    assert_conserved_page(items)
+
+
+def test_prose_line_alone_under_label_row_stays_text_in_order():
+    # beslut BL: en prosarad som når över 03 och 04 blir varken delad eller 03:s värde
+    items = _row_page()
+    items.append(raw("<p>springa mot Tunnelgatan</p>", "Text", 99, (300, 805, 1100, 845)))
+    items.append(raw("<p>Han kom hem sent.</p>", "Text", 100, (300, 900, 1100, 940)))
+    blocks, _ = sl.parse_page(items, page_height=3500)
+    fields = form_fields(blocks)
+    assert field(fields, "03").value == "" and field(fields, "04").value == ""
+    paras = _md_paragraphs(blocks)
+    k = paras.index("springa mot Tunnelgatan")
+    assert paras[k + 1] == "Han kom hem sent."
+    assert_conserved_page(items)
+
+
+def test_title_before_phone_is_split():
+    # "krinsp 08-7694169": ett ensamt gement titelord före ett nummer delas ändå
+    items = _row_page(("krinsp 08-7694169", (300, 1050)))
+    blocks, _ = sl.parse_page(items, page_height=3500)
+    fields = form_fields(blocks)
+    assert field(fields, "03").value == "krinsp"
+    assert field(fields, "04").value == "08-7694169"
+    assert_conserved_page(items)
+
+
+def test_value_like():
+    for text in ("87-07-17", "0 870980 TS", "EBE", "Ingvar Kjellvås", "krinsp Lennart Gustafsson", "A.T.",
+                 "Leif Marklund, krinsp.", "Knubb, Lars"):
+        assert fl._value_like(text), text
+    for text in ("nej", "springa mot", "sa hon till slut.", "Hon gick sedan hem.", "och sen gick han",
+                 "Han kom. sedan gick han"):
+        assert not fl._value_like(text), text
+
+
+def test_long_prose_on_label_row_still_blocks():
+    # beslut BK: undantaget för samma rad gäller grannetiketter, inte löptext
+    long = "Han berättade " + "att han hade gått hem " * 10
+    items = _v1_page(
+        ("<p>03 Uppgiftsmottagare</p>", (300, 700, 600, 740)),
+        (f"<p>{long}</p>", (300, 715, 2300, 755)),
+        ("<p>Insp Persson</p>", (300, 760, 600, 800)),
+    )
+    blocks, _ = sl.parse_page(items, page_height=3500)
+    assert field(form_fields(blocks), "03").value == ""
+    assert "Insp Persson" in _md_paragraphs(blocks)
+    assert_conserved_page(items)

@@ -25,8 +25,8 @@ def _fresh(tmp_path):
     return conn
 
 
-def test_schema_version_is_11():
-    assert SCHEMA_VERSION == 11
+def test_schema_version_at_least_11():
+    assert SCHEMA_VERSION >= 11
 
 
 def test_migration_011_adds_layout_columns(tmp_path):
@@ -43,7 +43,7 @@ def test_migration_011_adds_layout_columns(tmp_path):
     try:
         init_schema(conn)
         assert _columns(conn) >= LAYOUT_COLUMNS
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 11
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     finally:
         conn.close()
 
