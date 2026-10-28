@@ -26,7 +26,7 @@ När du gör förändringar i projektet ska du **alltid** uppdatera den använda
 - `docs/kom-igang.md` — snabbstart (svenska): krav, installation, API-nyckel, kör pipelinen, ställ första frågan
 - `docs/teknisk-referens.md` — detaljerad dokumentation (svenska): flödesdiagram, alla steg/flaggor, state-db, kunskapsgraf, LLM-config, filöversikt, tester
 - `docs/jev-reranker-pilot.md` — pilotstudie (svenska): Jev mot BGE som reranker, mått, begränsningar och rekommendation, samt uppföljningen som mätte kandidatlistans storlek (RAG och MCP), höjde `top_k` till 50 i båda lärna och gjorde Jev valbar även i utredningsläget
-- `docs/surya-layout-pilot.md` — spik och pilot (svenska): vad Surya 2 (layout + Markdown) ger för SPANINGSUPPSLAG-blanketter och förhör, maskeringarnas beteende, hastighet och konsekvenser för planen i `docs/superpowers/plans/2026-10-25-surya-layout-markdown.md`, samt piloten mot 50 riktiga arkivsidor (lines mot layout, blankettfält, repliker, sökkvalitet, `PAGE_TOO_LARGE`) med utfall per acceptanskriterium och rekommendationen att behålla `lines` som standard
+- `docs/surya-layout-pilot.md` — spik och pilot (svenska): vad Surya 2 (layout + Markdown) ger för SPANINGSUPPSLAG-blanketter och förhör, maskeringarnas beteende, hastighet och konsekvenser för planen i `docs/superpowers/plans/2026-10-25-surya-layout-markdown.md`, samt piloten mot 50 riktiga arkivsidor (lines mot layout, blankettfält, repliker, sökkvalitet, `PAGE_TOO_LARGE`) med utfall per acceptanskriterium och rekommendationen att behålla `lines` som standard; dokumentet innehåller också hastighetsutredningen 2026-10-28
 - `AGENTS.md` — instruktioner för framtida Codex-sessioner
 
 ## Project Overview
@@ -704,6 +704,13 @@ utelämnas ur Markdown, `PAGE_HEADER` blir kontextrad (`> Sidhuvud: …`) i varj
 kvar i `text`. Standardmotorn är `lines` tills piloten visat att `layout` är minst lika bra; byt den
 inte utan den. Vikterna (`datalab-to/surya-ocr-2-gguf`) har en egen licens — se modellkortet.
 
+**Innan ytterligare hastighetsoptimering**: läs Hastighetsutredning (2026-10-28) inkl.
+prototypen i `docs/surya-layout-pilot.md`. Ägarbeslut 2026-10-28: arbetet är pausat;
+`lines` är kvar som automatisk standard och `surya-layout` finns för riktad omskanning
+av blanketter, tabeller och förhör. Osäker tidig avbrytning ska inte integreras. Ingen
+aktiv optimeringsuppgift finns; arbetet återupptas endast efter ett nytt beslut från ägaren, inte
+automatiskt.
+
 **Omskanning av en sida (`src/operations/rescan.py`)**: `rescan-page` är ett
 vanligt skrivande bakgrundsjobb. Validering (PDF finns, `1 ≤ page ≤ sidantal`,
 historisk läsning hör till samma stam/sida) sker före all skrivning; den gällande
@@ -729,6 +736,8 @@ om en angiven sida inte gick att läsa; rc 3 och övriga icke-noll-koder blir
 Markdown. `--restore-reading` är CLI-only och döljs i Admin via
 `admin_ui.ADMIN_HIDDEN_PARAMS`; dokumentväljaren använder källan
 `state:pdf_files` (alla dokument, inte bara de med per-sida-rader).
+
+**Sidgranskningens statusfragment (`src/pages/9_Sidgranskning.py`)**: sidans långlivade `state_conn()` används bara i sidkörningen. `st.fragment(run_every=2)` kan köras på en annan tråd, så slutstatusen läses med en egen `db.connect()` som stängs i `finally` i samma anrop och tråd; `check_same_thread` är kvar på. Lägg aldrig tillbaka den fångade anslutningen i fragmentet — det ger `sqlite3.ProgrammingError` när jobbet avslutas.
 
 **Pipeline-resume (`scripts/run_pipeline.py`)**: OCR- och ingest-stegen körs alltid, även när download inte hittade nya PDF:er. Stegen är idempotenta och detta gör att en tidigare avbruten körning kan slutföras.
 

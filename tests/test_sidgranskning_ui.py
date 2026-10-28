@@ -10,11 +10,16 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import sqlite3
+import threading
 from pathlib import Path
 
 import pytest
+import streamlit
 from streamlit.testing.v1 import AppTest
 
+import casebook_ui
 import db
 from surya_layout import BlockKind, FormField, LayoutBlock, blocks_to_json, layout_to_json
 
@@ -312,3 +317,132 @@ def test_job_done_with_vanished_pdf_does_not_crash(miljo, monkeypatch):
     at.query_params["page"] = "1"
     at.run()
     assert not at.exception, at.exception
+
+
+@pytest.mark.parametrize("status", ["succeeded", "failed"])
+def test_terminal_status_read_is_thread_safe(miljo, monkeypatch, status):
+    """Slutstatusen läses i fragmentets egen tråd med en egen, stängd anslutning.
+
+    AppTest ritar hela sidan och kör fragmentet i sin scripttråd. Här behålls den
+    faktiska fragmentfunktionen (dekorationen fångas) och körs sedan på en annan
+    levande tråd, medan jobbet redan är terminalt i den riktiga temporära
+    state.db. Sidans långlivade anslutning (rad 49) får därför aldrig användas för
+    statusläsningen: SQLite:s ``check_same_thread`` ska bestå och fragmentet ska
+    öppna och stänga en egen anslutning i den tråd där det körs.
+    """
+    job_params = json.dumps({"pdf_stem": STEM, "page": 1})
+    log = miljo["root"] / "j.log"
+    log.write_text("rad ett\nOCR klar\n", encoding="utf-8")
+    miljo["state"]["active"] = {
+        "id": "job-1", "operation": "rescan-page", "status": "running",
+        "params_json": job_params, "log_path": str(log),
+    }
+    # En riktig rad i temp-databasen, redan terminal när fragmentet körs.
+    db.create_admin_job(miljo["conn"], job_id="job-1", operation="rescan-page",
+                        params_json=job_params, log_path=str(log))
+    db.claim_admin_job(miljo["conn"], "job-1", pid=os.getpid())
+    db.finish_admin_job(miljo["conn"], "job-1", status=status,
+                        exit_code=0 if status == "succeeded" else 1)
+
+    fragments: list = []
+
+    def capture_fragment(*args, **kwargs):
+        def decorate(func):
+            fragments.append(func)
+            return func
+        return decorate
+
+    # Behåll den faktiska funktionen i stället för att låta fragmentet köras
+    # bara som en del av AppTests hela sidkörning.
+    monkeypatch.setattr(streamlit, "fragment", capture_fragment)
+
+    page_conns: list[tuple[int, sqlite3.Connection]] = []
+    real_state_conn = casebook_ui.state_conn
+
+    def spy_state_conn():
+        conn = real_state_conn()
+        page_conns.append((threading.get_ident(), conn))
+        return conn
+
+    monkeypatch.setattr(casebook_ui, "state_conn", spy_state_conn)
+
+    fake_state: dict[str, object] = {}
+    reruns: list[str] = []
+    opened: list[sqlite3.Connection] = []
+    result: dict[str, object] = {}
+    release = threading.Event()
+
+    class _Rerun(Exception):
+        """Markerar att st.rerun avbröt fragmentet."""
+
+    def fake_rerun(*, scope="app"):
+        reruns.append(scope)
+        raise _Rerun
+
+    real_connect = db.connect
+
+    def spy_connect(*args, **kwargs):
+        conn = real_connect(*args, **kwargs)
+        opened.append(conn)
+        return conn
+
+    def run_fragment() -> None:
+        result["thread"] = threading.get_ident()
+        if not release.wait(10):
+            result["error"] = TimeoutError("fragmentet släpptes aldrig")
+            return
+        if not fragments:
+            return
+        try:
+            fragments[0]()
+        except _Rerun:
+            result["rerun"] = True
+        except BaseException as exc:  # noqa: BLE001 - felet ska rapporteras
+            result["error"] = exc
+        # Stängningskontrollen körs i samma tråd som skapade anslutningen; testet
+        # stänger alltså aldrig någon annan tråds anslutning.
+        closed: list[bool] = []
+        for conn in opened:
+            try:
+                conn.execute("SELECT 1")
+            except sqlite3.ProgrammingError as exc:
+                closed.append("closed" in str(exc))
+            else:
+                closed.append(False)
+        result["closed"] = closed
+
+    # Tråden finns och väntar redan medan sidan ritas, så sidans anslutning
+    # skapas medan tråden lever och får garanterat ett annat tråd-id.
+    thread = threading.Thread(target=run_fragment, daemon=True)
+    thread.start()
+
+    try:
+        at = AppTest.from_file(str(SIDA), default_timeout=60)
+        at.query_params["doc"] = STEM
+        at.query_params["page"] = "1"
+        at.run()
+        assert not at.exception, at.exception
+        assert len(fragments) == 1
+        assert len(page_conns) == 1
+        page_thread, _page_conn = page_conns[0]
+
+        # Jobbet är nu terminalt: reconcile returnerar inget aktivt jobb.
+        miljo["state"]["active"] = None
+
+        monkeypatch.setattr(streamlit, "session_state", fake_state)
+        monkeypatch.setattr(streamlit, "rerun", fake_rerun)
+        monkeypatch.setattr(db, "connect", spy_connect)
+        release.set()
+        thread.join(10)
+    finally:
+        release.set()
+        thread.join(10)
+
+    assert not thread.is_alive()
+
+    assert result["thread"] != page_thread
+    assert "error" not in result, result.get("error")
+    assert fake_state["sg_job_done"] == {"status": status, "page": 1}
+    assert reruns == ["app"]
+    assert len(opened) == 1
+    assert result["closed"] == [True]

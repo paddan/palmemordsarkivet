@@ -550,6 +550,131 @@ Räkningen är oförändrad: **50/56 (89 %)** på de fem kontrollerade blankette
 
 Fyra av fem kriterier är uppfyllda. Standarden förblir `lines` tills hastighetskriteriet är uppfyllt, och Task 12 genomförs inte (regel BA).
 
+### Hastighetsutredning (2026-10-28)
+
+Fyra scratch-only mätningar på tre redan renderade pilotsidor. Ingen produktionskod,
+beroendefil, databas eller standard ändrades, och inga resultat är ett godkänt
+hastighetskriterium. Artefakterna ligger under
+`/private/var/folders/kf/csqzr4951rlc7k41z0tqtgd40000gn/T/opencode/surya-speed-20261028/`
+(temporära skript, inte repo-verktyg). Mätningarna kördes på en Apple M1 Max, 32 GB:
+layout med `surya-ocr 0.22.1` (Python 3.12.14) och llama.cpp `0.7.0` build 11669,
+lines med `surya-ocr 0.17.1` i projektets `.venv` (Python 3.14.10, torch 2.11.0,
+MPS). Tiderna är väggtid, och OS-filcachen kan göra kallstarter snabbare.
+
+**Metod.** Sidorna 3, 27 och 33 togs från bilagan och renderades en gång i 300 dpi
+(med `cap_layout_image`). Baslinjen körde layout via `ocr_surya_layout` och lines via
+`ocr_surya`, seriellt med en blank uppvärmningssida per motor. De kontrollerade
+jämförelserna (H1/H2/H3a) använde färsk isolerad `HOME` och en egen llama-server per
+observation, med `STATE_DB` och `ADMIN_JOB_LOG_ROOT` i scratch, bevarade
+`HF_HOME`/`MODEL_CACHE_DIR` och `HF_HUB_OFFLINE=1`. Ingen databas skrevs, inga
+prompt-cachar återanvändes mellan varianterna och en redan körande llama-server på
+annan port rördes aldrig. `generated/`-fingeravtryck och `git status` var oförändrade
+efter varje mätning.
+
+Kör om (samma cachar och venvar krävs):
+
+```bash
+cd /private/var/folders/kf/csqzr4951rlc7k41z0tqtgd40000gn/T/opencode/surya-speed-20261028 && ./run_baseline.sh
+cd /private/var/folders/kf/csqzr4951rlc7k41z0tqtgd40000gn/T/opencode/surya-speed-20261028/experiment-h1 && ./run_h1.sh
+cd /private/var/folders/kf/csqzr4951rlc7k41z0tqtgd40000gn/T/opencode/surya-speed-20261028/experiment-h2 && ./run_h2.sh
+cd /private/var/folders/kf/csqzr4951rlc7k41z0tqtgd40000gn/T/opencode/surya-speed-20261028/experiment-h3a && ./run_h3a.sh
+```
+
+**Baslinje, tre sidor.** Kall blank uppvärmning: layout 3,635 s och lines 3,282 s
+i den slutliga körningen; en första valideringskörning samma session tog 9,7 s
+respektive 7,6 s, så siffran är en undre gräns. Varma sidor:
+
+| Sida | Typ | Layout | Lines | layout/lines |
+|---:|---|---:|---:|---:|
+| 3 | blankett | 28,689 s | 61,138 s | 0,469 |
+| 27 | förhör prosa | 30,011 s | 26,860 s | 1,117 |
+| 33 | låg kvalitet | 80,334 s | 39,779 s | 2,020 |
+| **Summa** | | **139,034 s** | **127,777 s** | **1,088** |
+
+Sida 3 var lines första riktiga sida efter en liten blank uppvärmning; 61,1 s mot
+26,9–39,8 s för de följande tyder på lat MPS-kompilering för större batchar, så just
+den siffran är osäker som "varm". **Inget hastighets-PASS**: tre sidor är ett
+stickprov, inte Task 12, och inga korpusanspråk eller statistisk säkerhet görs.
+
+**H1, oanvända slots/KV.** På sidorna 3 och 27 jämfördes `--parallel 8 --ctx-size
+98304` (12 288/slot) mot `--parallel 1 --ctx-size 12288` (samma per-slot-budget),
+fyra observationer per sida i ordning A-B-B-A/B-A-A-B. B/A blev **1,105** respektive
+**1,109**: färre slots var cirka 10 % långsammare, inte snabbare. H1 fick inget stöd
+och utgör inte underlag för någon defaultändring.
+
+**H2, logprobs/confidence.** På sida 27 gav `SURYA_INFERENCE_LOGPROBS=0` mot `1`
+(total B/A **0,981**, vinst **1,93 %**) men servertiden var i praktiken oförändrad
+(B/A **0,997**, vinst 0,26 %); vinsten låg i mindre svarstransport. B gav `null` i
+confidence för alla 31 block, A mätte alla 31. Ingen tydlig vinst över ~5 %, och
+confidence-signalen får inte tas bort utan granskning. Inte underlag för defaultbyte.
+
+**H3a, sida 33:s första giriga anrop.** Två oberoende första anrop (ingen Surya-retry,
+ingen fallback, ingen warmup) tog **73,406 s** och **69,762 s**. Båda svarade utan
+HTTP-fel med `finish_reason=length`, `completion_tokens` 8 117 och
+prompt 4 171: kontexten fylldes till **12 288** (4 171 + 8 117), inte max-token-taket
+12 288. Svansen var periodisk med **44 tecken × 90 upprepningar**; `detect_repeat_token`
+på full text och med `cut_from_end=50` (samma kontroller som `_should_retry`) samt
+Suryas egen loopdetektor slog till i båda försöken och content-, token- och
+parsed-hasharna var identiska. Första sampelprefix som slog till var token **1 185**
+(full text) respektive **1 249** (`cut_from_end=50`), men ett tidigt prefix bevisar
+inte en slutlig repetitionsloop. Det talar för att det dyra första anropet innehåller
+en decoder-repeat snarare än bara lång legitim text eller ett HTTP-fel; två försök
+ger inte ett kausalt bevis. Baslinjens 80,3 s för sida 33 rymmer det omförsök
+som produktionsvägen gör efter en sådan repeat. Parsningen gav 20 block (20 giltiga,
+20 distinkta, alla `Text`); det är en räkning, inte en kvalitetsgranskning, och säger
+inte att ingen giltig text tappas. En rå räkning eller första sampel är **ingen säker
+stoppolicy**.
+
+**Slutsats.** Hastighetskriteriet är fortfarande **FAIL** och `lines` är kvar som
+standard. H1/H2 ger inte skäl att ändra någon prestandadefault. En scratchprototyp
+för streaming har provats (se nedan): streaming och avbrott fungerar tekniskt, men
+den fasta stoppregeln fälldes av falska positiver på legitima upprepningar.
+Produktionsstreaming är därför inte införd; defaults, tokenbudget och kriterium
+ligger kvar. Det är inte en godkänd produktionsändring: sänk inte max-token och
+ändra inte kriteriet.
+
+### Strömmande scratchprototyp (2026-10-28)
+
+En separat scratchprototyp (inte produktion) testade SSE-streaming, tidigt avbrott
+och confidence under
+`/private/var/folders/kf/csqzr4951rlc7k41z0tqtgd40000gn/T/opencode/surya-speed-20261028/prototype-stream/`.
+`run_prototype.sh` kör liveförsöken och `run_correction.sh` tokeniseringskorrigeringen;
+artefakterna är temporära.
+
+På #3 och #27 blev text, Markdown, layout och råblock utan confidence identiska med
+sparade H1/H2. Confidence fanns per token, men sidmedelvärdena skilde 1,398e-5
+respektive 9,85e-6. Det ligger inom den valda toleransen 1e-4, men **exakt
+confidence-ekvivalens är inte bevisad** (ingen parad nonstream-körning). Inga absoluta
+SSE-tider jämfördes, så ingen overheadslutsats dras.
+
+Provregeln var fast före körningen: `detect_repeat_token` full/cut50, kontrollerad
+var 32:e token och sann i minst 512 nya tokens innan avbrott. På #33 avbröts vid
+1 696 genererade tokens mot H3a:s 8 117, alltså 79 % färre genererade tokens (inte
+79 % snabbare). Loggen visade `slot release`, alla slots var fria och en blank
+följdförfrågan i samma slot tog 0,262 s. Den observerade tiden 0,132 s räknas från
+klientstängningen och är **inte** en exakt server-release-latens; logg + fria slots
++ samma slot bär cancel-beviset.
+
+Den riktiga llama-tokenizeringen gav: 120 tomma `<td></td>` = 253 tokens (ingen
+träff, under 512-fönstret), 2 000 punkter = 2 002 tokens och 200 upprepade
+fältetiketter = 4 002 tokens; de två senare utlöste regeln. Alltså **två falska
+positiver** på legitima upprepningar. Den tidigare char-proxy-körningen (tre falska
+positiver) är ogiltig och ersatt.
+
+Stoppregeln är därför **FAIL** och streaming är inte införd i produktion. Inga
+defaults, tokenbudget eller kriteriet ändras; Task 12 är inte genomförd. Prototypen
+visar att streaming och avbrott tekniskt fungerar, inte att en säker stoppolicy finns.
+
+### Beslut efter utredningen (2026-10-28)
+
+Ägarbeslut: hastighetsoptimeringsarbetet pausas tills vidare. `lines` är kvar som
+automatisk standard i pipelinen; `surya-layout` finns kvar för riktad omskanning av
+blanketter, tabeller och förhör. Funktionerna behålls utan att layout görs till
+standardmotor. Osäker tidig avbrytning (`early stop`) ska inte
+integreras. Det finns ingen aktiv optimeringsuppgift och ingen automatisk fortsättning;
+arbetet återupptas bara efter ett nytt beslut från ägaren. Fortsatta förbättringar ska
+utgå från problem som visar sig vid faktisk användning.
+
 ### Bilaga: urvalet
 
 Kolumnen *Lines* markerar de 20 sidor som också kördes med lines. Sida 42 och 50

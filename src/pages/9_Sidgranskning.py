@@ -310,7 +310,15 @@ with st.container(border=True):
         def _job_status() -> None:
             current = _job_service.reconcile_active_job()
             if not _active(current) or (current or {}).get("id") != job_id:
-                row = db.get_admin_job(conn, job_id)
+                # Fragmentet kan köras på en annan tråd än sidans långlivade
+                # anslutning, och SQLite:s trådskydd gäller även här: läs
+                # slutstatusen med en egen kortlivad anslutning som stängs i
+                # samma anrop och tråd.
+                status_conn = db.connect()
+                try:
+                    row = db.get_admin_job(status_conn, job_id)
+                finally:
+                    status_conn.close()
                 status = row["status"] if row is not None else "okänd"
                 log.debug("rescan-jobb %s för %s s.%s avslutat: %s", job_id, stem, page, status)
                 if pdf_path is not None:

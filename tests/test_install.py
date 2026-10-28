@@ -5,6 +5,8 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 _spec = importlib.util.spec_from_file_location("palme_install", ROOT / "scripts" / "install.py")
 assert _spec and _spec.loader
@@ -67,9 +69,17 @@ def test_unresolved_identity_is_detected_and_message_names_env() -> None:
     assert "PATH" in install.LLAMA_MISSING_MESSAGE
 
 
-def test_install_fails_when_identity_unresolved(monkeypatch, capsys) -> None:
+@pytest.mark.parametrize("venv_exists", [False, True])
+def test_install_fails_when_identity_unresolved(
+    tmp_path: Path, monkeypatch, capsys, venv_exists: bool
+) -> None:
     import subprocess
 
+    venv = tmp_path / "surya-venv"
+    if venv_exists:
+        (venv / "bin").mkdir(parents=True)
+    monkeypatch.setattr(install, "SURYA_LAYOUT_VENV", venv)
+    monkeypatch.setattr(install, "venv_python_version", lambda path: "3.12")
     monkeypatch.setattr(install.shutil, "which", lambda cmd: "/bin/x")
     monkeypatch.setattr(install, "llama_server_present", lambda env=None: True)
 

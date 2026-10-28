@@ -1143,7 +1143,10 @@ som inte är Streamlit ligger i `src/page_review.py` (`load_page_view`,
   för just den här sidan visas status och loggsvans i ett
   `st.fragment(run_every=2)` tills jobbet är klart; då töms sidbildens cache för
   sidan och hela sidan ritas om med den nya läsningen (texten läses om från
-  filen vid varje körning och cachas inte).
+  filen vid varje körning och cachas inte). Eftersom fragmentet kan köras på en
+  annan tråd än sidans anslutning läses slutstatusen med en egen kortlivad
+  `db.connect()` som stängs direkt i fragmenttråden; SQLite:s trådskydd
+  (`check_same_thread`) är kvar på.
 - **Historik:** hopfällbar lista över `pdf_page_readings` (tid, motor, poäng,
   orsak) med *Visa* (texten i `st.code`) och *Återställ*.
 

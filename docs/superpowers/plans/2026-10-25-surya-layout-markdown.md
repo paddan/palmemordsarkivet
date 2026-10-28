@@ -4,6 +4,8 @@
 
 **Mål:** Surya-OCR läser varje sida som layoutblock (rubriker, stycken, listor, tabeller, sidhuvud/sidfot) och sparar både ren text och Markdown, så att chunkning och LLM-kontext behåller tabeller och rubriker. En ny sida **Sidgranskning** visar varje PDF-sida bredvid den text (och Markdown/layout) som OCR:en gav, och låter användaren skanna om en enskild sida med vald motor — med föregående läsning sparad så att en sämre omskanning kan ångras.
 
+**Status (2026-10-28):** Task 0–11 är genomförda och committade. Standarden är kvar på `lines`. Task 12 är **PARKERAD efter ägarbeslut 2026-10-28** — inte genomförd; hastighetskriteriet är fortfarande **FAIL** och ligger fast. Den återupptas endast efter ett nytt beslut från ägaren, inte automatiskt (regel BA, se `docs/surya-layout-pilot.md`, *Beslut efter utredningen (2026-10-28)*).
+
 **Arkitektur:** Samma mönster som infoscry (`/Users/patrik/projects/infoscry/scripts/ocr/surya_worker.py` + `SuryaStructureParser.kt`): en fristående worker i en **egen venv** med `surya-ocr==0.22.1` (Surya 2 via `llama-server`) läser en sida per JSON-rad över stdin/stdout och skickar råa block (HTML, etikett, läsordning, bbox). All tolkning av HTML → block → Markdown/ren text sker i projektets egen process, i en ren modul utan Surya-import. `pdf_pages.text` förblir ren text (alla nuvarande konsumenter oförändrade); Markdown och blocklayout läggs i nya kolumner och används av ingest bara när sidans text inte ändrats efter OCR.
 
 **Tech stack:** Python 3.11+, stdlib `html.parser` (inget nytt beroende), SQLite via `src/db/`, `surya-ocr==0.22.1` + Homebrew `llama.cpp` i separat Python 3.12-venv.
@@ -74,7 +76,7 @@ Syftet är att se vad Surya 2 faktiskt svarar för arkivets två vanligaste doku
 
 Portera infoscrys worker (samma struktur: `ProtocolReader`, `Engine` med lat start och `stop()`, `runtime_identity`, `runtime_failure_code`, `BoundedLine`, SIGTERM→`SystemExit`). Skillnad: ingen `html_to_text` — workern skickar bara rå HTML; status `empty` när ingen blocktext finns efter att taggar strippats.
 
-- [ ] **Steg 1: Skriv failande tester** med en falsk `Engine` vars `predictor()` returnerar objekt med `.blocks` (attribut `html`, `label`, `reading_order`, `polygon`, `confidence`):
+- [x] **Steg 1: Skriv failande tester** med en falsk `Engine` vars `predictor()` returnerar objekt med `.blocks` (attribut `html`, `label`, `reading_order`, `polygon`, `confidence`):
   - `test_read_page_returns_raw_blocks` — två block, svaret har `status == "read"`, `blocks[0]["html"] == "<h2>PM</h2>"`, `bbox == [10, 20, 110, 40]` ur polygonen.
   - `test_blank_blocks_give_empty` — block med `html="<p> </p>"` → `status == "empty"`.
   - `test_relative_image_path_rejected` → `code == "UNREADABLE_IMAGE"`.
@@ -83,10 +85,10 @@ Portera infoscrys worker (samma struktur: `ProtocolReader`, `Engine` med lat sta
   - `test_wrong_protocol` → `MALFORMED_REQUEST`.
   - `test_import_error_maps_to_needs_surya` — `runtime_failure_code(ImportError()) == "NEEDS_SURYA"`.
   - `test_main_exits_on_stdin_close` — kör `main()` med tom stdin, returnerar 0 och anropar `engine.stop()`.
-- [ ] **Steg 2:** `.venv/bin/pytest tests/test_surya_worker.py -v` → FAIL (modul saknas).
-- [ ] **Steg 3:** Implementera `src/surya_worker.py`; `Engine.predictor()` gör `get_default_manager().start()` + `RecognitionPredictor(manager)` och sidan läses med `predictor([image], full_page=True)[0]`. Lägg `surya_worker` i `py-modules`.
-- [ ] **Steg 4:** `.venv/bin/pytest tests/test_surya_worker.py tests/test_packaging.py -v` → PASS.
-- [ ] **Steg 5:** `.venv/bin/python scripts/test.py --static` → grönt (mypy: Surya-importerna är dynamiska och lokala, som i infoscry).
+- [x] **Steg 2:** `.venv/bin/pytest tests/test_surya_worker.py -v` → FAIL (modul saknas).
+- [x] **Steg 3:** Implementera `src/surya_worker.py`; `Engine.predictor()` gör `get_default_manager().start()` + `RecognitionPredictor(manager)` och sidan läses med `predictor([image], full_page=True)[0]`. Lägg `surya_worker` i `py-modules`.
+- [x] **Steg 4:** `.venv/bin/pytest tests/test_surya_worker.py tests/test_packaging.py -v` → PASS.
+- [x] **Steg 5:** `.venv/bin/python scripts/test.py --static` → grönt (mypy: Surya-importerna är dynamiska och lokala, som i infoscry).
 
 ### Task 2: Ren layoutmodul — HTML-block → struktur, text och Markdown
 
@@ -110,7 +112,7 @@ Etikettmappningen är infoscrys (`SuryaStructureParser.kindOf`): `SectionHeader�
 
 Markdown-regler: rubrik `#`×nivå; listpunkt `- `; tabell som pipe-tabell med första raden som rubrikrad (finns ingen `th`-rad blir första raden rubrik), `|` i cell → `\|`, radbrytning i cell → mellanslag, `rowspan`/`colspan` → cellen upprepas tom i de spannade positionerna; formel `$$…$$`; kod i ```-staket; bildtext/fotnot som vanligt stycke med prefix `*Bildtext:*`/`*Fotnot:*`; block skilda med en tomrad; `PAGE_HEADER`/`PAGE_FOOTER` utelämnas. Ett stycke vars rad börjar med `#`, `- `, `* `, `+ ` eller `\d+\. ` får ett `\` framför.
 
-- [ ] **Steg 1: Skriv failande tester:**
+- [x] **Steg 1: Skriv failande tester:**
   - `test_label_mapping` — parametriserad över alla etiketter ovan → förväntad `kind`.
   - `test_sorted_by_reading_order_stable` — indata `B(2), C(None), D(None), A(1)` → texter `["A", "B", "C", "D"]` (block utan ordning sorteras sist och behåller inbördes mottagen ordning).
   - `test_table_with_spans` — `<table><tr><th>Namn</th><th>Tid</th></tr><tr><td colspan="2">Okänd</td></tr></table>` → `rows[1][0].col_span == 2`; Markdown `| Namn | Tid |\n| --- | --- |\n| Okänd |  |`.
@@ -121,9 +123,9 @@ Markdown-regler: rubrik `#`×nivå; listpunkt `- `; tabell som pipe-tabell med f
   - `test_markdown_escapes_content` — stycke `"# 12 i ordningen"` → `"\\# 12 i ordningen"`; cell `"a|b"` → `"a\\|b"`.
   - `test_with_redactions_orders_by_y` — block med bbox y 100–120 och 300–320, maskering (200, 210) → `[MASKAD]` hamnar mellan, `order` 0,1,2.
   - `test_json_roundtrip`.
-- [ ] **Steg 2:** `.venv/bin/pytest tests/test_surya_layout.py -v` → FAIL.
-- [ ] **Steg 3:** Implementera med `html.parser.HTMLParser` och en tillåtlista (`table, thead, tbody, tr, th, td, h1–h6, p, ul, ol, li, br, math, code, pre`, inline-formatering); allt annat blir textinnehåll. Lägg modulen i `py-modules`.
-- [ ] **Steg 4:** testerna + `tests/test_packaging.py` → PASS; `scripts/test.py --static` grönt.
+- [x] **Steg 2:** `.venv/bin/pytest tests/test_surya_layout.py -v` → FAIL.
+- [x] **Steg 3:** Implementera med `html.parser.HTMLParser` och en tillåtlista (`table, thead, tbody, tr, th, td, h1–h6, p, ul, ol, li, br, math, code, pre`, inline-formatering); allt annat blir textinnehåll. Lägg modulen i `py-modules`.
+- [x] **Steg 4:** testerna + `tests/test_packaging.py` → PASS; `scripts/test.py --static` grönt.
 
 ### Task 2b: Formulär och förhör
 
@@ -148,7 +150,7 @@ Markdown-regler: rubrik `#`×nivå; listpunkt `- `; tabell som pipe-tabell med f
 
 `data/formular/spaningsuppslag.json` innehåller de varianter som spiken visade, med etiketterna så som de är tryckta på blanketten (kontrollera mot sidbilden, inte mot Tesseract-texten).
 
-- [ ] **Steg 1: Failande tester:**
+- [x] **Steg 1: Failande tester:**
   - `test_parse_spaningsuppslag_fields` — `tests/fixtures/surya/form-v1-a.json` → `03 Uppgiftsmottagare: Insp NEK Persson`, `05 datum: 860316`, `06 klockan: 09.10`, `08 Löpande nr: 2449`, `11 per telefon` ikryssad, `11 per brev` inte; `form-v2-b.json` (etikett och värde i samma `<br/>`-block) → `01 Polisdistrikt: Stockholm`; `form-v2-a.json` (fält som `PageHeader`) → `03 Upprättat(d) av: Krinsp Sören Morberg`.
   - `test_empty_header_fields_omitted` — `forhor-dialog-a.json` (tomt blanketthuvud på sida 2) → inga fältrader i Markdown, men etiketterna finns kvar i `page_text`.
   - `test_checkbox_mask_resolved` — `forhor-dialog-b.json` + en syntetisk bild med en fylld svart rektangel i blockets bbox → `F: Ja, [MASKAD], klockan …`; samma block med en ihålig ram → kryssrutan står kvar.
@@ -161,7 +163,7 @@ Markdown-regler: rubrik `#`×nivå; listpunkt `- `; tabell som pipe-tabell med f
   - `test_split_turns` — `"F: Var stod du?\nM: Vid Dekorima.\n[MASKAD] Ja."` → `[("F", "Var stod du?"), ("M", "Vid Dekorima."), ("[MASKAD]", "Ja.")]`; vanlig mening med kolon mitt i raden delas inte.
   - `test_interrogation_header_fields` — `"Förhörsledare: krinsp Sören Morberg."` → `FormField(None, "Förhörsledare", "krinsp Sören Morberg.", None)`.
   - `test_markdown_turns_and_fields` — `page_markdown` ger `**F:** Var stod du?` och `- **03 Uppgiftsmottagare:** …`.
-- [ ] **Steg 2:** FAIL. **Steg 3:** implementera. **Steg 4:** PASS + `--static` grönt.
+- [x] **Steg 2:** FAIL. **Steg 3:** implementera. **Steg 4:** PASS + `--static` grönt.
 
 ### Task 3: Klient som äger worker-processen
 
@@ -182,14 +184,14 @@ Markdown-regler: rubrik `#`×nivå; listpunkt `- `; tabell som pipe-tabell med f
 
 Startar workern med `start_new_session=True`; `close()` stänger stdin, väntar 10 s, sedan `os.killpg` SIGTERM → SIGKILL efter 5 s (samma mönster som jobbinvarianterna). Svarsrader läses med gräns `MAX_RESULT_BYTES`. Felkoderna `NEEDS_*`/`SURYA_START_FAILED` → `SuryaUnavailable`; övriga → `SuryaPageError`. Timeout eller död process → `close()` och `SuryaUnavailable("WORKER_DIED")`.
 
-- [ ] **Steg 1: Skriv failande tester:**
+- [x] **Steg 1: Skriv failande tester:**
   - `test_read_page_roundtrip` — falsk worker ekar ett block → `SuryaPage.status == "read"`.
   - `test_runtime_error_raises_unavailable` — falsk worker svarar `NEEDS_LLAMA_CPP` → `SuryaUnavailable`, `code == "NEEDS_LLAMA_CPP"`.
   - `test_page_error_is_recoverable` — `INFERENCE_FAILED` → `SuryaPageError`, nästa `read_page` fungerar.
   - `test_page_timeout` — falsk worker sover → `SuryaUnavailable("WORKER_DIED")` inom `page_timeout=1`.
   - `test_worker_crash_kills_group` — falsk worker startar ett barn (`sleep 60`) och dör; efter `close()` lever varken worker eller barn (`os.killpg(pgid, 0)` → `ProcessLookupError`).
   - `test_env_override` — `PALME_SURYA_PYTHON` styr `surya_python()`.
-- [ ] **Steg 2:** kör → FAIL. **Steg 3:** implementera. **Steg 4:** PASS + `--static` grönt.
+- [x] **Steg 2:** kör → FAIL. **Steg 3:** implementera. **Steg 4:** PASS + `--static` grönt.
 
 ### Task 4: Databas — Markdown och layout per sida
 
@@ -203,8 +205,8 @@ Startar workern med `start_new_session=True`; `close()` stänger stdin, väntar 
   - `record_page(conn, *, pdf_stem, page_num, engine, text, score, markdown: str | None = None, layout_json: str | None = None, engine_identity: str | None = None) -> None` — UPSERT skriver alltid alla tre (en omkörning med Tesseract nollar alltså Markdown).
   - `get_page_markdown_map(conn, pdf_stem: str) -> dict[int, tuple[str, str]]` — `page_num → (text, markdown)` för sidor där `markdown IS NOT NULL`.
 
-- [ ] **Steg 1: Failande tester:** `test_migration_011_adds_layout_columns` (gammal fixture → kolumnerna finns, `user_version == 11`); `test_record_page_stores_markdown`; `test_rerecord_without_markdown_clears_it`; `test_get_page_markdown_map`.
-- [ ] **Steg 2:** FAIL. **Steg 3:** implementera. **Steg 4:** `tests/test_db.py tests/test_sql_boundary.py tests/test_db_package.py` PASS, `--static` grönt.
+- [x] **Steg 1: Failande tester:** `test_migration_011_adds_layout_columns` (gammal fixture → kolumnerna finns, `user_version == 11`); `test_record_page_stores_markdown`; `test_rerecord_without_markdown_clears_it`; `test_get_page_markdown_map`.
+- [x] **Steg 2:** FAIL. **Steg 3:** implementera. **Steg 4:** `tests/test_db.py tests/test_sql_boundary.py tests/test_db_package.py` PASS, `--static` grönt.
 
 ### Task 5: Motorn `surya-layout` i `ocr_pages` och OCR-operationen
 
@@ -221,7 +223,7 @@ Startar workern med `start_new_session=True`; `close()` stänger stdin, väntar 
 
 Beteende: workern öppnas en gång per `run_ocr_pages`-anrop (`with SuryaWorker() as worker`), sidbilden sparas som PNG (som Tesseract-grenen) och skickas som absolut sökväg. `SuryaPageError` → sidan loggas med `ctx.log(..., level="error")` + `log_error("ocr_pages", f"{pdf.name}#p{n}", code)` och hoppas. `SuryaUnavailable` → loggas, resten av filen avbryts, returkod 1 (så `run_surya_fallback` markerar `surya_failed`). `degraded` loggas på varning. Engine-värdet i `pdf_pages` blir `surya-layout`. I `operations/ocr.py`: `run_surya_fallback` och `_run_redo` skickar `--engine surya-layout` när `options.surya_engine == "layout"`; tillgänglighet kontrolleras med `surya_layout_available()` i stället för `_surya_available()` för det valet, och en saknad runtime loggas med orsak (inte tyst hoppas).
 
-- [ ] **Steg 1: Failande tester** (falsk `SuryaWorker` injiceras via parameter `surya_worker=` till `run_ocr_pages`, standard `None` = skapa riktig):
+- [x] **Steg 1: Failande tester** (falsk `SuryaWorker` injiceras via parameter `surya_worker=` till `run_ocr_pages`, standard `None` = skapa riktig):
   - `test_layout_page_records_text_and_markdown` — `pdf_pages`-raden har `engine == "surya-layout"`, `markdown` med `| Namn | Tid |`, `text` med `Namn\tTid`.
   - `test_empty_page_recorded_without_markdown` — `status "empty"` → `text == ""`, `markdown is None`.
   - `test_redaction_inserted_between_blocks`.
@@ -229,7 +231,7 @@ Beteende: workern öppnas en gång per `run_ocr_pages`-anrop (`with SuryaWorker(
   - `test_unavailable_aborts_file_with_rc1`.
   - `test_redo_uses_layout_engine_when_selected` (i `test_ocr_operation.py`, inspekterar argv till `run_process`).
   - Befintliga `test_help_explains_every_field_in_every_operation` m.fl. ska fortsatt gå igenom med den nya parametern.
-- [ ] **Steg 2:** FAIL. **Steg 3:** implementera; lägg Admin-hjälppunkten: *Surya-motor — `lines` är den gamla radläsningen, `layout` läser rubriker, tabeller och sidhuvud och sparar även Markdown (kräver separat Surya 2-installation).* **Steg 4:** alla nämnda testfiler PASS, `--static` grönt.
+- [x] **Steg 2:** FAIL. **Steg 3:** implementera; lägg Admin-hjälppunkten: *Surya-motor — `lines` är den gamla radläsningen, `layout` läser rubriker, tabeller och sidhuvud och sparar även Markdown (kräver separat Surya 2-installation).* **Steg 4:** alla nämnda testfiler PASS, `--static` grönt.
 
 ### Task 6: Markdown i ingest — strukturmedveten chunkning
 
@@ -246,8 +248,8 @@ Beteende: workern öppnas en gång per `run_ocr_pages`-anrop (`with SuryaWorker(
 
 `is_useful` gäller fortfarande; tabellchunks räknas mot `MIN_ALNUM_RATIO` efter att `|`, `-` och mellanslag tagits bort, annars förkastas glesa tabeller. Ingen ändring av LanceDB-schemat. Om `rag/ask.py` eller någon källkortsvy visar chunktext med `st.markdown`, escapa `$` där (Granskningsfokus 5).
 
-- [ ] **Steg 1: Failande tester:** `test_chunk_markdown_never_splits_table_row`, `test_chunk_markdown_repeats_table_header`, `test_chunk_markdown_splits_at_blank_lines`, `test_normalize_markdown_keeps_pipes_and_indent`, `test_page_header_prefixed_to_every_chunk`, `test_chunk_keeps_question_with_answer`, `test_form_block_split_between_fields`, `test_stale_markdown_ignored`, `test_fresh_markdown_used`, `test_sparse_table_chunk_is_useful`, samt `test_chunk_dollar_escaped_for_display` om en `st.markdown`-väg finns.
-- [ ] **Steg 2:** FAIL. **Steg 3:** implementera. **Steg 4:** PASS + `--static` grönt. Kontrollera att `merge_pages.merge_one` skriver om `text/<stem>.txt` efter en layoutsida så att mtime-deltat i ingest plockar upp filen (befintligt beteende — lägg ett test i `tests/test_merge_pages.py` om det saknas).
+- [x] **Steg 1: Failande tester:** `test_chunk_markdown_never_splits_table_row`, `test_chunk_markdown_repeats_table_header`, `test_chunk_markdown_splits_at_blank_lines`, `test_normalize_markdown_keeps_pipes_and_indent`, `test_page_header_prefixed_to_every_chunk`, `test_chunk_keeps_question_with_answer`, `test_form_block_split_between_fields`, `test_stale_markdown_ignored`, `test_fresh_markdown_used`, `test_sparse_table_chunk_is_useful`, samt `test_chunk_dollar_escaped_for_display` om en `st.markdown`-väg finns.
+- [x] **Steg 2:** FAIL. **Steg 3:** implementera. **Steg 4:** PASS + `--static` grönt. Kontrollera att `merge_pages.merge_one` skriver om `text/<stem>.txt` efter en layoutsida så att mtime-deltat i ingest plockar upp filen (befintligt beteende — lägg ett test i `tests/test_merge_pages.py` om det saknas).
 
 ### Task 7: Installation och dokumentation
 
@@ -257,7 +259,7 @@ Beteende: workern öppnas en gång per `run_ocr_pages`-anrop (`with SuryaWorker(
 
 `--surya-layout` kör: `brew install llama.cpp uv` (om saknas), `uv venv --python 3.12 ~/.local/share/palmemordsarkivet/surya-venv`, `uv pip install --python <venv>/bin/python 'surya-ocr==0.22.1'`, och sist `<venv>/bin/python src/surya_worker.py --identity` som kontroll. Dokumentera `PALME_SURYA_PYTHON` (inkl. att infoscrys venv kan återanvändas), `LLAMA_CPP_BINARY`, viktlicensen (datalab-to/surya-ocr-2-gguf — kontrollera modellkortet), motorvalet, färskhetsregeln och att `PAGE_HEADER`/`PAGE_FOOTER` saknas i Markdown/embeddings men finns i text. AGENTS.md: katalogträdet (`surya_worker.py`, `surya_layout.py`, `surya_client.py`), en punkt under *Non-obvious Design Decisions* om varför workern har egen venv och varför `text` förblir ren text.
 
-- [ ] **Steg 1:** implementera flaggan + dokumentation. **Steg 2:** `.venv/bin/python scripts/install.py --help`-utskriften visar flaggan; `scripts/test.py --static` grönt.
+- [x] **Steg 1:** implementera flaggan + dokumentation. **Steg 2:** `.venv/bin/python scripts/install.py --help`-utskriften visar flaggan; `scripts/test.py --static` grönt.
 
 ### Task 8: Läsningshistorik och sidvy-logik (Streamlit-fri)
 
@@ -284,8 +286,8 @@ Beteende: workern öppnas en gång per `run_ocr_pages`-anrop (`with SuryaWorker(
     - `draw_layout_overlay(image, blocks: list[LayoutBlock], ocr_dpi: int, view_dpi: int) -> Image` — ramar per block, färg per `BlockKind`, bbox skalas `view_dpi / ocr_dpi`.
     - `escape_markdown_dollars(md: str) -> str` — `$` → `\$`.
 
-- [ ] **Steg 1: Failande tester:** `test_migration_012_creates_readings`; `test_archive_and_list_readings_newest_first`; `test_load_page_view_without_pdf_pages_row` (motor `"hel-fils-OCR"`, text ur filen); `test_load_page_view_with_layout_row` (block och Markdown med); `test_stale_when_file_text_differs`; `test_overlay_scales_bbox` (bbox (100,100,200,200) vid OCR-dpi 300, vy 150 → ritad ram vid (50,50,100,100), kontrolleras med pixelvärde); `test_escape_markdown_dollars`.
-- [ ] **Steg 2:** FAIL. **Steg 3:** implementera. **Steg 4:** PASS + `tests/test_sql_boundary.py`, `tests/test_packaging.py`, `--static` grönt.
+- [x] **Steg 1: Failande tester:** `test_migration_012_creates_readings`; `test_archive_and_list_readings_newest_first`; `test_load_page_view_without_pdf_pages_row` (motor `"hel-fils-OCR"`, text ur filen); `test_load_page_view_with_layout_row` (block och Markdown med); `test_stale_when_file_text_differs`; `test_overlay_scales_bbox` (bbox (100,100,200,200) vid OCR-dpi 300, vy 150 → ritad ram vid (50,50,100,100), kontrolleras med pixelvärde); `test_escape_markdown_dollars`.
+- [x] **Steg 2:** FAIL. **Steg 3:** implementera. **Steg 4:** PASS + `tests/test_sql_boundary.py`, `tests/test_packaging.py`, `--static` grönt.
 
 ### Task 9: Operationen `rescan-page` (omskanning och återställning)
 
@@ -303,7 +305,7 @@ Beteende: workern öppnas en gång per `run_ocr_pages`-anrop (`with SuryaWorker(
 
 Flöde: hitta PDF (`downloaded/files` sedan `downloaded/wpu_files`; saknas → `OperationFailed`) → kontrollera `1 ≤ page ≤ page_count` (annars `OperationFailed`) → arkivera gällande läsning (`pdf_pages`-raden, annars filens sidtext med `engine="hel-fils-OCR"`) med `reason` → antingen `run_ocr_pages(inp=pdf, pages=str(page), engine=engine, force=True, …)` eller, vid `restore_reading`, `record_page` med den historiska radens fält → `merge_one(create_missing=True)` → `process_file` → `mark_normalized` → om `reindex`: tvinga omindexering av just detta dokument även när `merge_one` lämnar texten byte-identisk (en ny läsning kan ge samma text men ny Markdown) — t.ex. genom att ta bort dokumentets ingest-rad via en db-funktion — och kör sedan `run_ingest(rebuild=False, …)` med registrets standardvärden. Varje steg loggas på debug (`"rescan {stem} s{page}: arkiverade läsning {id} ({engine}, poäng {score})"`). Misslyckas OCR:en lämnas den gällande läsningen orörd och jobbet slutar `failed`; historikraden står kvar och är harmlös.
 
-- [ ] **Steg 1: Failande tester** (falsk `run_ocr_pages` och `run_ingest` monkeypatchas):
+- [x] **Steg 1: Failande tester** (falsk `run_ocr_pages` och `run_ingest` monkeypatchas):
   - `test_rescan_archives_then_records` — före: `pdf_pages`-rad med motor `tesseract`; efter: historikrad `reason="rescan"` med gamla texten, ny rad med motor `surya-layout`, textfilens sida uppdaterad.
   - `test_rescan_archives_file_text_when_no_row` — historikraden har `engine == "hel-fils-OCR"`.
   - `test_rescan_rejects_page_out_of_range` — sida 99 i 3-sidig PDF → `OperationFailed`, ingen historikrad, ingen OCR.
@@ -312,7 +314,7 @@ Flöde: hitta PDF (`downloaded/files` sedan `downloaded/wpu_files`; saknas → `
   - `test_reindex_flag_runs_incremental_ingest` / `test_no_reindex_skips_ingest`.
   - `test_ocr_pages_force_reocrs_existing_page`.
   - Befintliga `tests/test_scripts.py` (registry = entrypoints = genvägar) och Admin-hjälptesterna ska passera med den nya operationen.
-- [ ] **Steg 2:** FAIL. **Steg 3:** implementera; Admin-hjälp: förklaring *”Skannar om en enda sida och sparar den tidigare läsningen så att den kan återställas från Sidgranskning.”* plus en punkt per synligt fält. **Steg 4:** PASS + `--static` grönt.
+- [x] **Steg 2:** FAIL. **Steg 3:** implementera; Admin-hjälp: förklaring *”Skannar om en enda sida och sparar den tidigare läsningen så att den kan återställas från Sidgranskning.”* plus en punkt per synligt fält. **Steg 4:** PASS + `--static` grönt.
 
 ### Task 10: Streamlit-sidan Sidgranskning
 
@@ -329,7 +331,7 @@ Layout: `casebook_ui.render_page_header("Sidgranskning", …)`. Överst dokument
 
 Omskanning i en `st.container(border=True)`: motorval (samma choices som operationen), kryssrutan **Uppdatera sökindexet** och knappen **Skanna om sidan**. Knappen är inaktiverad med förklaring när `reconcile_active_job()` returnerar ett aktivt jobb; under ett pågående `rescan-page`-jobb för just den här sidan visas status och loggsvans (`read_log_tail`) och sidan ritas om med `st.fragment(run_every=2)` tills jobbet är klart. **Historik**: hopfällbar lista över tidigare läsningar (motor, poäng, tid, orsak) med **Visa** (texten i en `st.code`) och **Återställ** (startar `rescan-page` med `restore_reading`).
 
-- [ ] **Steg 1: Failande AppTest-tester** (temporär state.db + en 2-sidig test-PDF skapad med pymupdf i `tmp_path`; `start_job` monkeypatchas):
+- [x] **Steg 1: Failande AppTest-tester** (temporär state.db + en 2-sidig test-PDF skapad med pymupdf i `tmp_path`; `start_job` monkeypatchas):
   - `test_shows_page_text_from_file`.
   - `test_query_params_select_document_and_page`.
   - `test_markdown_tab_only_with_layout_reading`.
@@ -339,8 +341,8 @@ Omskanning i en `st.container(border=True)`: motorval (samma choices som operati
   - `test_rescan_button_starts_job_with_params` — `start_job` anropad med `("rescan-page", {"pdf_stem": …, "page": 2, "engine": "surya-layout", "reindex": True, …})`.
   - `test_rescan_button_disabled_while_job_active`.
   - `test_restore_starts_job_with_reading_id`.
-- [ ] **Steg 2:** FAIL. **Steg 3:** implementera. **Steg 4:** PASS + `--static` grönt.
-- [ ] **Steg 5:** Kör `./web.sh`, öppna Sidgranskning i webbläsarpanelen, välj ett dokument med tabell, skanna om en sida med `surya-layout` och återställ den; kontrollera att textfilen och sökningen i Utredning speglar varje steg. Dokumentera sidan i `README.md`, `docs/kom-igang.md`, `docs/teknisk-referens.md` och flikraden + katalogträdet i `AGENTS.md`.
+- [x] **Steg 2:** FAIL. **Steg 3:** implementera. **Steg 4:** PASS + `--static` grönt.
+- [x] **Steg 5:** Kör `./web.sh`, öppna Sidgranskning i webbläsarpanelen, välj ett dokument med tabell, skanna om en sida med `surya-layout` och återställ den; kontrollera att textfilen och sökningen i Utredning speglar varje steg. Dokumentera sidan i `README.md`, `docs/kom-igang.md`, `docs/teknisk-referens.md` och flikraden + katalogträdet i `AGENTS.md`.
 
 ### Task 11: Pilot mot riktiga arkivsidor (verklig Surya)
 
@@ -348,17 +350,22 @@ Omskanning i en `st.container(border=True)`: motorval (samma choices som operati
 - Create: `tests/test_surya_real.py` (markerad `@pytest.mark.external`; registrera markören i `pyproject.toml` `[tool.pytest.ini_options]` och hoppa när `surya_layout_available()` är falsk), `scripts/`-fritt mätskript i scratch eller `docs/`-bilaga, `docs/surya-layout-pilot.md`
 - Modify: `tests/fixtures/surya/` (ett par riktiga workersvar, utan känsligt innehåll — välj sidor som redan är offentliga i arkivet)
 
-- [ ] **Steg 1:** `test_real_surya_reads_table_page` — renderar en egen tabellsida med PIL (redistribuerbar), kör `SuryaWorker`, kräver ett `TABLE`-block med rubrikceller. Kör: `PALME_SURYA_PYTHON=~/.local/share/infoscry/surya-venv/bin/python .venv/bin/pytest -m external tests/test_surya_real.py -v` → PASS.
-- [ ] **Steg 2:** Mät på ett urval om 50 sidor (15 SPANINGSUPPSLAG av båda varianterna, 15 förhörssidor varav några med dialog, 10 med lägst Tesseract-poäng, 10 slumpade): kvalitetspoäng (`score_text` på `text`), teckenantal, andel sidor med `TABLE`/`HEADING`, `degraded`-andel, sekunder per sida och uppstartstid per fil — för `lines` mot `layout`. Mät också sökkvaliteten: hur stor andel av chunkarna sidhuvudraden utgör, mångfalden i top-N per sida (fyller en sökning på ett vittnesnamn topplistan med en enda sida?) och om Markdown-syntax (`**`, `|`, `---`) i embeddingarna försämrar träffarna jämfört med samma text utan syntax. Kontrollera dessutom för hand mot sidbilden: på 5 blanketter andelen ifyllda fält där nummer och värde hamnat ihop, och om handskrivna värden lästs; på 5 förhörssidor att `Förhörsledare`/`Förhörsvittne` och varje replik finns kvar och i rätt ordning.
-- [ ] **Steg 3:** Skriv `docs/surya-layout-pilot.md` (samma upplägg som `docs/jev-reranker-pilot.md`): metod, siffror, begränsningar, rekommendation. **Acceptanskriterium för att byta standard:** medianpoäng för layout ≥ lines på de 20 sämsta sidorna, ingen sida som lines läste går tom med layout, sekunder per sida ≤ dagens Surya 0.17 (spiken: ~25 s/sida för Surya 2; 0.17 anges till 30–100 s), minst 80 % av de ifyllda blankettfälten rätt parade och inga tappade repliker på förhörssidorna. Uppdatera `data/formular/spaningsuppslag.json` med de varianter piloten hittar. Lägg rapporten i dokumentationslistan i `AGENTS.md`.
+- [x] **Steg 1:** `test_real_surya_reads_table_page` — renderar en egen tabellsida med PIL (redistribuerbar), kör `SuryaWorker`, kräver ett `TABLE`-block med rubrikceller. Kör: `PALME_SURYA_PYTHON=~/.local/share/infoscry/surya-venv/bin/python .venv/bin/pytest -m external tests/test_surya_real.py -v` → PASS.
+- [x] **Steg 2:** Mät på ett urval om 50 sidor (15 SPANINGSUPPSLAG av båda varianterna, 15 förhörssidor varav några med dialog, 10 med lägst Tesseract-poäng, 10 slumpade): kvalitetspoäng (`score_text` på `text`), teckenantal, andel sidor med `TABLE`/`HEADING`, `degraded`-andel, sekunder per sida och uppstartstid per fil — för `lines` mot `layout`. Mät också sökkvaliteten: hur stor andel av chunkarna sidhuvudraden utgör, mångfalden i top-N per sida (fyller en sökning på ett vittnesnamn topplistan med en enda sida?) och om Markdown-syntax (`**`, `|`, `---`) i embeddingarna försämrar träffarna jämfört med samma text utan syntax. Kontrollera dessutom för hand mot sidbilden: på 5 blanketter andelen ifyllda fält där nummer och värde hamnat ihop, och om handskrivna värden lästs; på 5 förhörssidor att `Förhörsledare`/`Förhörsvittne` och varje replik finns kvar och i rätt ordning.
+- [x] **Steg 3:** Skriv `docs/surya-layout-pilot.md` (samma upplägg som `docs/jev-reranker-pilot.md`): metod, siffror, begränsningar, rekommendation. **Acceptanskriterium för att byta standard:** medianpoäng för layout ≥ lines på de 20 sämsta sidorna, ingen sida som lines läste går tom med layout, sekunder per sida ≤ dagens Surya 0.17 (spiken: ~25 s/sida för Surya 2; 0.17 anges till 30–100 s), minst 80 % av de ifyllda blankettfälten rätt parade och inga tappade repliker på förhörssidorna. Uppdatera `data/formular/spaningsuppslag.json` med de varianter piloten hittar. Lägg rapporten i dokumentationslistan i `AGENTS.md`.
 
 ### Task 12: Byt standard (endast om piloten godkänns)
+
+**Status:** **PARKERAD efter ägarbeslut 2026-10-28 — inte genomförd.** Standarden är `lines`
+och hastighetskriteriet är fortfarande **FAIL** och ligger fast (fyra av fem acceptanskriterier i
+Task 11 är PASS; se `docs/surya-layout-pilot.md`, *Beslut efter utredningen (2026-10-28)*). Detta
+är inte nästa aktiva uppgift; den återupptas endast efter ett nytt beslut från ägaren, inte som automatisk följd.
 
 **Files:**
 - Modify: `src/operations/registry.py` (`surya_engine` standard `"layout"`), `src/operations/ocr.py` (`OcrOptions.surya_engine`), `README.md`, `docs/kom-igang.md`, `docs/teknisk-referens.md`, `AGENTS.md`
 - Test: `tests/test_operation_registry.py` (`test_surya_engine_defaults_to_layout`)
 
-- [ ] **Steg 1:** failande test → **Steg 2:** ändra standard → **Steg 3:** `scripts/test.py --static` grönt. Befintliga sidor uppgraderas inte automatiskt; dokumentera kommandot för att köra om dåliga sidor: `.venv/bin/python scripts/ocr.py --redo-only --surya-engine layout`.
+- [ ] **Steg 1:** failande test → **Steg 2:** ändra standard → **Steg 3:** `scripts/test.py --static` grönt. Befintliga sidor uppgraderas inte automatiskt; dokumentera kommandot för att köra om dåliga sidor: `.venv/bin/python scripts/ocr.py --redo --surya-engine layout`.
 
 ## Utanför planen
 
