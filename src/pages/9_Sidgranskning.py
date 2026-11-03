@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import io
 import json
-import logging
 import sys
 from pathlib import Path
 
@@ -25,12 +24,13 @@ sys.path.insert(0, str(ROOT / "src"))
 import casebook_ui as _casebook_ui  # noqa: E402
 import db  # noqa: E402
 import page_review as _page_review  # noqa: E402
+import web_log  # noqa: E402
 from operations import job_service as _job_service  # noqa: E402
 from operations.exceptions import OperationFailed  # noqa: E402
 from operations.registry import get_registry  # noqa: E402
 from surya_layout import LayoutBlock  # noqa: E402
 
-log = logging.getLogger(__name__)
+log = web_log.get_logger("sidgranskning")
 
 OPERATION = "rescan-page"
 VIEW_DPI = 110

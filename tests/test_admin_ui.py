@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from dataclasses import replace
 
+import pytest
+
 import admin_ui
 import prompts
 from admin_ui import (
@@ -879,7 +881,9 @@ def _admin_page_app(tmp_path, monkeypatch, *, active: bool = True):
 
 
 def _shown_log(at) -> str:
-    return "\n".join(code.value for code in at.code)
+    # Bara Logg-fliken: panelen för pågående jobb visar också loggrader.
+    logg = next(tab for tab in at.tabs if tab.label == "Logg")
+    return "\n".join(code.value for code in logg.code)
 
 
 def _select_log_source(at, value: str):
@@ -1584,3 +1588,248 @@ def test_rescan_page_form_hides_restore_and_lists_all_documents(tmp_path, monkey
     assert "a — dokument — 2020" in list(stems.options)
     assert stems.label == "Dokument"
     assert [error.value for error in form.error] == ["Välj ett värde för: Dokument"]
+
+
+# --- Återkoppling om jobb: pågående, resultat och felorsak ---
+
+
+@pytest.fixture
+def utc_tz(monkeypatch):
+    """Klockslagen visas i lokal tid; lås den till UTC i testet."""
+    import time
+
+    monkeypatch.setenv("TZ", "UTC")
+    time.tzset()
+    yield
+    monkeypatch.undo()
+    time.tzset()
+
+_FAILED_LOG = (
+    "2026-11-03T19:13:07+00:00 [debug] väljer motor tesseract\n"
+    "2026-11-03T19:13:08+00:00 [error] --out-dir krävs för alla motorer utom detect-only\n"
+    "2026-11-03T19:13:08+00:00 [error] Traceback:\n"
+    "Traceback (most recent call last):\n"
+    '  File "worker.py", line 176, in run_job\n'
+    "operations.exceptions.OperationFailed: ocr-pages misslyckades (exitkod 1)\n"
+)
+
+
+def test_job_failure_reasons_reads_error_lines_without_traceback() -> None:
+    assert admin_ui.job_failure_reasons(_FAILED_LOG) == [
+        "--out-dir krävs för alla motorer utom detect-only",
+    ]
+
+
+def test_job_failure_reasons_keeps_the_last_unique_errors() -> None:
+    text = "".join(
+        f"2026-11-03T19:13:0{i}+00:00 [error] fel {i % 3}\n" for i in range(6)
+    )
+    assert admin_ui.job_failure_reasons(text, limit=2) == ["fel 1", "fel 2"]
+    assert admin_ui.job_failure_reasons("") == []
+
+
+def test_recent_log_lines_skips_debug_and_continuation_lines(utc_tz) -> None:
+    text = (
+        "2026-11-03T19:13:00+00:00 [info] Startar OCR\n"
+        "2026-11-03T19:13:01+00:00 [debug] intern detalj\n"
+        "2026-11-03T19:13:02+00:00 [warning] sida 3 tom\n"
+        "  fortsättningsrad\n"
+        "2026-11-03T19:13:03+00:00 [info] sida 4 klar\n"
+    )
+    assert admin_ui.recent_log_lines(text, limit=2) == [
+        "19:13:02 sida 3 tom", "19:13:03 sida 4 klar",
+    ]
+
+
+def test_format_duration_uses_compact_units() -> None:
+    fmt = admin_ui.format_duration
+    assert fmt("2026-11-03T19:00:00+00:00", "2026-11-03T19:00:42+00:00") == "42 s"
+    assert fmt("2026-11-03T19:00:00+00:00", "2026-11-03T19:03:05+00:00") == "3 min 5 s"
+    assert fmt("2026-11-03T19:00:00+00:00", "2026-11-03T21:02:59+00:00") == "2 h 2 min"
+    assert fmt(None, "2026-11-03T19:00:00+00:00") == ""
+    assert fmt("trasig", "2026-11-03T19:00:00+00:00") == ""
+
+
+def test_job_result_headline_names_operation_outcome_and_duration() -> None:
+    job = {
+        "operation": "ocr-pages", "status": "succeeded",
+        "started_at": "2026-11-03T19:00:00+00:00",
+        "finished_at": "2026-11-03T19:00:42+00:00",
+    }
+    kind, headline = admin_ui.job_result_headline(job)
+    assert kind == "success"
+    assert headline.startswith("Sid-OCR lyckades")
+    assert "tog 42 s" in headline
+
+    assert admin_ui.job_result_headline({**job, "status": "failed"})[0] == "error"
+    assert admin_ui.job_result_headline({**job, "status": "cancelled"})[0] == "warning"
+    assert admin_ui.job_result_headline({**job, "status": "interrupted"})[0] == "warning"
+    # Okänd operation faller tillbaka på id:t.
+    assert admin_ui.job_result_headline({**job, "operation": "x-y"})[1].startswith("x-y ")
+
+
+def test_latest_finished_job_ignores_running_and_dismissed_jobs() -> None:
+    jobs = [
+        {"id": "c", "status": "running"},
+        {"id": "b", "status": "failed"},
+        {"id": "a", "status": "succeeded"},
+    ]
+    assert admin_ui.latest_finished_job(jobs) is None  # det nyaste körs fortfarande
+    assert admin_ui.latest_finished_job(jobs[1:])["id"] == "b"
+    assert admin_ui.latest_finished_job(jobs[1:], dismissed={"b"}) is None
+    assert admin_ui.latest_finished_job([]) is None
+
+
+def _finished_job_page(tmp_path, monkeypatch, *, status: str, log: str, error=None):
+    import os
+
+    import db
+
+    monkeypatch.setenv("STATE_DB", str(tmp_path / "state.db"))
+    monkeypatch.setattr(admin_ui, "error_log_path", lambda: tmp_path / "errors.log")
+    monkeypatch.setattr("config.CONFIG_FILE", tmp_path / "llm_config.json")
+    job_log = tmp_path / "jobb.log"
+    job_log.write_text(log, encoding="utf-8")
+    with db.connect(tmp_path / "state.db") as conn:
+        db.init_schema(conn)
+        db.create_admin_job(
+            conn, job_id="job-ocr12345", operation="ocr-pages",
+            params_json="{}", log_path=str(job_log),
+        )
+        db.claim_admin_job(conn, "job-ocr12345", pid=os.getpid())
+        db.finish_admin_job(
+            conn, "job-ocr12345", status=status,
+            exit_code=0 if status == "succeeded" else 1, error=error,
+        )
+
+    from streamlit.testing.v1 import AppTest
+
+    return AppTest.from_file("src/pages/8_Admin.py").run(timeout=60)
+
+
+def test_admin_page_shows_why_the_latest_job_failed(tmp_path, monkeypatch) -> None:
+    at = _finished_job_page(
+        tmp_path, monkeypatch, status="failed", log=_FAILED_LOG,
+        error="ocr-pages misslyckades (exitkod 1)",
+    )
+
+    assert not list(at.exception)
+    assert [e.value for e in at.error if "Sid-OCR misslyckades" in e.value]
+    shown = "\n".join(e.value for e in at.error)
+    assert "--out-dir krävs" in shown
+    assert "Traceback" not in shown
+    history = next(tab for tab in at.tabs if tab.label == "Jobbhistorik")
+    assert "Fel: --out-dir krävs för alla motorer utom detect-only" in [
+        c.value for c in history.caption
+    ]
+
+
+def test_admin_page_result_can_be_dismissed(tmp_path, monkeypatch, utc_tz) -> None:
+    at = _finished_job_page(
+        tmp_path, monkeypatch, status="succeeded",
+        log="2026-11-03T19:13:08+00:00 [info] 3 sidor OCR:ade\n",
+    )
+    shown = [s.value for s in at.success if "Sid-OCR lyckades" in s.value]
+    assert shown and "19:13:08 3 sidor OCR:ade" in shown[0]
+
+    next(b for b in at.button if b.key == "job_result_dismiss").click().run()
+
+    assert not [s.value for s in at.success if "Sid-OCR lyckades" in s.value]
+    assert "Inget jobb körs." in [c.value for c in at.caption]
+
+
+def test_active_job_panel_shows_label_and_latest_log_lines(tmp_path, monkeypatch, utc_tz) -> None:
+    at = _admin_page_app(tmp_path, monkeypatch)
+
+    assert not list(at.exception)
+    assert [s.value for s in at.subheader if s.value.startswith("Full pipeline — Körs")]
+    # Panelens senaste rader har kort klockslag; Logg-fliken visar hela tidsstämpeln.
+    shown = "\n".join(code.value for code in at.code)
+    assert "10:00:15 SKIP 456.pdf: trasig PDF" in shown
+    assert "10:00:10 Saknar textfil för 123.pdf" in shown
+
+
+def test_admin_page_confirms_a_started_job_after_the_rerun(tmp_path, monkeypatch) -> None:
+    """Bekräftelsen överlever st.rerun (tidigare försvann st.success direkt)."""
+    from streamlit.testing.v1 import AppTest
+
+    import db
+
+    monkeypatch.setenv("STATE_DB", str(tmp_path / "state.db"))
+    monkeypatch.setattr("config.CONFIG_FILE", tmp_path / "llm_config.json")
+    with db.connect(tmp_path / "state.db") as conn:
+        db.init_schema(conn)
+    started: list[str] = []
+    monkeypatch.setattr(
+        "operations.job_service.start_job",
+        lambda operation_id, params: started.append(operation_id) or {"id": "x"},
+    )
+
+    at = AppTest.from_file("src/pages/8_Admin.py").run(timeout=60)
+    next(b for b in at.button if b.key == "run-pipeline__start").click().run(timeout=60)
+
+    assert started == ["run-pipeline"]
+    assert [t.value for t in at.toast] == ["Full pipeline startat"]
+
+
+def _selected_admin_tab(at) -> str:
+    """Fliken servern ber webbläsaren visa (tab_container.default_tab_index)."""
+    def walk(node):
+        proto = getattr(node, "proto", None)
+        if (
+            proto is not None and proto.DESCRIPTOR.name == "Block"
+            and proto.WhichOneof("type") == "tab_container"
+        ):
+            return node
+        for child in getattr(node, "children", {}).values():
+            found = walk(child)
+            if found is not None:
+                return found
+        return None
+
+    container = walk(at.main)
+    assert container is not None, "hittade inga flikar"
+    index = container.proto.tab_container.default_tab_index
+    return [tab.label for tab in at.tabs][index]
+
+
+def test_admin_tab_survives_starting_a_job(tmp_path, monkeypatch) -> None:
+    """Regression: startat jobb byter toppen av sidan, och flikarna (utan nyckel)
+    blev då ett nytt element som hoppade tillbaka till Pipeline."""
+    from streamlit.testing.v1 import AppTest
+
+    import db
+
+    monkeypatch.setenv("STATE_DB", str(tmp_path / "state.db"))
+    monkeypatch.setattr("config.CONFIG_FILE", tmp_path / "llm_config.json")
+    with db.connect(tmp_path / "state.db") as conn:
+        db.init_schema(conn)
+    monkeypatch.setattr(
+        "operations.job_service.start_job", lambda operation_id, params: {"id": "x"},
+    )
+
+    at = AppTest.from_file("src/pages/8_Admin.py").run(timeout=60)
+    # Som ett flikbyte i webbläsaren: widgetvärdet sätts och on_change körs.
+    at.session_state["admin_tab"] = "OCR"
+    at.session_state["admin_tab_sparad"] = "OCR"
+    at.run(timeout=60)
+    assert _selected_admin_tab(at) == "OCR"
+
+    next(b for b in at.button if b.key == "ocr__start").click().run(timeout=60)
+
+    assert _selected_admin_tab(at) == "OCR"
+
+
+def test_admin_log_tab_can_show_the_web_log(tmp_path, monkeypatch) -> None:
+    """Streamlit-sidornas logg (citat, Sidgranskning) är en egen källa."""
+    monkeypatch.setattr(admin_ui, "web_log_path", lambda: tmp_path / "web.log")
+    (tmp_path / "web.log").write_text(
+        "2026-11-03T19:00:00+00:00 [debug] citations: avkortat id 'Pol-1986' är tvetydigt\n",
+        encoding="utf-8",
+    )
+    at = _admin_page_app(tmp_path, monkeypatch, active=False)
+
+    at = _select_log_source(at, "web")
+
+    assert "avkortat id 'Pol-1986' är tvetydigt" in _shown_log(at)
+    assert any("Webbsidorna" in caption.value for caption in at.caption)

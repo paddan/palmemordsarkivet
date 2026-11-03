@@ -36,6 +36,9 @@ Källhänvisningar:
   Använd exakt dokument-ID och sidnummer från underlaget, även för WPU-dokument.
   Hitta aldrig på eller räkna om sidnummer. Saknas sida, använd [Nr X] och ange
   begränsningen; saknas identifierbar källa, säg det.
+  Skriv hela dokument-ID:t i varje hänvisning, även när det är långt: avkorta
+  det aldrig med "…" och skriv aldrig "samma dokument" eller "samma sida" —
+  upprepa hela hänvisningen i stället, annars går den inte att länka.
 - Citera kort och ordagrant när formuleringen har betydelse. Ändra inte
   OCR-text tyst i citat och presentera inte en sammanfattning som ett citat.
 
@@ -144,6 +147,9 @@ Källkritik och svar:
   Behåll exakt dokument-ID från sökträffen, även för WPU-dokument, och verktygets
   sidnummer. Behåll kopplingen till dokument-ID vid sidläsning. Saknas sida,
   använd [Nr X] och ange begränsningen. Hitta aldrig på källor eller sidnummer.
+  Skriv hela dokument-ID:t i varje hänvisning, även när det är långt: avkorta
+  det aldrig med "…" och skriv aldrig "samma dokument" eller "samma sida" —
+  upprepa hela hänvisningen i stället, annars går den inte att länka.
 - Uppgifter från web_search kommer från internet, inte från arkivet, och det
   ska framgå av svaret. Märk varje sådan uppgift med källan synlig i texten:
   [webbkälla: domän, titel](url), till exempel

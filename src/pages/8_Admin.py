@@ -10,9 +10,14 @@ import casebook_ui as _casebook_ui
 import db
 from admin_ui import (
     NEO4J_OPERATION_IDS,
+    TERMINAL_JOB_STATUSES,
     format_job_status,
     group_admin_operations,
+    job_failure_text,
+    latest_finished_job,
+    operation_label,
     render_active_job,
+    render_job_result,
     render_llm_settings,
     render_log_tab,
     render_neo4j_section,
@@ -28,21 +33,37 @@ from operations.registry import get_registry
 
 st.set_page_config(page_title="Admin", page_icon="⚙️", layout="wide")
 
-TERMINAL_JOB_STATUSES = {"succeeded", "failed", "cancelled", "interrupted"}
-
 _casebook_ui.render_page_header("Admin")
 
 registry = get_registry()
 
-# --- Aktivt jobb: status och avbryt (loggen ligger i Logg-fliken) ---
+# Startbekräftelsen sparas till körningen efter st.rerun — annars hinner den
+# aldrig synas.
+started_label = st.session_state.pop("job_started_label", None)
+if started_label:
+    st.toast(f"{started_label} startat")
+
+# --- Aktivt jobb: status, senaste loggrader och avbryt ---
 initial_job = reconcile_active_job()
 if initial_job is None:
-    st.caption("Inget jobb körs.")
+    # Senaste avslutade jobbets utfall står kvar tills det döljs.
+    conn = db.connect()
+    db.init_schema(conn)
+    latest_jobs = [dict(job) for job in db.list_admin_jobs(conn, limit=1)]
+    conn.close()
+    dismissed = st.session_state.setdefault("dismissed_job_results", set())
+    finished = latest_finished_job(latest_jobs, dismissed=dismissed)
+    if finished is not None and render_job_result(finished):
+        dismissed.add(str(finished["id"]))
+        st.rerun()
+    if finished is None:
+        st.caption("Inget jobb körs.")
 else:
     @st.fragment(run_every=2.0)
     def active_job_fragment() -> None:
         job = reconcile_active_job()
         if job is None:
+            # Jobbet är klart: rita om hela sidan så resultatrutan visas.
             st.rerun(scope="app")
         render_active_job(job)
         if st.button("Avbryt", key="active_job_cancel"):
@@ -77,14 +98,28 @@ def _start_operation(definition, *, disabled: bool) -> None:
     if params is None:
         return
     try:
-        job = start_job(definition.id, params)
-        st.success(f"Startat jobb {job['id']}")
+        start_job(definition.id, params)
+        st.session_state["job_started_label"] = operation_label(definition.id)
         st.rerun(scope="app")
     except Exception as exc:  # noqa: BLE001
         st.error(f"Kunde inte starta: {exc}")
 
 
-tabs = st.tabs(tab_names)
+# Vald flik sparas på servern (nyckel + on_change). Utan nyckel räknas
+# flikarnas identitet ur positionen, och när toppen byts (resultatruta ↔
+# jobbpanel vid start/avslut) blev de ett nytt element som hoppade till Pipeline.
+# Valet speglas dessutom till admin_tab_sparad och blir default, eftersom
+# widgetstate kan tappas i en omkörning som inte bär det (samma skäl som
+# sökvalens spegling i Utredning).
+def _spara_flik() -> None:
+    st.session_state["admin_tab_sparad"] = st.session_state.get("admin_tab")
+
+
+saved_tab = st.session_state.get("admin_tab_sparad")
+tabs = st.tabs(
+    tab_names, key="admin_tab", on_change=_spara_flik,
+    default=saved_tab if saved_tab in tab_names else None,
+)
 for tab, tab_name in zip(tabs, tab_names, strict=True):
     with tab:
         if tab_name == "Inställningar":
@@ -114,7 +149,7 @@ for tab, tab_name in zip(tabs, tab_names, strict=True):
                             Path(log_path).unlink(missing_ok=True)
                         st.rerun(scope="app")
                     if job.get("error"):
-                        st.caption(f"Fel: {job['error']}")
+                        st.caption(f"Fel: {job_failure_text(job)}")
                     if job.get("message"):
                         st.caption(f"Meddelande: {job['message']}")
         else:

@@ -90,6 +90,15 @@ def test_format_context_includes_nr_page_and_text() -> None:
     assert "text 281 — x.txt s4" in out
 
 
+def test_format_context_source_lines_are_readable_by_citation_linker() -> None:
+    """Utredningsläget särskiljer avkortade id ur verktygssvarens source-rader."""
+    from citations import sources_from_tool_output
+
+    hits = [_hit("281 — x.txt", 4, 0), _hit('Pol-1986_förhör "A".txt', 1, 0)]
+    out = format_context(hits, include_source=True)
+    assert sources_from_tool_output(out) == {"281 — x.txt", 'Pol-1986_förhör "A".txt'}
+
+
 # ---------------------------------------------------------------------------
 # search_hybrid (RRF)
 # ---------------------------------------------------------------------------

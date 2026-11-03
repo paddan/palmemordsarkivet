@@ -291,3 +291,131 @@ def test_extract_cited_sources_without_page(tmp_path: Path) -> None:
 def test_extract_cited_sources_empty_for_no_citations(tmp_path: Path) -> None:
     mapping = _mapping(tmp_path, ["281 — Titel"])
     assert extract_cited_sources("Inget citat här.", mapping) == []
+
+
+# ---------------------------------------------------------------------------
+# Avkortade dokument-id ("…") och tillbakasyftningar ("samma dokument")
+# ---------------------------------------------------------------------------
+
+_NIEMINEN = [
+    "Pol-1986-03-02_E15-01-G_förhör-yvonne-nieminen-forts",
+    "Pol-1986-03-02_E15-01_13.55Yvonne_Nieminen",
+    "Pol-1986-03-02_E15-01_förhör-yvonne-nieminen-forts",
+    "Pol-1986-03-02_E15-01_förhör-yvonne-nieminen",
+]
+_JEPPSSON = "Pol-1986-03-04_1050_E15-A_Förhör-med-Lars-Jeppsson"
+
+
+def _hrefs(out: str) -> list[str]:
+    """Länkmålen (``?pdf=…&page=N``) i den renderade texten, i ordning."""
+    import re
+
+    return re.findall(r'href="([^"]+)"', out)
+
+
+def _href_for(pdf: Path, page: int | None) -> str:
+    import base64
+
+    token = base64.urlsafe_b64encode(str(pdf).encode()).decode().rstrip("=")
+    return f"?pdf={token}" + (f"&page={page}" if page else "")
+
+
+def test_linkify_truncated_unique_prefix_links_pdf_and_page(tmp_path: Path) -> None:
+    mapping = _mapping(tmp_path, [_JEPPSSON, "Pol-1986-03-04_1050_E15-B_Annat"])
+    out = linkify_citations("Se [Nr Pol-1986-03-04_1050_E15-A…, sida 3].", mapping)
+    assert _hrefs(out) == [_href_for(mapping[_JEPPSSON], 3)]
+    assert "Pol-1986-03-04_1050_E15-A…, sida 3" in out
+
+
+def test_linkify_truncated_with_three_dots(tmp_path: Path) -> None:
+    mapping = _mapping(tmp_path, [_JEPPSSON])
+    out = linkify_citations("[Nr Pol-1986-03-04_1050_E15-A..., sida 3]", mapping)
+    assert _hrefs(out) == [_href_for(mapping[_JEPPSSON], 3)]
+
+
+def test_linkify_truncated_ambiguous_prefix_stays_text(
+    tmp_path: Path, caplog, monkeypatch,
+) -> None:
+    import logging
+
+    import citations
+
+    mapping = _mapping(tmp_path, _NIEMINEN)
+    text = "[Nr Pol-1986-03-02_E15-01…, sida 1]"
+    # Webbloggen sprider inte till rotloggern; lyssna direkt på citatloggern.
+    monkeypatch.setattr(citations.log, "handlers", [caplog.handler])
+    with caplog.at_level(logging.DEBUG, logger=citations.log.name):
+        out = linkify_citations(text, mapping)
+    assert "<a href=" not in out
+    assert out == text
+    assert "tvetydig" in caplog.text and "Pol-1986-03-02_E15-01" in caplog.text
+
+
+def test_linkify_truncated_prefix_narrowed_by_known_sources(tmp_path: Path) -> None:
+    mapping = _mapping(tmp_path, _NIEMINEN)
+    target = "Pol-1986-03-02_E15-01_förhör-yvonne-nieminen"
+    out = linkify_citations(
+        "[Nr Pol-1986-03-02_E15-01…, sida 1]", mapping,
+        known_sources={f"{target}.txt"},
+    )
+    assert _hrefs(out) == [_href_for(mapping[target], 1)]
+
+
+def test_linkify_same_document_and_same_page_inherit_previous(tmp_path: Path) -> None:
+    mapping = _mapping(tmp_path, _NIEMINEN + [_JEPPSSON])
+    target = "Pol-1986-03-02_E15-01_förhör-yvonne-nieminen"
+    text = (
+        "Hon såg mannen [Nr Pol-1986-03-02_E15-01…, sida 1] och följde efter "
+        "[samma dokument, sida 2]. Han bar mörk rock [samma sida]. Jeppsson "
+        "bekräftar [Nr Pol-1986-03-04_1050_E15-A…, sida 3]."
+    )
+    out = linkify_citations(text, mapping, known_sources={f"{target}.txt"})
+    assert _hrefs(out) == [
+        _href_for(mapping[target], 1),
+        _href_for(mapping[target], 2),
+        _href_for(mapping[target], 2),
+        _href_for(mapping[_JEPPSSON], 3),
+    ]
+    assert ">[samma dokument, sida 2]</a>" in out
+    assert ">[samma sida]</a>" in out
+
+
+def test_linkify_same_document_without_previous_stays_text(tmp_path: Path) -> None:
+    mapping = _mapping(tmp_path, [_JEPPSSON])
+    text = "Se [samma dokument, sida 2] och [samma sida]."
+    assert linkify_citations(text, mapping) == text
+
+
+def test_linkify_same_document_after_ambiguous_citation_stays_text(tmp_path: Path) -> None:
+    mapping = _mapping(tmp_path, _NIEMINEN)
+    text = "[Nr Pol-1986-03-02_E15-01…, sida 1] [samma dokument, sida 2]"
+    assert "<a href=" not in linkify_citations(text, mapping)
+
+
+def test_linkify_same_document_after_unknown_nr_does_not_reuse_older(tmp_path: Path) -> None:
+    mapping = _mapping(tmp_path, [_JEPPSSON])
+    text = f"[Nr {_JEPPSSON}, sida 1] [Nr 999, sida 4] [samma sida]"
+    assert len(_hrefs(linkify_citations(text, mapping))) == 1
+
+
+def test_extract_cited_sources_handles_truncated_unique_prefix(tmp_path: Path) -> None:
+    mapping = _mapping(tmp_path, [_JEPPSSON] + _NIEMINEN)
+    out = extract_cited_sources(
+        "[Nr Pol-1986-03-04_1050_E15-A…, sida 3] [Nr Pol-1986-03-02_E15-01…, sida 1]",
+        mapping,
+    )
+    assert [s["source"] for s in out] == [f"{_JEPPSSON}.txt"]
+    assert out[0]["page"] == 3
+
+
+def test_sources_from_tool_output_reads_source_lines() -> None:
+    from citations import sources_from_tool_output
+
+    text = (
+        '[Nr 281, sida 4, "Titel"]\nsource: "281 — Titel.txt"\nutdrag\n\n---\n\n'
+        '[Nr Pol-x, sida 1, "T"]\nsource: "Pol-x_förhör \\"A\\".txt"\ntext\n'
+        "source: inte json\n"
+    )
+    assert sources_from_tool_output(text) == {
+        "281 — Titel.txt", 'Pol-x_förhör "A".txt',
+    }

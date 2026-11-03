@@ -362,14 +362,34 @@ def cancel_job(
         conn.close()
 
 
+_TAIL_BLOCK = 64 * 1024
+
+
 def read_log_tail(log_path: Path, *, lines: int = 50) -> str:
-    """Returnera de sista ``lines`` raderna ur en jobblogg."""
+    """Returnera de sista ``lines`` raderna ur en jobblogg.
+
+    Filen läses bakifrån i block tills tillräckligt många radbrytningar hittats,
+    så en flera MB stor pipelinelogg inte läses i sin helhet varje gång Admin
+    ritas om. Avkodningen sker efter radklippet: ett flerbytetecken som delats
+    av blockgränsen ligger i den bortklippta första (ofullständiga) raden.
+    """
+    if lines <= 0:
+        return ""
     try:
-        with log_path.open(encoding="utf-8") as handle:
-            all_lines = handle.readlines()
+        with open(log_path, "rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            pos = handle.tell()
+            data = b""
+            # En rad mer än efterfrågat: den första är oftast ofullständig.
+            while pos > 0 and data.count(b"\n") <= lines:
+                step = min(_TAIL_BLOCK, pos)
+                pos -= step
+                handle.seek(pos)
+                data = handle.read(step) + data
     except FileNotFoundError:
         return ""
-    return "".join(all_lines[-lines:])
+    tail = data.splitlines(keepends=True)[-lines:]
+    return b"".join(tail).decode("utf-8", errors="replace")
 
 
 def follow_log(

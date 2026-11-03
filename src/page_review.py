@@ -6,20 +6,20 @@ historiska läsningar och en renderad sidbild med ritade layoutramar.
 """
 from __future__ import annotations
 
-import logging
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import db as state_db
+import web_log
 from normalize_text import markdown_is_fresh
 from surya_layout import LEGACY_LAYOUT_DPI, BlockKind, LayoutBlock, layout_from_json
 
 if TYPE_CHECKING:
     from PIL.Image import Image
 
-log = logging.getLogger(__name__)
+log = web_log.get_logger("page_review")
 
 # Projektroten som Sidgranskning läser PDF:er och textfiler under (tester byter den).
 PROJECT_ROOT = Path(__file__).resolve().parents[1]

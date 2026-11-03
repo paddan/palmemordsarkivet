@@ -197,6 +197,7 @@ import db as _state_db  # noqa: E402
 import facets as _facets  # noqa: E402
 import llm_usage as _llm_usage  # noqa: E402
 import search_fuzzy as _search_fuzzy  # noqa: E402
+import web_log  # noqa: E402
 from errors_log import log_error  # noqa: E402
 from graph import answer_entities as _answer_entities  # noqa: E402
 from graph import viz as _viz  # noqa: E402
@@ -228,9 +229,13 @@ from claude_agent_sdk import (  # noqa: E402
     ResultMessage,
     TextBlock,
     ThinkingConfigAdaptive,
+    ToolResultBlock,
     ToolUseBlock,
+    UserMessage,
     query,
 )
+
+_log = web_log.get_logger("utredning")
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -627,6 +632,26 @@ def extract_cited_sources(answer: str) -> list[dict]:
     return sources
 
 
+def _tool_result_text(content: Any) -> str:
+    """Texten i ett ToolResultBlock (sträng eller lista av text-delar)."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(
+            str(c.get("text", "")) for c in content if isinstance(c, dict)
+        )
+    return ""
+
+
+def _tool_sources_from_messages(messages: list[Any]) -> set[str]:
+    """Källfilnamnen i samtalets verktygssvar (OpenAI-vägens messages)."""
+    sources: set[str] = set()
+    for msg in messages:
+        if isinstance(msg, dict) and msg.get("role") == "tool":
+            sources |= _citations.sources_from_tool_output(str(msg.get("content") or ""))
+    return sources
+
+
 def linkify_citations(text: str, known_sources: set[str] | None = None) -> str:
     """Förvandla "Nr X, sida Y" till inline-knappar — se citations.linkify_citations."""
     linked: str = _citations.linkify_citations(
@@ -965,7 +990,7 @@ def _truncated_notice(reason: str | None, component: str, model: str) -> str | N
 
 async def stream_mcp(
     q: str, status_box, text_placeholder, parts: list[str], resume_id: str | None,
-    cfg: dict, search: dict,
+    cfg: dict, search: dict, tool_sources: set[str] | None = None,
 ) -> tuple[str | None, int]:
     """Utredningsläge: Claude anropar search_archive/get_page autonomt.
 
@@ -1048,6 +1073,13 @@ async def stream_mcp(
                 elif isinstance(block, ToolUseBlock):
                     tool_count += 1
                     status_box.write(_mcp_tool_label(block.name, block.input or {}))
+        elif isinstance(message, UserMessage) and tool_sources is not None:
+            # Verktygssvarens source-rader särskiljer avkortade id i svaret.
+            for block in message.content if isinstance(message.content, list) else []:
+                if isinstance(block, ToolResultBlock):
+                    tool_sources |= _citations.sources_from_tool_output(
+                        _tool_result_text(block.content)
+                    )
         elif isinstance(message, ResultMessage):
             new_session_id = message.session_id
             _record_usage(cfg, _llm_usage.usage_from_claude(message.usage), message.total_cost_usd)
@@ -1163,9 +1195,11 @@ async def stream_mcp_to_string(
     status_box = st.status("Söker i arkivet…", expanded=True)
     text_placeholder = st.empty()
     parts: list[str] = []
+    tool_sources: set[str] = set()
     try:
         new_id, tool_count = await stream_mcp(
-            q, status_box, text_placeholder, parts, resume_id, cfg, search
+            q, status_box, text_placeholder, parts, resume_id, cfg, search,
+            tool_sources=tool_sources,
         )
     except Exception as exc:
         err_str = str(exc)
@@ -1179,7 +1213,8 @@ async def stream_mcp_to_string(
         status_box.update(label="Fel i utredningsläget", state="error", expanded=False)
         text_placeholder.markdown(msg)
         return msg, None
-    final = linkify_citations("".join(parts))
+    _log.debug("utredningsläget (Claude): %d källor i verktygssvaren", len(tool_sources))
+    final = linkify_citations("".join(parts), known_sources=tool_sources or None)
     text_placeholder.markdown(final, unsafe_allow_html=True)
     n = tool_count
     suffix = "ar" if n != 1 else ""
@@ -1400,7 +1435,9 @@ async def stream_openai_mcp_to_string(
     text_placeholder = st.empty()
     parts: list[str] = []
     await stream_openai_mcp(status_box, text_placeholder, parts, cfg, messages, search)
-    final = linkify_citations("".join(parts))
+    known = _tool_sources_from_messages(messages)
+    _log.debug("utredningsläget (OpenAI): %d källor i verktygssvaren", len(known))
+    final = linkify_citations("".join(parts), known_sources=known or None)
     text_placeholder.markdown(final, unsafe_allow_html=True)
     return final
 

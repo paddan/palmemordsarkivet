@@ -232,6 +232,12 @@ def test_ocr_operation_exposes_legacy_flags() -> None:
         assert flag in flags, f"ocr-operationen saknar {flag}"
 
 
+def test_ocr_pages_out_dir_defaults_to_pipeline_pages_out() -> None:
+    # Sid-OCR i Admin skickar inget --out-dir; utan standard avbröt ocr_pages
+    # direkt med exitkod 1.
+    assert _defaults("ocr-pages")["out_dir"] == _defaults("ocr")["pages_out"]
+
+
 def test_ocr_tesseract_operation_exposes_legacy_flags() -> None:
     flags = _flags("ocr-tesseract")
     for flag in (

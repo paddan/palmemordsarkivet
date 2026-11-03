@@ -597,6 +597,58 @@ def test_read_log_tail_returns_last_lines(tmp_path: Path) -> None:
     assert read_log_tail(log_path, lines=2) == "rad två\nrad tre\n"
 
 
+def test_read_log_tail_handles_edges(tmp_path: Path) -> None:
+    log_path = tmp_path / "j.log"
+    assert read_log_tail(log_path, lines=3) == ""  # filen saknas
+
+    log_path.write_text("ett\ntvå", encoding="utf-8")  # utan avslutande radbrytning
+    assert read_log_tail(log_path, lines=1) == "två"
+    assert read_log_tail(log_path, lines=5) == "ett\ntvå"
+    assert read_log_tail(log_path, lines=0) == ""
+
+
+def test_read_log_tail_reads_only_the_end_of_a_large_log(tmp_path: Path, monkeypatch) -> None:
+    """Admin ritas om ofta; en stor pipelinelogg får inte läsas i sin helhet."""
+    import builtins
+    import io
+
+    log_path = tmp_path / "stor.log"
+    # Flerbytetecken (å, ö) över blockgränserna ska inte ge trasig text.
+    rows = [f"rad {i} åöä {'x' * (i % 97)}\n" for i in range(60_000)]
+    log_path.write_text("".join(rows), encoding="utf-8")
+
+    read_bytes = 0
+    real_open = builtins.open
+
+    class Counting(io.FileIO):
+        # Alla läsvägar (read, readinto via buffert/textlager) går hit.
+        def readinto(self, buffer):
+            nonlocal read_bytes
+            n = super().readinto(buffer)
+            read_bytes += n or 0
+            return n
+
+        def readall(self):
+            nonlocal read_bytes
+            data = super().readall()
+            read_bytes += len(data)
+            return data
+
+    def counting_open(file, mode="r", *args, **kwargs):
+        if str(file) != str(log_path):
+            return real_open(file, mode, *args, **kwargs)
+        raw = io.BufferedReader(Counting(str(file), "rb"))
+        if "b" in mode:
+            return raw
+        return io.TextIOWrapper(raw, encoding=kwargs.get("encoding") or "utf-8")
+
+    monkeypatch.setattr(builtins, "open", counting_open)
+    monkeypatch.setattr(Path, "open", lambda self, *a, **k: counting_open(self, *a, **k))
+
+    assert read_log_tail(log_path, lines=300) == "".join(rows[-300:])
+    assert read_bytes < log_path.stat().st_size // 20
+
+
 def test_follow_log_streams_appended_lines(tmp_path: Path) -> None:
     log_path = tmp_path / "j.log"
     log_path.write_text("", encoding="utf-8")

@@ -14,6 +14,7 @@ import sqlite3
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, cast
 
@@ -73,10 +74,148 @@ def format_job_status(status: str) -> str:
     return _JOB_STATUS_LABELS.get(status, status)
 
 
+def web_log_path() -> Path:
+    """Absolut sökväg till webbsidornas logg (följer base-path i Inställningar)."""
+    resolved = resolve_path_default(ROOT / "generated" / "web.log", load_settings())
+    return Path(str(resolved))
+
+
 def error_log_path() -> Path:
     """Absolut sökväg till felloggen (följer base-path i Inställningar)."""
     resolved = resolve_path_default(ROOT / "generated" / "errors.log", load_settings())
     return Path(str(resolved))
+
+
+# Antal loggrader i panelen för pågående jobb.
+ACTIVE_JOB_LOG_LINES = 5
+# Antal loggrader i resultatrutan för ett lyckat jobb.
+JOB_RESULT_LOG_LINES = 3
+
+TERMINAL_JOB_STATUSES = frozenset({"succeeded", "failed", "cancelled", "interrupted"})
+
+# Resultatrutans färg per slutstatus (st.success/st.error/st.warning).
+_JOB_RESULT_KINDS: dict[str, str] = {
+    "succeeded": "success",
+    "failed": "error",
+    "cancelled": "warning",
+    "interrupted": "warning",
+}
+
+# En loggrad från JobSink: "<ISO-tidsstämpel> [nivå] meddelande". Rader utan
+# prefix är fortsättningsrader (traceback) och visas inte i sammanfattningar.
+_JOB_LOG_LINE_RE = re.compile(
+    r"^(?P<ts>\d{4}-\d{2}-\d{2}T[0-9:.]+(?:[+-]\d{2}:\d{2}|Z)?) "
+    r"\[(?P<level>debug|info|success|warning|error)\] (?P<msg>.*)$",
+    re.IGNORECASE,
+)
+
+
+def operation_label(operation_id: str) -> str:
+    """Operationens etikett ur registret (t.ex. *Sid-OCR*), annars id:t."""
+    from operations.registry import get_registry
+
+    try:
+        return str(get_registry().get(operation_id).label)
+    except KeyError:
+        return operation_id
+
+
+def _parse_iso(value: object) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+
+
+def _local_clock(value: object, fmt: str = "%H:%M") -> str:
+    """Klockslag i lokal tid för en ISO-tidsstämpel, eller tom sträng."""
+    moment = _parse_iso(value)
+    if moment is None:
+        return ""
+    if moment.tzinfo is not None:
+        moment = moment.astimezone()
+    return moment.strftime(fmt)
+
+
+def format_duration(start: object, end: object) -> str:
+    """Kompakt varaktighet mellan två ISO-tidsstämplar: ``42 s``, ``3 min 5 s``."""
+    first, last = _parse_iso(start), _parse_iso(end)
+    if first is None or last is None:
+        return ""
+    seconds = max(0, int((last - first).total_seconds()))
+    hours, rest = divmod(seconds, 3600)
+    minutes, secs = divmod(rest, 60)
+    if hours:
+        return f"{hours} h {minutes} min"
+    if minutes:
+        return f"{minutes} min {secs} s"
+    return f"{secs} s"
+
+
+def job_failure_reasons(log_text: str, *, limit: int = 3) -> list[str]:
+    """De sista unika ``[error]``-meddelandena ur en jobblogg.
+
+    Workerns ``Traceback:``-rad och tracebackens fortsättningsrader hoppas över:
+    orsaken står i felraden före, och jobbets ``error`` säger bara exitkoden.
+    """
+    reasons: list[str] = []
+    for line in log_text.splitlines():
+        match = _JOB_LOG_LINE_RE.match(line)
+        if not match or match.group("level").casefold() != "error":
+            continue
+        message = match.group("msg").strip()
+        if not message or message == "Traceback:":
+            continue
+        if message in reasons:
+            reasons.remove(message)
+        reasons.append(message)
+    return reasons[-limit:] if limit else []
+
+
+def recent_log_lines(log_text: str, *, limit: int = 5) -> list[str]:
+    """De senaste loggraderna utan debug, som ``HH:MM:SS meddelande``."""
+    lines: list[str] = []
+    for line in log_text.splitlines():
+        match = _JOB_LOG_LINE_RE.match(line)
+        if not match or match.group("level").casefold() == "debug":
+            continue
+        clock = _local_clock(match.group("ts"), "%H:%M:%S")
+        lines.append(f"{clock} {match.group('msg')}".strip())
+    return lines[-limit:] if limit else []
+
+
+def job_result_headline(job: Mapping[str, object]) -> tuple[str, str]:
+    """(färg, rubrik) för ett avslutat jobb, t.ex. ``Sid-OCR lyckades · 19:13 · tog 42 s``."""
+    status = str(job.get("status", ""))
+    kind = _JOB_RESULT_KINDS.get(status, "info")
+    parts = [f"{operation_label(str(job.get('operation', '')))} {format_job_status(status).lower()}"]
+    finished = _local_clock(job.get("finished_at"))
+    if finished:
+        parts.append(finished)
+    duration = format_duration(job.get("started_at") or job.get("created_at"), job.get("finished_at"))
+    if duration:
+        parts.append(f"tog {duration}")
+    return kind, " · ".join(parts)
+
+
+def latest_finished_job(
+    jobs: Sequence[Mapping[str, object]], *, dismissed: set[str] | frozenset[str] = frozenset(),
+) -> Mapping[str, object] | None:
+    """Det nyaste jobbet om det är avslutat och inte dolt, annars None.
+
+    Bara det allra nyaste jobbet räknas: körs det fortfarande visar panelen för
+    pågående jobb det, och ett äldre resultat ska inte ta dess plats.
+    """
+    if not jobs:
+        return None
+    newest = jobs[0]
+    if str(newest.get("status")) not in TERMINAL_JOB_STATUSES:
+        return None
+    if str(newest.get("id")) in dismissed:
+        return None
+    return newest
 
 
 def job_option_labels(jobs: Sequence[Mapping[str, object]]) -> list[str]:
@@ -428,6 +567,8 @@ ADMIN_HIDDEN_PARAMS: dict[str, tuple[str, ...]] = {
 
 # Värdet för systemloggen i källväljaren (felloggen, se errors_log.py).
 SYSTEM_LOG_OPTION = "system"
+# Streamlit-sidornas egen logg (web_log): citatlänkar, Sidgranskning m.m.
+WEB_LOG_OPTION = "web"
 
 # Lässfönster och visningstak: en jobblogg kan vara flera MB.
 LOG_SCAN_LINES = 5000
@@ -1959,21 +2100,51 @@ def render_neo4j_section(*, disabled: bool = False) -> None:
                 if not clicked:
                     continue
                 try:
-                    job = start_job(operation_id, {})
+                    start_job(operation_id, {})
                 except (ValueError, RuntimeError, OSError, OperationFailed) as exc:
                     st.error(f"Kunde inte starta: {exc}")
                 else:
-                    st.success(f"Startat jobb {job['id']}")
+                    # Visas som toast av Admin-sidan efter omritningen.
+                    st.session_state["job_started_label"] = operation_label(operation_id)
                     st.rerun(scope="app")
 
 
+def _read_job_log(job: Mapping[str, object]) -> str:
+    from operations.job_service import read_log_tail
+
+    log_path = job.get("log_path")
+    return read_log_tail(Path(str(log_path)), lines=LOG_SCAN_LINES) if log_path else ""
+
+
+def job_failure_text(job: Mapping[str, object]) -> str:
+    """Felorsaken för Jobbhistoriken: loggens felrader, annars jobbets ``error``.
+
+    Exitkoden ensam (``ocr-pages misslyckades (exitkod 1)``) säger inte varför.
+    """
+    return "; ".join(job_failure_reasons(_read_job_log(job))) or str(job.get("error") or "")
+
+
 def render_active_job(job: Mapping[str, object]) -> None:
-    """Rendera panelen för det aktiva jobbet."""
+    """Rendera panelen för det aktiva jobbet.
+
+    Utöver förloppet visas starttid, hur länge jobbet kört och de senaste
+    loggraderna (utan debug), så att man ser att något händer även när
+    operationen inte rapporterar något förlopp.
+    """
     import streamlit as st
 
+    from db import now
+
     status = format_job_status(str(job.get("status", "")))
-    st.subheader(f"Jobb: {job.get('id')} — {status}")
-    st.write(f"Operation: {job.get('operation')}")
+    st.subheader(f"{operation_label(str(job.get('operation', '')))} — {status}")
+    started = job.get("started_at") or job.get("created_at")
+    meta = [f"`{str(job.get('id', ''))[:8]}`"]
+    if _local_clock(started):
+        meta.append(f"startad {_local_clock(started)}")
+    elapsed = format_duration(started, now())
+    if elapsed:
+        meta.append(f"har kört {elapsed}")
+    st.caption(" · ".join(meta))
 
     fraction = progress_fraction(job)
     if fraction is not None:
@@ -1983,6 +2154,42 @@ def render_active_job(job: Mapping[str, object]) -> None:
 
     if job.get("message"):
         st.caption(str(job["message"]))
+
+    lines = recent_log_lines(_read_job_log(job), limit=ACTIVE_JOB_LOG_LINES)
+    if lines:
+        st.code("\n".join(lines), language=None)
+    else:
+        st.caption("Inga loggrader ännu.")
+
+
+def render_job_result(job: Mapping[str, object]) -> bool:
+    """Visa utfallet för ett avslutat jobb; True om användaren dolde det.
+
+    Vid fel visas loggens ``[error]``-rader, eftersom jobbets ``error`` bara
+    säger exitkoden (``ocr-pages misslyckades (exitkod 1)``) och inte varför.
+    """
+    import streamlit as st
+
+    kind, headline = job_result_headline(job)
+    lines = [f"**{headline}**"]
+    if job.get("message"):
+        lines.append(str(job["message"]))
+    log_text = _read_job_log(job)
+    if kind == "success":
+        # Vad jobbet kom fram till står ofta bara i loggens sista rader.
+        lines.extend(f"- {line}" for line in recent_log_lines(log_text, limit=JOB_RESULT_LOG_LINES))
+    else:
+        reasons = job_failure_reasons(log_text)
+        if reasons:
+            lines.extend(f"- {reason}" for reason in reasons)
+        elif job.get("error"):
+            lines.append(str(job["error"]))
+        lines.append("Hela loggen finns i fliken Logg.")
+    # Markdown: $ i loggrader blir annars LaTeX hos Streamlit.
+    body = "\n\n".join(line.replace("$", "\\$") for line in lines)
+    getattr(st, kind)(body)
+    # Under rutan: en smal kolumn bredvid trycker ihop knappen i ett smalt fönster.
+    return bool(st.button("Dölj", key="job_result_dismiss", type="tertiary"))
 
 
 def render_log_tab(jobs: Sequence[Mapping[str, object]]) -> None:
@@ -1998,16 +2205,19 @@ def render_log_tab(jobs: Sequence[Mapping[str, object]]) -> None:
 
     by_id = {str(job.get("id")): job for job in jobs}
     active = next((job for job in jobs if job.get("active_slot") is not None), None)
-    options = [SYSTEM_LOG_OPTION, *by_id]
+    options = [SYSTEM_LOG_OPTION, WEB_LOG_OPTION, *by_id]
     default = str(active["id"]) if active else SYSTEM_LOG_OPTION
 
     settings = load_settings()
     apply_debug_logging(settings)
     errors_path = error_log_path()
+    web_path = web_log_path()
 
     def label(value: str) -> str:
         job = by_id.get(value)
-        return job_option_labels([job])[0] if job else "Systemlogg (nu)"
+        if job:
+            return job_option_labels([job])[0]
+        return "Webbsidorna" if value == WEB_LOG_OPTION else "Systemlogg (nu)"
 
     # Auto-uppdatering bara medan ett jobb körs; annars är loggen statisk.
     @st.fragment(run_every=2.0 if active else None)
@@ -2033,16 +2243,22 @@ def render_log_tab(jobs: Sequence[Mapping[str, object]]) -> None:
             debug_on = st.toggle(
                 "Debugloggning", value=debug_value_enabled(settings.get(DEBUG_KEY)),
                 key="log_debug",
-                help="Loggar beslut och avvikelser på debug-nivå i jobbloggen. "
-                     "Gäller jobb som startas efter växlingen.",
+                help="Loggar beslut och avvikelser på debug-nivå. Gäller jobb som "
+                     "startas efter växlingen och webbsidorna direkt.",
             )
 
         job = by_id.get(source)
-        log_path = (
-            Path(str(job["log_path"])) if job and job.get("log_path") else errors_path
-        )
+        if job and job.get("log_path"):
+            log_path = Path(str(job["log_path"]))
+        else:
+            log_path = web_path if source == WEB_LOG_OPTION else errors_path
         with window:
-            if job is None:
+            if source == WEB_LOG_OPTION:
+                st.caption(
+                    "Webbsidorna — Utredning, Sidgranskning och citatlänkar; "
+                    f"debugrader bara med Debugloggning på ({web_path})"
+                )
+            elif job is None:
                 st.caption(f"Systemlogg — fel och avvikelser från alla steg ({errors_path})")
             else:
                 status = format_job_status(str(job.get("status", "")))

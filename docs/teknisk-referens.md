@@ -316,7 +316,7 @@ Exitkoder från `ocr_pages.py --engine surya-layout`:
   stoppade — en trasig runtime kostar ett försök per körning, inte tre. Stegen
   utan Surya (merge_wpu, maskeringar, normalisering, kvalitet) körs ändå, och
   `scripts/ocr.py` avslutar med icke-noll exitkod.
-- `1` — övriga fel (saknad PDF, `--pages` som inte är heltal, saknad `--out-dir`).
+- `1` — övriga fel (saknad PDF, `--pages` som inte är heltal, tom `--out-dir`; standard är `generated/text_pages`).
 - `2` — argparse avvisade kommandoraden (okänd eller saknad flagga).
 - `130` — avbrutet med Ctrl-C; `143` — avbrutet med SIGTERM (128 + 15), som när
   ett bakgrundsjobb avbryts.
@@ -818,6 +818,20 @@ filer (t.ex. en palme- och en wpu-version) och svaret inte entydigt pekar ut
 vilken, visas en knapp per fil märkt med titeldelen. Referenser utan sida
 (`[Nr X]`) länkar till hela filen, och en referens som listar flera sidor
 (`[Nr X, sida 3, 7]`) öppnar den första.
+
+Modellen avkortar ibland långa WPU-id (`[Nr Pol-1986-03-04_1050_E15-A…, sida 3]`,
+även med `...`) och syftar tillbaka med `[samma dokument, sida 2]`,
+`[samma källa]` eller `[samma sida]`. Ett avkortat id löses som prefix
+(`citations.resolve_truncated`) och länkas bara när det pekar ut exakt en PDF,
+efter avsmalning mot källorna som faktiskt hämtades: RAG-lägets träffar, och i
+utredningsläget `source`-raderna i verktygssvaren (`sources_from_tool_output`;
+Claude-vägen läser dem ur `ToolResultBlock`, OpenAI-vägen ur samtalets
+`tool`-meddelanden). Ett tvetydigt prefix förblir text och loggas på debugnivå
+(loggern `citations`) — länken gissas aldrig fram. En tillbakasyftning ärver
+närmast föregående hänvisning när den gav exakt en PDF (`samma sida` även dess
+sida); efter en olöst eller tvetydig hänvisning förblir den text. Båda
+systempromptarna kräver dessutom hela dokument-ID:t i varje hänvisning, så
+toleransen är ett skyddsnät och inte normalfallet.
 
 Leverantören kan avsluta mitt i en mening och ändå svara HTTP 200: DeepSeek
 skickar `finish_reason: length` (token-/kontextgränsen) eller
@@ -1596,17 +1610,40 @@ per-dokumentresultat behålls; ett avbrutet jobb markeras aldrig `succeeded`.
 
 - Lokal, utan inloggning; exponerar bara produktionsflöden (installation,
   tester, tessdata och webbstart visas inte).
-- Aktivt jobb-panel överst med progress och Avbryt; uppdateras med
-  `st.fragment(run_every=...)` bara medan ett jobb är aktivt.
+- Aktivt jobb-panel överst med operationens etikett, starttid, hur länge jobbet
+  kört, progress eller steg, de fem senaste loggraderna (utan debug) och Avbryt;
+  uppdateras med `st.fragment(run_every=...)` bara medan ett jobb är aktivt.
+- Ett startat jobb bekräftas med en toast ("Sid-OCR startat"). Etiketten sparas i
+  `session_state["job_started_label"]` och visas efter `st.rerun` — ett
+  `st.success` före omritningen hinner aldrig synas.
+- När inget jobb körs visar en resultatruta det **senaste** jobbets utfall (grön
+  lyckades, röd misslyckades, gul avbruten) med sluttid och varaktighet. Lyckat
+  jobb: de tre sista loggraderna (vad det kom fram till, t.ex. Neo4j-status).
+  Misslyckat eller avbrutet: loggens `[error]`-rader utan traceback
+  (`job_failure_reasons`), eftersom jobbets `error` bara anger exitkoden.
+  **Dölj** gömmer rutan för just det jobbet under sessionen. Jobbhistoriken visar
+  samma felorsak (`job_failure_text`). Loggtolkningen ligger i `admin_ui.py`;
+  sidan läser aldrig loggfiler själv (`test_admin_page_has_a_log_tab_that_owns_all_logging`).
+- Flikarna har nyckeln `admin_tab` och en `on_change`-callback, så vald flik
+  sparas på servern och speglas till `admin_tab_sparad`, som skickas som
+  `default`. Utan nyckel räknas flikarnas identitet ur positionen: när toppen
+  byts (resultatruta ↔ jobbpanel) vid start eller avslut blev flikarna ett nytt
+  element och hoppade tillbaka till Pipeline.
 - **Logg**-fliken äger all loggning och använder hela sidbredden
   (`layout="wide"`): **ett** loggfönster med källväljare — **Systemlogg (nu)**
-  (felloggen, som alla steg skriver till) eller en av de senaste jobbloggarna.
-  Förvalet är det körande jobbet, annars systemloggen. Filtren — källa, nivå
+  (felloggen, som alla steg skriver till), **Webbsidorna** (`generated/web.log`,
+  Streamlit-sidornas egen logg via `web_log.get_logger`: citatlänkar, Utredning,
+  Sidgranskning) eller en av de senaste jobbloggarna.
+  Förvalet är det körande jobbet, annars systemloggen. Webbsidornas debugrader
+  skrivs direkt när växlingen slås på (inställningen läses vid varje debugrad),
+  utan omstart av Streamlit; loggern sprider inte till rotloggern. Filtren — källa, nivå
   (Alla/Debug/Info/Varning/Fel), fritextsökning och debug-växlingen — ligger
   staplade i en smal vänsterkolumn, så loggfönstret får resten av bredden.
   Fönstret uppdateras automatiskt medan ett jobb körs. Läsningen skannar de sista
   5 000 raderna och visar högst 300 träffar, så en flera MB stor logg inte
-  blockerar sidan.
+  blockerar sidan. `job_service.read_log_tail` läser filen bakifrån i block på
+  64 kB tills raderna räcker, så resultatrutan och Jobbhistoriken inte läser hela
+  loggar vid varje omritning.
 - **Debugloggning** slås på/av med växlingen i Logg-fliken. Inställningen sparas
   i `generated/admin_settings.json` och sätts som `PALME_DEBUG_LOG` för jobb som
   startas efter växlingen (pågående jobb påverkas inte). För förgrundskörning
@@ -1690,7 +1727,8 @@ per-dokumentresultat behålls; ett avbrutet jobb markeras aldrig `succeeded`.
 | `src/config.py` | Läser/skriver `generated/llm_config.json` (delas av Utredning-sidan och llm_correct) |
 | `src/backends.py` | Delad backend-katalog (Claude/OpenAI/DeepSeek/OpenRouter/Ollama/custom) + `fetch_models`/`available_models`/`fetch_model_pricing` — delas av Utredning-sidan och `scripts/llm_config.py` |
 | `scripts/llm_config.py` → `src/llm_config_cli.py` | Visa/ändra `generated/llm_config.json` utan webgränssnittet (interaktiv meny i terminal) |
-| `src/citations.py` | Slår upp `[Nr X, sida Y]` (även `[Nr X, sida Y, Z]` och sida-lösa `[Nr X]`) och WPU-prefix som `[Pol-..., sida Y]` mot PDF:er och renderar citatlänkar; hanterar även WPU-stammar där dokument-ID och titel sitter ihop utan avskiljare |
+| `src/citations.py` | Slår upp `[Nr X, sida Y]` (även `[Nr X, sida Y, Z]` och sida-lösa `[Nr X]`) och WPU-prefix som `[Pol-..., sida Y]` mot PDF:er och renderar citatlänkar; hanterar även WPU-stammar där dokument-ID och titel sitter ihop utan avskiljare, avkortade id (`…`) som löses bara när prefixet är entydigt, och tillbakasyftningar som `[samma dokument, sida Y]`/`[samma sida]` |
+| `src/web_log.py` | Streamlit-sidornas logg: `get_logger(namn)` skriver till `generated/web.log` i jobbloggarnas radformat (`<tid> [nivå] namn: meddelande`); debugrader bara när Debugloggning är på (`admin_settings.json` eller `PALME_DEBUG_LOG`), visas som källan **Webbsidorna** i Admin → Logg |
 | `src/Utredning.py` | Streamlit-sida för frågor (RAG- och MCP-läget, valda med en segmenterad kontroll), token-/kostnadsräknare, svarsgraf, sparknapp, källbokmärken samt facett-/fuzzy-sökfilter i sidofältet |
 | `src/llm_usage.py` | Token- och kostnadsräkning för LLM-anrop (Streamlit-fri): parsning av leverantörernas usage, prissättning inkl. cache-träffar och formatering av räknaren |
 | `src/casebook_ui.py` | Delade Streamlit-komponenter: kompakt sidhuvud (`render_page_header`), utredningspärm, källbokmärken och anteckningar |

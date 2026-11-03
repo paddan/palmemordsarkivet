@@ -271,7 +271,7 @@ def _register_page_ocr_operations() -> None:
         parameters=(
             _p("root", "--root", "path", ROOT, "Projektrot"),
             _p("in", "--in", "path", None, "PDF-fil", required=True),
-            _p("out_dir", "--out-dir", "path", None, "Output-katalog"),
+            _p("out_dir", "--out-dir", "path", ROOT / "generated" / "text_pages", "Output-katalog"),
             _p("engine", "--engine", "choice", "tesseract", "Motor", choices=("tesseract", "vision", "surya", "surya-layout", "detect-only")),
             _p("langs", "--langs", "str", "swe", "Tesseract-språk"),
             _p("dpi", "--dpi", "int", 300, "Render-DPI"),
