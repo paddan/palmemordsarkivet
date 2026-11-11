@@ -712,7 +712,8 @@ kvar i `text`. Standardmotorn är `lines` tills piloten visat att `layout` är m
 inte utan den. Vikterna (`datalab-to/surya-ocr-2-gguf`) har en egen licens — se modellkortet.
 
 **Innan ytterligare hastighetsoptimering**: läs Hastighetsutredning (2026-10-28) inkl.
-prototypen i `docs/surya-layout-pilot.md`. Ägarbeslut 2026-10-28: arbetet är pausat;
+prototypen och H4 (flera sidor per anrop, 1,46× men kräver protokolländring) i
+`docs/surya-layout-pilot.md`. Ägarbeslut 2026-10-28: arbetet är pausat;
 `lines` är kvar som automatisk standard och `surya-layout` finns för riktad omskanning
 av blanketter, tabeller och förhör. Osäker tidig avbrytning ska inte integreras. Ingen
 aktiv optimeringsuppgift finns; arbetet återupptas endast efter ett nytt beslut från ägaren, inte

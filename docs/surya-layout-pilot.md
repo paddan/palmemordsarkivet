@@ -625,8 +625,56 @@ som produktionsvägen gör efter en sådan repeat. Parsningen gav 20 block (20 g
 inte att ingen giltig text tappas. En rå räkning eller första sampel är **ingen säker
 stoppolicy**.
 
+**H4, flera sidor per anrop (batchning).** Samma tre bassidor som ovan (3, 27, 33)
+kördes i ordning **A-B-C-C-B-A**, där A tar en sida per `predictor`-anrop, B två
+och C tre. En process per observation ger en färsk `llama-server` (Surya dödar
+servern när processen går ner), uppvärmning med en blank 400×300-bild mäts för
+sig, och paret A-B-C-C-B-A gör att drift och throttling syns i stället för att
+tillskrivas varianten.
+
+| Observation | Sidor/anrop | Väggtid, 3 sidor | Per sida |
+|---|---:|---:|---:|
+| A | 1 | 74,972 s | 24,991 s |
+| A | 1 | 75,451 s | 25,150 s |
+| B | 2 | 59,271 s | 19,757 s |
+| B | 2 | 52,314 s | 17,438 s |
+| C | 3 | 53,689 s | 17,896 s |
+| C | 3 | 49,084 s | 16,361 s |
+
+Tre sidor per anrop tog **51,4 s mot 75,2 s** för en sida per anrop, alltså
+**1,46×** snabbare väggtid (2 per anrop: 1,35×). Starten per observation var
+1,34–2,61 s med varm cache och uppvärmningen 0,48–0,79 s, så skillnaden ligger i
+inferensen. Servern kör redan `--parallel 8` och `-ngl 99`; vinsten kommer av att
+sidorna ligger samtidigt i var sina slots, inte av att varje sida går snabbare.
+Taket är den långsammaste sidan i omgången: vinsten är alltså som störst när en
+körning har flera medeltunga sidor i flykten och försvinner när en enda sida
+dominerar.
+
+Två begränsningar ska sägas rakt ut:
+
+- **Sida 33 är inte jämförbar mellan körningar.** Här gav den 63 HTML-tecken och
+  11,6–14,9 s i alla sex observationerna; i baslinjen och H3a gav samma sida en
+  decoder-repeat på 8 117 tokens och 70–80 s. Variansen ligger i modellens
+  generering, inte i batchningen, så sidan bär bara jämförelsen inom den här
+  körningen.
+- **Vinsten gäller medeltunga sidor.** En tidigare, förorenad scratchkörning på
+  åtta tyngre sidor (två överstora blanketter, en 4868×3439-registertabell, en
+  3066×5449-samtalsutskrift) gav ingen vinst alls vid 2–8 sidor per anrop, men
+  den körningen delade GPU med en andra mätning och skripten försvann med
+  tempkatalogen. Den stöder ingen slutsats åt något håll.
+
+Batchning kräver att en begäran bär flera sidor: `PROTOCOL_VERSION` i
+`surya_worker.py` höjs, `MAX_BLOCKS`/`MAX_PAGE_CHARS`/`MAX_RESULT_BYTES` blir
+per sida, `surya_client` får `read_pages`, och `run_ocr_pages` måste rendera
+framåt och kunna rapportera delvis lyckade omgångar. Det är alltså en riktig
+protokolländring, inte en flagga. Enligt pausbeslutet nedan är den **inte
+genomförd**, och den ska mätas på minst 20 sidor innan den räknas som ett
+hastighets-PASS.
+
 **Slutsats.** Hastighetskriteriet är fortfarande **FAIL** och `lines` är kvar som
-standard. H1/H2 ger inte skäl att ändra någon prestandadefault. En scratchprototyp
+standard. H1/H2 ger inte skäl att ändra någon prestandadefault; H4 visar den enda
+mätbara vinsten (1,46× på tre sidor), men den kräver en protokolländring och är
+inte införd. En scratchprototyp
 för streaming har provats (se nedan): streaming och avbrott fungerar tekniskt, men
 den fasta stoppregeln fälldes av falska positiver på legitima upprepningar.
 Produktionsstreaming är därför inte införd; defaults, tokenbudget och kriterium

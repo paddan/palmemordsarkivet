@@ -371,7 +371,7 @@ Task 11 är PASS; se `docs/surya-layout-pilot.md`, *Beslut efter utredningen (20
 
 - Att mata blankettfälten (uppgiftslämnare, datum, klockan, *uppslaget avser*) in i facetterna eller kunskapsgrafen — fälten sparas strukturerat i `layout_json`, så det är en ren uppföljning.
 
-- Delad worker över flera PDF:er / batchning av flera sidor per anrop (beslut efter pilotens uppstartsmätning).
+- Delad worker över flera PDF:er / batchning av flera sidor per anrop. **Beslut 2026-10-28:** batchning mättes (H4 i `docs/surya-layout-pilot.md`) — tre sidor per anrop gav 1,46× snabbare väggtid, men det kräver en protokolländring (flera sidor per begäran) och är inte genomförd enligt pausbeslutet. Delad worker över flera filer sparar bara 1,3–2,6 s per fil.
 - Surya `detection`-radboxar för exakt PDF-placering och träffmarkering.
 - Rendering av Markdown/tabeller i Utrednings källkort och Utredningspärmen.
 - Att låta vision/Tesseract fylla samma blockstruktur (infoscry gör det; här ger det inget förrän en konsument behöver det).

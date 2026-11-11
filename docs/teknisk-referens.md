@@ -249,6 +249,10 @@ maskeringsmarkörer*). Efter en andra omgång parningsregler (beslut BJ: etikett
 och spalter, två nummer på en etikettrad, värden bredvid etiketten och alias) parar
 layoutmotorn 50 av 56 ifyllda fält rätt (89 %) på pilotens fem kontrollerade
 blanketter, mot 68 % före; hastighetskriteriet är fortfarande inte uppfyllt.
+Hastighetsutredningen 2026-10-28 finns i samma dokument (H1 lediga slots,
+H2 logprobs, H3a sidans första giriga anrop, H4 flera sidor per anrop och en
+strömmande scratchprototyp): ingen åtgärd ger ett godkänt kriterium, H4:s
+1,46× kräver en protokolländring, och arbetet är pausat av ägaren.
 
 **Installation och miljö.** `scripts/install.py --surya-layout` (se
 [Vad install.py gör](#vad-installpy-gör)) skapar worker-venv:en.
