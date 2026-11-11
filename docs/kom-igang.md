@@ -7,7 +7,8 @@ detaljer om varje steg, se [Teknisk referens](teknisk-referens.md).
 
 ## Krav
 
-- macOS (testat på Darwin 25), Python 3.11+
+- macOS (testat på Darwin 25), Python 3.11+ — `./install.sh` bygger `.venv` med
+  den nyaste Python som finns i `PATH` (i dag Homebrews 3.15)
 - [Homebrew](https://brew.sh)
 - Minst en stödd LLM-backend: Claude, OpenAI, DeepSeek, OpenRouter eller en
   OpenAI-kompatibel lokal tjänst
@@ -43,6 +44,15 @@ Alla `scripts/*.py` har en genväg, så samma form fungerar för till exempel
 ./install.sh --no-surya  # snabbare install utan Surya-OCR
 ./install.sh --dev  # valfritt: installera pytest/ruff/mypy för utveckling
 ```
+
+Installera alltid med `./install.sh` — inte med `uv sync`, `uv run` eller
+`pip install -e .`. De installerar bara grundberoendena och hoppar över
+webbextran (Streamlit m.fl.), så `./web.sh` stoppar med *streamlit saknas i
+.venv*. Har det redan hänt räcker det att köra `./install.sh` (gärna `--dev`):
+skriptet återanvänder den befintliga `.venv`, lägger till pip om den saknas
+(uv-venvar har ingen) och installerar det som fattas. Kör `.venv` en äldre Python
+än den nyaste som finns (uv väljer ofta 3.12) skriver skriptet det; ta då bort
+`.venv` och kör `./install.sh` igen för att byta.
 
 ### Valfritt: Surya 2-layout
 

@@ -30,6 +30,9 @@ from admin_ui import (
 from operations.models import OperationDefinition, ParameterDefinition
 from operations.registry import OperationRegistry
 
+# Absolut sökväg: AppTest löser relativa sökvägar mot testfilen, inte cwd.
+ADMIN_PAGE = ROOT / "src" / "pages" / "8_Admin.py"
+
 
 def _llm_settings_app(tmp_path, monkeypatch) -> object:
     from streamlit.testing.v1 import AppTest
@@ -401,14 +404,17 @@ def test_llm_settings_rename_moves_the_profile_usage(tmp_path, monkeypatch) -> N
 
 
 def test_llm_settings_cannot_delete_the_last_profile(tmp_path, monkeypatch) -> None:
-    """Skyddet låg bara i widgetens disabled — next(iter(())) kraschade annars."""
+    """Knappen är inaktiverad när bara en profil finns.
+
+    AppTest vägrar numera klicka på inaktiverade knappar, så kodens extra
+    skydd mot next(iter(())) går inte att nå härifrån; testet låser i stället
+    att knappen är inaktiverad och att profilen finns kvar.
+    """
     app = _llm_settings_app(tmp_path, monkeypatch)
 
-    next(button for button in app.button if button.label == "Ta bort").click()
-    app.run(timeout=20)
-
+    delete = next(button for button in app.button if button.label == "Ta bort")
+    assert delete.disabled
     assert not app.exception
-    assert any("sista konfigurationen" in item.value for item in app.error)
     stored = json.loads((tmp_path / "llm_config.json").read_text(encoding="utf-8"))
     assert "Standard" in stored["profiles"]
 
@@ -874,7 +880,7 @@ def _admin_page_app(tmp_path, monkeypatch, *, active: bool = True):
 
     from streamlit.testing.v1 import AppTest
 
-    at = AppTest.from_file("src/pages/8_Admin.py")
+    at = AppTest.from_file(str(ADMIN_PAGE))
     # Håll LLM-panelen borta från repots riktiga konfigurationsfil.
     monkeypatch.setattr("config.CONFIG_FILE", tmp_path / "llm_config.json")
     return at.run(timeout=60)
@@ -1084,7 +1090,7 @@ def test_pipeline_tab_shows_only_the_pipeline_operation(tmp_path, monkeypatch) -
         db.init_schema(conn)
     monkeypatch.setattr("config.CONFIG_FILE", tmp_path / "llm_config.json")
 
-    app = AppTest.from_file("src/pages/8_Admin.py").run(timeout=60)
+    app = AppTest.from_file(str(ADMIN_PAGE)).run(timeout=60)
 
     assert not app.exception
     def label_of(widget) -> str:
@@ -1704,7 +1710,7 @@ def _finished_job_page(tmp_path, monkeypatch, *, status: str, log: str, error=No
 
     from streamlit.testing.v1 import AppTest
 
-    return AppTest.from_file("src/pages/8_Admin.py").run(timeout=60)
+    return AppTest.from_file(str(ADMIN_PAGE)).run(timeout=60)
 
 
 def test_admin_page_shows_why_the_latest_job_failed(tmp_path, monkeypatch) -> None:
@@ -1765,7 +1771,7 @@ def test_admin_page_confirms_a_started_job_after_the_rerun(tmp_path, monkeypatch
         lambda operation_id, params: started.append(operation_id) or {"id": "x"},
     )
 
-    at = AppTest.from_file("src/pages/8_Admin.py").run(timeout=60)
+    at = AppTest.from_file(str(ADMIN_PAGE)).run(timeout=60)
     next(b for b in at.button if b.key == "run-pipeline__start").click().run(timeout=60)
 
     assert started == ["run-pipeline"]
@@ -1808,7 +1814,7 @@ def test_admin_tab_survives_starting_a_job(tmp_path, monkeypatch) -> None:
         "operations.job_service.start_job", lambda operation_id, params: {"id": "x"},
     )
 
-    at = AppTest.from_file("src/pages/8_Admin.py").run(timeout=60)
+    at = AppTest.from_file(str(ADMIN_PAGE)).run(timeout=60)
     # Som ett flikbyte i webbläsaren: widgetvärdet sätts och on_change körs.
     at.session_state["admin_tab"] = "OCR"
     at.session_state["admin_tab_sparad"] = "OCR"

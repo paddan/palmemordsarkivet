@@ -23,7 +23,7 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import lancedb
 import requests
@@ -197,15 +197,16 @@ def rerank(q: str, hits: list[dict], top_n: int) -> list[dict]:
 
 def _score_jev_hit(q: str, hit: dict, api_key: str) -> dict[str, object]:
     """Poängsätt en fråga–utdrag-par med Jev. Endast texten skickas, aldrig titeln."""
+    payload: dict[str, Any] = {
+        "model": JEV_MODEL,
+        "state": {"question": q, "passage": hit["text"]},
+        "questions": {"relevance": JEV_QUESTION},
+    }
     try:
         response = requests.post(
             JEV_ENDPOINT,
             headers={"Authorization": f"Bearer {api_key}"},
-            json={
-                "model": JEV_MODEL,
-                "state": {"question": q, "passage": hit["text"]},
-                "questions": {"relevance": JEV_QUESTION},
-            },
+            json=payload,
             timeout=60,
         )
     except requests.RequestException as exc:

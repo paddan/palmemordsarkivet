@@ -65,7 +65,21 @@ def test_install_is_idempotent(web_logger) -> None:
     assert _read(web_logger).count("en gång") == 1
 
 
-def test_messages_do_not_reach_the_root_logger(web_logger, caplog) -> None:
-    with caplog.at_level(logging.DEBUG):
+def test_messages_do_not_reach_the_root_logger(web_logger) -> None:
+    # Egen hanterare i stället för caplog: pytest 9 kopplar caplog även till
+    # icke-propagerande loggrar, så den hade fångat raden ändå.
+    seen: list[str] = []
+
+    class _Collect(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            seen.append(record.getMessage())
+
+    root = logging.getLogger()
+    handler = _Collect(level=logging.DEBUG)
+    root.addHandler(handler)
+    try:
         web_log.get_logger("x").warning("bara i webbloggen")
-    assert "bara i webbloggen" not in caplog.text
+    finally:
+        root.removeHandler(handler)
+    assert "bara i webbloggen" not in seen
+    assert "bara i webbloggen" in _read(web_logger)

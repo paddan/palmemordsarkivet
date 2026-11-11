@@ -21,7 +21,11 @@ def main(argv: list[str] | None = None) -> int:
 
     streamlit = ROOT / ".venv" / "bin" / "streamlit"
     if not streamlit.exists():
-        print("streamlit saknas i .venv — kör scripts/install.py", file=sys.stderr)
+        print(
+            "streamlit saknas i .venv — kör ./install.sh (installerar webbextran).\n"
+            "En .venv från `uv sync` eller `pip install -e .` saknar den.",
+            file=sys.stderr,
+        )
         return 1
 
     cmd = [str(streamlit), "run", str(ROOT / "src" / "Utredning.py"), *args]

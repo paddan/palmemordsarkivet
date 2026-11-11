@@ -177,8 +177,11 @@ def test_sokvalen_overlever_ett_varv_i_mcp(sida: AppTest) -> None:
     exakt samma sätt."""
     _slider(sida, TOP_K).set_value(33)
     _slider(sida, TOP_N).set_value(9)
-    _slider(sida, TRÖSKEL).set_value(0.85)
+    # Tröskeln är inaktiverad tills fuzzy slås på, och AppTest vägrar ändra
+    # inaktiverade widgets — slå på först, som en användare gör.
     _toggle(sida, FUZZY).set_value(True)
+    sida.run()
+    _slider(sida, TRÖSKEL).set_value(0.85)
     _selectbox(sida, RERANKER).set_value("Ingen")
     sida.run()
     assert _slider(sida, TOP_K).value == 33
@@ -373,6 +376,9 @@ def test_granserna_ligger_i_sokinstallningarna(sida: AppTest) -> None:
 
 def test_granserna_overlever_ett_varv_i_rag(sida: AppTest) -> None:
     _run(sida, MCP)
+    # Budgeten är inaktiverad tills webbsöket slås på.
+    _toggle(sida, WEBBSÖK).set_value(True)
+    sida.run()
     _slider(sida, TURER).set_value(25)
     _slider(sida, BUDGET).set_value(7)
     sida.run()
@@ -435,6 +441,7 @@ def test_webbsok_verktyget_forsvinner_nar_budgeten_ar_slut(
     monkeypatch.setattr("openai.AsyncOpenAI", lambda *a, **k: _FakeOpenAI())
     _run(sida, MCP)
     _toggle(sida, WEBBSÖK).set_value(True)
+    sida.run()
     _slider(sida, BUDGET).set_value(2)
     sida.run()
     sida.chat_input[0].set_value("Vem var ordförande?").run()

@@ -698,7 +698,7 @@ riktiga fixturer. Suryas maskeringsmarkör matchas som
 till `[MASKAD]` och när `with_redactions` avgör om ett block redan är maskerat.
 
 **Varför Surya 2 har en egen venv, och varför `text` förblir ren text**: projektets `.venv` kör
-Python 3.14 med `surya-ocr 0.17.1` och `transformers<5` (Gotcha 1); Surya 2 (`surya-ocr==0.22.1`)
+den nyaste Homebrew-Python (`install.py` väljer högsta version ≥ 3.11; i dag 3.15) med `surya-ocr 0.17.1` och `transformers<5` (Gotcha 1); Surya 2 (`surya-ocr==0.22.1`)
 är verifierad på Python 3.12 (PyTorch-hjulen saknas för Homebrews nyare Python) och kör modellen via
 `llama-server`. Två beroendeträd går inte att hålla ihop i en venv, så `surya_worker.py` körs av en
 annan tolk (`PALME_SURYA_PYTHON`, standard `~/.local/share/palmemordsarkivet/surya-venv/bin/python`;
@@ -751,7 +751,7 @@ Markdown. `--restore-reading` är CLI-only och döljs i Admin via
 
 ## Common Gotchas
 
-1. **Beroendepinning**: `sentence-transformers<5` och `transformers<5` är avsiktligt pinnade — v5 bryter cross-encoder och AutoProcessor.
+1. **Beroendepinning**: `sentence-transformers<5` och `transformers<5` är avsiktligt pinnade — v5 bryter cross-encoder och AutoProcessor. `mcp<2` pinnas uttryckligen (2.x döpte om `FastMCP`, som `rag/mcp_server.py` importerar; `claude-agent-sdk` tillåter annars 2.x). `pyarrow<27`: först 26 har hjul för Python 3.15, äldre tak tvingar fram ett källkodsbygge som misslyckas. Installera alltid med `install.py` — `uv sync`/`pip install -e .` hoppar över extran `web`, och en uv-venv saknar pip (skriptet kör då `ensurepip` och använder `python -m pip`).
 2. **text-layer ≠ bra kvalitet**: Vissa PDF:er har gammal OCR-skräp inbäddad. Sortera på score, inte källa.
 3. **Surya-prestanda**: ~30–100 s/sida vs ~1 s/sida för Tesseract. Körs bara på sidor under threshold.
 4. **FTS kräver tantivy**: Saknas det faller hybrid-sökning tillbaka på vektor-only.

@@ -6,6 +6,8 @@ import os
 import shutil
 import subprocess
 import sys
+import urllib.request
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -19,25 +21,87 @@ SURYA_LAYOUT_PACKAGE = "surya-ocr==0.22.1"
 SURYA_LAYOUT_PYTHON_VERSION = "3.12"
 SURYA_LAYOUT_BREW_TOOLS = (("llama-server", "llama.cpp"), ("uv", "uv"))
 
+# Homebrews hunspell levererar inga ordlistor; LibreOffices svenska (LGPL-3,
+# Göran Andersson) hämtas då i stället. Pinnad commit, så en ändring uppströms
+# inte tyst byter ordlista (och därmed kvalitetspoängen).
+SV_DICTIONARY_COMMIT = "4f1df64b2e8e14751aa7c2205d170ca016071315"
+SV_DICTIONARY_URL = (
+    f"https://raw.githubusercontent.com/LibreOffice/dictionaries/{SV_DICTIONARY_COMMIT}"
+    "/sv_SE/dictionaries/{name}"
+)
 
-def _python311() -> str | None:
-    for cmd in ("python3.13", "python3.12", "python3.11", "python3"):
-        exe = shutil.which(cmd)
+
+def _python_version(exe: str) -> tuple[int, int] | None:
+    try:
+        out = subprocess.check_output([exe, "-c", "import sys; print(*sys.version_info[:2])"], text=True)
+        major, minor = out.split()
+        return int(major), int(minor)
+    except Exception:
+        return None
+
+
+def newest_python(
+    which: Callable[[str], str | None] = shutil.which,
+    version_of: Callable[[str], tuple[int, int] | None] = _python_version,
+) -> str | None:
+    """Den nyaste tolken i PATH som är minst Python 3.11, eller ``None``.
+
+    Letar efter ``python3`` och ``python3.11``–``python3.30`` och väljer högst
+    version, så en ny Homebrew-Python används utan att listan behöver ändras.
+    """
+    best: tuple[tuple[int, int], str] | None = None
+    for cmd in ["python3", *(f"python3.{minor}" for minor in range(30, 10, -1))]:
+        exe = which(cmd)
         if exe is None:
             continue
-        try:
-            out = subprocess.check_output([exe, "-c", "import sys; print(sys.version_info >= (3,11))"], text=True)
-            if out.strip() == "True":
-                return exe
-        except Exception:
+        version = version_of(exe)
+        if version is None or version < (3, 11):
             continue
-    return None
+        if best is None or version > best[0]:
+            best = (version, exe)
+    return None if best is None else best[1]
 
 
-def llama_server_present(env: dict[str, str] | None = None) -> bool:
+def _fetch(url: str) -> bytes:
+    with urllib.request.urlopen(url, timeout=60) as response:  # noqa: S310 — fast https-adress
+        data: bytes = response.read()
+    return data
+
+
+def download_sv_dictionary(spell_dir: Path, fetch: Callable[[str], bytes] = _fetch) -> bool:
+    """Hämta sv_SE.aff/.dic till ``spell_dir``; ``False`` (och inget skrivet) vid fel.
+
+    Filerna skrivs först när båda hämtats, så en avbruten hämtning inte lämnar
+    en halv ordlista som hunspell sedan läser.
+    """
+    try:
+        files = {name: fetch(SV_DICTIONARY_URL.format(name=name)) for name in ("sv_SE.aff", "sv_SE.dic")}
+    except OSError as exc:
+        print(f"  VARNING: kunde inte hämta sv_SE-ordlistan ({type(exc).__name__}: {exc})")
+        return False
+    spell_dir.mkdir(parents=True, exist_ok=True)
+    for name, data in files.items():
+        tmp = spell_dir / f".{name}.tmp"
+        tmp.write_bytes(data)
+        tmp.replace(spell_dir / name)
+    return True
+
+
+def pip_bootstrap_command(venv: Path) -> list[str] | None:
+    """Kommando som installerar pip i ``venv``, eller ``None`` om pip redan finns.
+
+    En venv skapad av ``uv venv``/``uv sync`` saknar pip, och då hade
+    ``pip install`` nedan kraschat på en saknad fil.
+    """
+    if any(venv.glob("lib/python*/site-packages/pip")):
+        return None
+    return [str(venv / "bin" / "python"), "-m", "ensurepip", "--upgrade"]
+
+
+def llama_server_present(env: Mapping[str, str] | None = None) -> bool:
     """``llama-server`` finns i PATH, eller ``LLAMA_CPP_BINARY`` pekar på en befintlig fil."""
-    env = os.environ if env is None else env
-    explicit = env.get("LLAMA_CPP_BINARY", "")
+    environ: Mapping[str, str] = os.environ if env is None else env
+    explicit = environ.get("LLAMA_CPP_BINARY", "")
     if explicit and Path(explicit).is_file():
         return True
     return shutil.which("llama-server") is not None
@@ -178,7 +242,7 @@ def main(argv: list[str] | None = None) -> int:
     sv_aff = Path(brew_prefix) / "share" / "hunspell" / "sv_SE.aff"
     sv_dic = Path(brew_prefix) / "share" / "hunspell" / "sv_SE.dic"
     spell_dir = Path.home() / "Library" / "Spelling"
-    if (spell_dir / "sv_SE.aff").is_file():
+    if all((spell_dir / name).is_file() for name in ("sv_SE.aff", "sv_SE.dic")):
         print("  sv_SE-ordlista finns redan")
     elif sv_aff.is_file():
         spell_dir.mkdir(parents=True, exist_ok=True)
@@ -187,11 +251,12 @@ def main(argv: list[str] | None = None) -> int:
             target.unlink(missing_ok=True)
             target.symlink_to(src)
         print("  sv_SE-ordlista länkad till ~/Library/Spelling/")
+    elif download_sv_dictionary(spell_dir):
+        print("  sv_SE-ordlista hämtad från LibreOffice till ~/Library/Spelling/")
     else:
-        print(f"  VARNING: sv_SE-ordlista hittades inte under {sv_aff.parent}/")
         print("  Ladda ner sv_SE.{aff,dic} manuellt och lägg i ~/Library/Spelling/")
 
-    python = _python311()
+    python = newest_python()
     if python is None:
         print("Python 3.11+ krävs.", file=sys.stderr)
         return 1
@@ -200,13 +265,25 @@ def main(argv: list[str] | None = None) -> int:
     venv = ROOT / ".venv"
     if not venv.exists():
         subprocess.run([python, "-m", "venv", str(venv)], check=True)
+    else:
+        current, newest = _python_version(str(venv / "bin" / "python")), _python_version(python)
+        if current and newest and current < newest:
+            print(
+                f"  OBS: .venv kör Python {current[0]}.{current[1]} men {newest[0]}.{newest[1]} finns. "
+                "Ta bort .venv och kör om ./install.sh för att byta."
+            )
 
-    pip = venv / "bin" / "pip"
-    subprocess.run([str(pip), "install", "--upgrade", "pip", "--quiet"], check=True)
+    bootstrap = pip_bootstrap_command(venv)
+    if bootstrap is not None:
+        print("→ .venv saknar pip (skapad av uv?) — installerar pip…")
+        subprocess.run(bootstrap, check=True)
+    # `python -m pip`: ensurepip skapar bara pip3/pip3.X, inte skriptet `pip`.
+    pip = [str(venv / "bin" / "python"), "-m", "pip"]
+    subprocess.run([*pip, "install", "--upgrade", "pip", "--quiet"], check=True)
     extras = "dev,web" if with_dev else "web"
-    subprocess.run([str(pip), "install", "--quiet", "-e", f".[{extras}]"], cwd=ROOT, check=True)
+    subprocess.run([*pip, "install", "--quiet", "-e", f".[{extras}]"], cwd=ROOT, check=True)
     if with_surya:
-        subprocess.run([str(pip), "install", "--quiet", "-e", ".[surya]"], cwd=ROOT, check=True)
+        subprocess.run([*pip, "install", "--quiet", "-e", ".[surya]"], cwd=ROOT, check=True)
 
     print("→ tessdata (swe_best)…")
     subprocess.run([str(venv / "bin" / "python"), str(ROOT / "scripts" / "setup_tessdata.py")], check=True)

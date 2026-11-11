@@ -45,8 +45,10 @@ LanceDB-källor och ersätts i stället för att dupliceras.
 `scripts/install.py` sköter pipeline- och webgränssnittsberoendena via Homebrew och pip:
 
 - `ocrmypdf`, `tesseract-lang`, `poppler`, `unpaper`, `hunspell` via brew
-- sv_SE-ordlista länkad till `~/Library/Spelling/` (för qualitets-scoring)
+- sv_SE-ordlista till `~/Library/Spelling/` (för kvalitetspoängen): länkad från brews hunspell om den finns där, annars hämtad från LibreOffices ordlistor (LGPL-3, pinnad commit `SV_DICTIONARY_COMMIT`); båda filerna skrivs först när båda hämtats
+- `.venv/` skapas med den nyaste Python ≥ 3.11 som finns i `PATH` (`python3`, `python3.11`–`python3.30`)
 - `.venv/` med `pip install -e .[web]` (bl.a. Streamlit, `folium` och `streamlit-folium`)
+- en befintlig `.venv/` återanvänds; saknar den pip (t.ex. skapad av `uv venv`/`uv sync`, som bara installerar grundberoendena) körs först `python -m ensurepip --upgrade`, och paketen installeras med `.venv/bin/python -m pip`; kör en befintlig `.venv/` äldre Python än den nyaste skrivs en uppmaning att ta bort den och köra om
 - med `--dev`: `.venv/` med `pip install -e '.[dev,web]'` så `.venv/bin/python scripts/test.py --static` även kan köra `ruff` och `mypy`
 - Laddar ner `swe_best.traineddata` (~12 MB) via `scripts/setup_tessdata.py`
 

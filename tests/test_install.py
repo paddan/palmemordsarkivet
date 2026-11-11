@@ -115,3 +115,59 @@ def test_venv_python_version_reads_real_interpreter(tmp_path: Path) -> None:
     (venv / "bin" / "python").symlink_to(sys.executable)
     assert install.venv_python_version(venv) == f"{sys.version_info[0]}.{sys.version_info[1]}"
     assert install.venv_python_version(tmp_path / "saknas") is None
+
+
+def test_venv_without_pip_gets_pip_bootstrapped(tmp_path) -> None:
+    # En venv skapad av `uv venv`/`uv sync` saknar pip; install.py ska då köra ensurepip.
+    (tmp_path / "bin").mkdir()
+    assert install.pip_bootstrap_command(tmp_path) == [
+        str(tmp_path / "bin" / "python"),
+        "-m",
+        "ensurepip",
+        "--upgrade",
+    ]
+
+
+def test_venv_with_pip_needs_no_bootstrap(tmp_path) -> None:
+    (tmp_path / "lib" / "python3.12" / "site-packages" / "pip").mkdir(parents=True)
+    assert install.pip_bootstrap_command(tmp_path) is None
+
+
+def test_newest_python_is_chosen() -> None:
+    found = {"python3": "/b/python3", "python3.12": "/u/python3.12", "python3.15": "/b/python3.15"}
+    versions = {"/b/python3": (3, 15), "/u/python3.12": (3, 12), "/b/python3.15": (3, 15)}
+    exe = install.newest_python(which=found.get, version_of=versions.get)
+    assert versions[exe] == (3, 15)
+
+
+def test_python_older_than_311_is_ignored() -> None:
+    found = {"python3": "/b/python3"}
+    assert install.newest_python(which=found.get, version_of={"/b/python3": (3, 10)}.get) is None
+
+
+def test_sv_dictionary_is_written_when_both_files_download(tmp_path) -> None:
+    fetched: list[str] = []
+
+    def fetch(url: str) -> bytes:
+        fetched.append(url)
+        return url.rsplit("/", 1)[1].encode()
+
+    assert install.download_sv_dictionary(tmp_path / "Spelling", fetch=fetch) is True
+    assert (tmp_path / "Spelling" / "sv_SE.aff").read_bytes() == b"sv_SE.aff"
+    assert (tmp_path / "Spelling" / "sv_SE.dic").read_bytes() == b"sv_SE.dic"
+    assert all(url.startswith("https://") for url in fetched)
+
+
+def test_sv_dictionary_writes_nothing_when_a_download_fails(tmp_path) -> None:
+    def fetch(url: str) -> bytes:
+        if url.endswith(".dic"):
+            raise OSError("nätet nere")
+        return b"aff"
+
+    assert install.download_sv_dictionary(tmp_path / "Spelling", fetch=fetch) is False
+    assert not (tmp_path / "Spelling").exists() or not any((tmp_path / "Spelling").iterdir())
+
+
+def test_sv_dictionary_url_is_pinned_to_a_commit() -> None:
+    assert "/master/" not in install.SV_DICTIONARY_URL
+    assert install.SV_DICTIONARY_COMMIT in install.SV_DICTIONARY_URL
