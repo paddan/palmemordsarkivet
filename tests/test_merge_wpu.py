@@ -75,6 +75,58 @@ def test_skips_when_wpu_text_missing(tmp_path: Path, db_env: Path) -> None:
     conn.close()
 
 
+def test_text_removed_by_earlier_merge_is_decided_without_warning(
+    tmp_path: Path, db_env: Path
+) -> None:
+    """En wpu-fil vars text redan lästs av Tesseract men raderats av en tidigare
+    jämförelse (en annan wpu-dubblett vann) ska inte ge '[saknar text]' varje
+    körning: texten kommer aldrig tillbaka, eftersom ocr_tesseract hoppar filer
+    med tesseract_done_at. Filen markeras som avgjord och skälet loggas på debug."""
+    text, ocr, wpu_dir = _setup(tmp_path)
+    pdf = wpu_dir / "Pol_2018-05-29_1403_E-63-7_D-ex-fru.pdf"
+    pdf.write_bytes(b"x")
+    merge_wpu._PALME_MAP = {}
+    merge_wpu._USE_HUNSPELL = False
+
+    conn = state_db.connect(db_env)
+    state_db.mark_tesseract_done(conn, pdf.stem, pdf_path=str(pdf), source="wpu")
+    conn.close()
+
+    res = _process_one(str(pdf), str(text), str(ocr), False, False, 5)
+
+    assert res["category"] == "skip"
+    assert res["lines"] == []
+    assert any("tesseract_done_at" in line for line in res["debug"])
+    conn = state_db.connect(db_env)
+    assert state_db.wpu_decided(conn, pdf.stem)
+    conn.close()
+    # Den gamla fantomstädningen får inte ta bort beslutet igen.
+    conn = state_db.connect(db_env)
+    assert cleanup_phantom_decisions(conn, text) == 0
+    assert state_db.wpu_decided(conn, pdf.stem)
+    conn.close()
+
+
+def test_text_removed_by_earlier_merge_dry_run_does_not_mark(
+    tmp_path: Path, db_env: Path
+) -> None:
+    text, ocr, wpu_dir = _setup(tmp_path)
+    pdf = wpu_dir / "Pol_2018-05-29_1403_E-63-7_D-ex-fru.pdf"
+    pdf.write_bytes(b"x")
+    merge_wpu._PALME_MAP = {}
+    merge_wpu._USE_HUNSPELL = False
+    conn = state_db.connect(db_env)
+    state_db.mark_tesseract_done(conn, pdf.stem, pdf_path=str(pdf), source="wpu")
+    conn.close()
+
+    res = _process_one(str(pdf), str(text), str(ocr), True, False, 5)
+
+    assert res["category"] == "skip"
+    conn = state_db.connect(db_env)
+    assert not state_db.wpu_decided(conn, pdf.stem)
+    conn.close()
+
+
 def test_warns_when_tesseract_blacklisted_but_surya_not_tried(
     tmp_path: Path, db_env: Path
 ) -> None:

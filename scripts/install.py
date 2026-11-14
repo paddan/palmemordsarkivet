@@ -87,6 +87,44 @@ def download_sv_dictionary(spell_dir: Path, fetch: Callable[[str], bytes] = _fet
     return True
 
 
+# Nycklarna för molnbackendarna (se src/backends.py); en räcker.
+LLM_KEY_ENVS = (
+    "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "OPENAI_API_KEY",
+    "DEEPSEEK_API_KEY", "OPENROUTER_API_KEY",
+)
+
+
+def missing_llm_key_hint(env: Mapping[str, str] | None = None) -> str | None:
+    """Påminnelse när ingen LLM-nyckel finns i miljön, annars ``None``.
+
+    Nyckeln kan inte sättas av installationen (den sparas aldrig), men utan den
+    stoppar Utredning direkt — därför sägs det här i stället för först i webben.
+    """
+    environ: Mapping[str, str] = os.environ if env is None else env
+    if any(environ.get(name) for name in LLM_KEY_ENVS):
+        return None
+    return (
+        "OBS: ingen LLM-nyckel i miljön — Utredning svarar inte utan en. Sätt t.ex.\n"
+        "  export CLAUDE_CODE_OAUTH_TOKEN=...   # skapas med `claude setup-token`\n"
+        "eller ANTHROPIC_API_KEY, OPENAI_API_KEY, DEEPSEEK_API_KEY eller OPENROUTER_API_KEY\n"
+        "(lokal Ollama behöver ingen nyckel). Se docs/kom-igang.md, steg 2."
+    )
+
+
+def ensure_index_command(venv: Path) -> list[str]:
+    """Kommando som skapar en tom chunk-tabell i LanceDB om indexet saknas.
+
+    Webgränssnittet kräver tabellen; utan den kraschade ``./web.sh`` direkt
+    efter installationen. Körs med venvens tolk eftersom lancedb bara finns där.
+    """
+    code = (
+        "import sys; sys.path[:0] = ['src', 'src/rag']; import ingest; "
+        "print('  tomt sökindex skapat — fyll det med ./run_pipeline.sh' "
+        "if ingest.ensure_table() else '  sökindex finns redan')"
+    )
+    return [str(venv / "bin" / "python"), "-c", code]
+
+
 def pip_bootstrap_command(venv: Path) -> list[str] | None:
     """Kommando som installerar pip i ``venv``, eller ``None`` om pip redan finns.
 
@@ -285,15 +323,19 @@ def main(argv: list[str] | None = None) -> int:
     if with_surya:
         subprocess.run([*pip, "install", "--quiet", "-e", ".[surya]"], cwd=ROOT, check=True)
 
+    print("→ sökindex…")
+    subprocess.run(ensure_index_command(venv), cwd=ROOT, check=True)
+
     print("→ tessdata (swe_best)…")
     subprocess.run([str(venv / "bin" / "python"), str(ROOT / "scripts" / "setup_tessdata.py")], check=True)
 
     print("\n✓ Installation klar!")
-    print("Kör sedan:")
-    print("  .venv/bin/python scripts/download.py")
-    print("  .venv/bin/python scripts/ocr.py")
-    print("  .venv/bin/python scripts/ingest.py")
-    print("  .venv/bin/python scripts/web.py")
+    print("Starta webgränssnittet med ./web.sh. Fyll eller uppdatera sökindexet med:")
+    print("  ./run_pipeline.sh            # download → OCR → ingest (flera timmar)")
+    print("  ./run_pipeline.sh --test 5   # snabb provkörning med 5 dokument")
+    hint = missing_llm_key_hint()
+    if hint:
+        print(f"\n{hint}")
     return 0
 
 

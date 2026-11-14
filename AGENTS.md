@@ -204,6 +204,13 @@ och genvägarna är **samma mängd** i båda riktningarna; Admin-formuläret,
 CLI-flaggorna och hjälptexterna genereras ur samma definition och bevakas av
 `tests/test_admin_ui.py` och `tests/test_operation_registry.py`.
 
+**Standardvärden för `jobs`** sätts i registret via `cpu_jobs(per_worker)`
+(kärnor − 2, delat med kärnor per arbetare): OCR-stegen delar med
+`per_file_jobs` eftersom ocrmypdf själv använder så många kärnor per fil,
+processpoolerna (`detect-redactions`, `merge-wpu`) använder `cpu_jobs()`, och
+LLM-stegen har fast 4 — de är nätverksbundna. `JOBS`/`PER_FILE_JOBS` i miljön går
+före. Hårdkoda inte en ny CPU-bunden standard.
+
 **Ny toppnivåmodul i `src/`** måste läggas till i `py-modules` i `pyproject.toml`
 (`tests/test_packaging.py` kräver att mängderna är lika). All SQLite-SQL bor i
 paketet `src/db/` — `tests/test_sql_boundary.py` underkänner `.execute(` någon
@@ -590,7 +597,7 @@ bygger på att jämföra `pdf_files.text_mtime` mot `normalized_at`/`scored_at`/
 `--rebuild` tvingar omkörning. `tesseract_blacklisted_at` är bara en spärr för
 fler Tesseract-försök; `scripts/ocr.py` försöker Surya-fallback innan en fil betraktas
 som slutligt OCR-misslyckad. `surya_failed_at` markerar att även Surya inte fick
-fram text, och då hoppar `merge_wpu` sådana textlösa wpu-filer tyst. Modulen
+fram text, och då hoppar `merge_wpu` sådana textlösa wpu-filer tyst. En wpu-fil utan text men med `tesseract_done_at` har raderats som sämre dubblett (jämförelsen sker mot alla texter i `text/`, även andra wpu-filers) och markeras avgjord med en debugrad — inte `[saknar text]`, eftersom Tesseract aldrig läser om den. Modulen
 `src/db/` (re-exporterat via `db/__init__.py`) exponerar alla CRUD- och delta-queries; konsumenter skriver aldrig
 egen SQL.
 
@@ -628,7 +635,7 @@ alfanumerisk andel och längd utan Markdown-syntax respektive utan sidhuvudraden
 visar bara titel/källa), så ingen `$`-escaping behövs där — lägg till den om
 chunktext någon gång renderas med `st.markdown`.
 
-**Redaktionsdetektering (ocr_pages.py)**: Hittar svarta maskeringsblock i bilder och infogar `[MASKAD]` i texten. På som standard; `--no-detect-redactions` stänger av. Idempotens spåras via `pdf_files.redaction_checked_at` i state.db — `.redact`-markörfilerna är borttagna. `scripts/detect_redactions.py` förfiltrerar listan baserat på databasen så filer som redan kollats spawnar inga subprocesser alls.
+**Redaktionsdetektering (ocr_pages.py)**: Hittar svarta maskeringsblock i bilder och infogar `[MASKAD]` i texten. På som standard; `--no-detect-redactions` stänger av. Idempotens spåras via `pdf_files.redaction_checked_at` i state.db — `.redact`-markörfilerna är borttagna. `scripts/detect_redactions.py` förfiltrerar listan baserat på databasen så filer som redan kollats spawnar inga subprocesser alls. Filerna analyseras i en `ProcessPoolExecutor` (`_make_pool`), aldrig i trådar: PDFium (pypdfium2) är inte trådsäkert, och med trådar gav nästan varje fil `Failed to load document (PDFium: Data format error)` — felade filer markeras aldrig som kontrollerade och togs därför om varje körning. Tester som monkeypatchar `_detect_one` måste också byta `_make_pool` mot en trådpool, eftersom patchen inte når barnprocesserna. Dör en arbetsprocess hårt (`BrokenProcessPool`) körs de drabbade filerna om i en pool med en arbetare; den första drabbade filen i ordningen är den skyldiga och blir ensam ett fel — annars fäller en krasch hela batchen.
 
 **Per-dokument-cleanup (`scripts/ocr.py` + Surya)**: Efter att `ocr_pages.py` är klar kör `scripts/ocr.py` automatiskt `merge_pages.merge_one` + `normalize_text.process_file`. Idempotens och per-sida-text spåras i `pdf_pages`-tabellen i state.db — `page-NNN.txt`/`.json`-markörerna existerar inte längre. Surya-redo betraktar alla befintliga `pdf_pages`-rader som redan försökt per sida (även `engine='llm'`), annars kan `scripts/run_pipeline.py` starta Surya-processer som direkt hoppar alla sidor.
 

@@ -23,7 +23,6 @@ Kör:
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -111,7 +110,7 @@ def _process_one(
 
     stem = pdf.stem
 
-    result: dict = {"category": None, "lines": [], "errors": []}
+    result: dict = {"category": None, "lines": [], "errors": [], "debug": []}
 
     # Egen connection per worker — ProcessPoolExecutor delar inte sqlite-objekt.
     conn = state_db.connect()
@@ -126,6 +125,20 @@ def _process_one(
         if not wpu_txt.exists():
             if state_db.is_ocr_fully_failed(conn, stem):
                 result["category"] = "skip"
+                return result
+            row = state_db.get_pdf_file(conn, stem)
+            if row is not None and row["tesseract_done_at"] is not None:
+                # Tesseract har läst filen, men texten raderades av en tidigare
+                # jämförelse (en annan wpu-dubblett med samma dokument-ID vann).
+                # ocr_tesseract hoppar filer med tesseract_done_at, så texten kommer
+                # aldrig tillbaka: markera beslutet i stället för att varna varje körning.
+                result["debug"].append(
+                    f"hoppar {stem}: text/{stem}.txt saknas trots tesseract_done_at="
+                    f"{row['tesseract_done_at']} — raderad som sämre dubblett; markeras avgjord"
+                )
+                result["category"] = "skip"
+                if not dry_run:
+                    state_db.mark_wpu_decided(conn, stem)
                 return result
             # Markera INTE som decided — OCR hann inte bli klar. Nästa körning
             # försöker igen när text/<stem>.txt finns.
@@ -278,6 +291,8 @@ def run_merge_wpu(
                 continue
             for line in res["lines"]:
                 ctx.log(line)
+            for line in res.get("debug", []):
+                ctx.log(line, level="debug")
             for err in res["errors"]:
                 ctx.log(err, level="error")
             cat = res["category"]
@@ -310,8 +325,10 @@ def main() -> int:
                     help=f"text-katalog (default: {TEXT_DIR})")
     ap.add_argument("--ocr-dir", default=str(OCR_DIR),
                     help=f"ocr-katalog (default: {OCR_DIR})")
-    ap.add_argument("--jobs", type=int, default=max(1, (os.cpu_count() or 4)),
-                    help="antal parallella processer (default: cpu_count)")
+    from operations.registry import cpu_jobs  # samma standard som registret
+
+    ap.add_argument("--jobs", type=int, default=cpu_jobs(),
+                    help="antal parallella processer (default: kärnor − 2)")
     args = ap.parse_args()
 
     return run_merge_wpu(

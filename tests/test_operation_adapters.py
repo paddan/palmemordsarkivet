@@ -398,6 +398,14 @@ def test_run_detect_redactions_tolerates_per_file_errors(tmp_path: Path, monkeyp
         return stem
 
     monkeypatch.setattr("operations.detect_redactions._detect_one", fake_detect_one)
+    # Den riktiga poolen är processbaserad; en monkeypatchad funktion når inte
+    # barnprocesserna, så testet kör samma flöde i trådar.
+    from concurrent.futures import ThreadPoolExecutor
+
+    monkeypatch.setattr(
+        "operations.detect_redactions._make_pool",
+        lambda jobs: ThreadPoolExecutor(max_workers=jobs),
+    )
 
     context, sink = _recording_context()
     options = RedactionsOptions(root=tmp_path, inp=pdf_dir, txt=txt_dir, jobs=2)
@@ -407,3 +415,148 @@ def test_run_detect_redactions_tolerates_per_file_errors(tmp_path: Path, monkeyp
     assert rc == 0
     assert set(called) == {"a", "b"}
     assert any("korrupt pdf" in msg for msg in sink.logs)
+
+
+class _CrashingPool:
+    """Falsk processpool: filen ``krasch`` dödar sin arbetsprocess.
+
+    Som en riktig ``ProcessPoolExecutor`` bryts då hela poolen: filen och alla
+    filer som skickas in efter den får ``BrokenProcessPool``.
+    """
+
+    def __init__(self, jobs: int, pools: list[int]) -> None:
+        self.jobs = jobs
+        self.broken = False
+        pools.append(jobs)
+
+    def submit(self, fn, *args):
+        from concurrent.futures import Future
+        from concurrent.futures.process import BrokenProcessPool
+
+        fut: Future = Future()
+        stem = args[0]
+        if self.broken or stem == "krasch":
+            self.broken = True
+            fut.set_exception(BrokenProcessPool("en arbetsprocess dog oväntat"))
+        else:
+            fut.set_result(fn(*args))
+        return fut
+
+    def shutdown(self, wait: bool = True, cancel_futures: bool = False) -> None:
+        pass
+
+
+def test_run_detect_redactions_survives_a_crashed_worker(tmp_path: Path, monkeypatch) -> None:
+    """En arbetsprocess som dör hårt får inte fälla resten av batchen: filerna
+    som drabbades körs om en i taget, och bara den skyldiga filen blir ett fel."""
+    import db
+
+    db_path = tmp_path / "state.db"
+    conn = db.connect(db_path)
+    db.init_schema(conn)
+    pdf_dir = tmp_path / "pdf"
+    pdf_dir.mkdir()
+    txt_dir = tmp_path / "text"
+    txt_dir.mkdir()
+    stems = ["a", "krasch", "b", "c", "d"]
+    for stem in stems:
+        (pdf_dir / f"{stem}.pdf").write_bytes(b"%PDF-1.4")
+        (txt_dir / f"{stem}.txt").write_text("text", encoding="utf-8")
+        db.upsert_pdf_file(
+            conn, pdf_stem=stem, source="files", pdf_path=str(pdf_dir / f"{stem}.pdf")
+        )
+    conn.close()
+    monkeypatch.setenv("STATE_DB", str(db_path))
+
+    called: list[str] = []
+
+    def fake_detect_one(stem, pdf, txt_dir, dpi, wpu_dir, root):
+        called.append(stem)
+        return stem
+
+    pools: list[int] = []
+    monkeypatch.setattr("operations.detect_redactions._detect_one", fake_detect_one)
+    monkeypatch.setattr(
+        "operations.detect_redactions._make_pool", lambda jobs: _CrashingPool(jobs, pools)
+    )
+
+    from operations.detect_redactions import RedactionsOptions, run_detect_redactions
+
+    context, sink = _recording_context()
+    options = RedactionsOptions(root=tmp_path, inp=pdf_dir, txt=txt_dir, jobs=3)
+
+    rc = run_detect_redactions(options, context)
+
+    assert rc == 0
+    assert sorted(called) == ["a", "b", "c", "d"]
+    errors = [msg for msg in sink.logs if "misslyckades för" in msg]
+    assert len(errors) == 1 and "krasch" in errors[0]
+    assert any("en i taget" in msg for msg in sink.logs)
+    # Parallell pool, sedan en pool med en arbetare som bryts på "krasch" och en
+    # ny för filerna efter den — inte en process per fil.
+    assert pools == [3, 1, 1]
+    assert sink.progress[-1].completed == len(stems)
+
+
+def test_detect_redactions_pool_uses_processes() -> None:
+    """PDFium (pypdfium2) är inte trådsäkert: parallella dokument i trådar gav
+    'Failed to load document (PDFium: Data format error)' på nästan varje fil.
+    Parallelliteten måste därför ske i separata processer."""
+    from concurrent.futures import ProcessPoolExecutor
+
+    from operations.detect_redactions import _make_pool
+
+    pool = _make_pool(2)
+    try:
+        assert isinstance(pool, ProcessPoolExecutor)
+    finally:
+        pool.shutdown()
+
+
+def test_run_detect_redactions_parallel_real_pdfs(tmp_path: Path, monkeypatch) -> None:
+    """Riktiga PDF:er i flera parallella arbetare: alla kontrolleras, inga filfel."""
+    from PIL import Image
+
+    import db
+
+    db_path = tmp_path / "state.db"
+    conn = db.connect(db_path)
+    db.init_schema(conn)
+    pdf_dir = tmp_path / "pdf"
+    pdf_dir.mkdir()
+    txt_dir = tmp_path / "text"
+    txt_dir.mkdir()
+    stems = [f"dok{i}" for i in range(12)]
+    for stem in stems:
+        img = Image.new("RGB", (612, 792), color=(240, 240, 240))
+        for y in range(300, 330):  # ett brett svart maskeringsblock
+            for x in range(50, 560):
+                img.putpixel((x, y), (0, 0, 0))
+        pdf = pdf_dir / f"{stem}.pdf"
+        img.save(pdf, "PDF", resolution=72)
+        (txt_dir / f"{stem}.txt").write_text(
+            "\n".join(f"rad {n}" for n in range(20)), encoding="utf-8"
+        )
+        db.upsert_pdf_file(conn, pdf_stem=stem, source="files", pdf_path=str(pdf))
+    conn.close()
+    monkeypatch.setenv("STATE_DB", str(db_path))
+
+    from operations.detect_redactions import RedactionsOptions, run_detect_redactions
+
+    context, sink = _recording_context()
+    options = RedactionsOptions(root=tmp_path, inp=pdf_dir, txt=txt_dir, jobs=4)
+
+    rc = run_detect_redactions(options, context)
+
+    assert rc == 0
+    assert not [msg for msg in sink.logs if "misslyckades" in msg]
+    conn = db.connect(db_path)
+    try:
+        for stem in stems:
+            row = db.get_pdf_file(conn, stem)
+            assert row["redaction_checked_at"] is not None, stem
+    finally:
+        conn.close()
+    assert all(
+        "[MASKAD]" in (txt_dir / f"{stem}.txt").read_text(encoding="utf-8") for stem in stems
+    )

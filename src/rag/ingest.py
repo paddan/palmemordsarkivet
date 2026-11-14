@@ -663,6 +663,21 @@ def _chunk_schema() -> pa.Schema:
     ])
 
 
+def ensure_table(db_dir: Path = DB_DIR) -> bool:
+    """Skapa en tom chunk-tabell om den saknas; ``True`` om den skapades.
+
+    Körs av ``install.py`` så att webgränssnittet startar direkt efter
+    installationen. En befintlig tabell lämnas orörd, och ingest fyller den
+    tomma tabellen som vanligt (``_oppna_tabell`` öppnar i stället för att skapa).
+    """
+    db_dir.mkdir(parents=True, exist_ok=True)
+    db = lancedb.connect(str(db_dir))
+    if _table_exists(db, TABLE):
+        return False
+    db.create_table(TABLE, schema=_chunk_schema())
+    return True
+
+
 def _oppna_tabell(db, rebuild: bool, ctx: Any):
     """Öppna chunk-tabellen eller skapa den; ``rebuild`` tar bort den först.
 

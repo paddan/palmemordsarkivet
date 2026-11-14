@@ -7,7 +7,8 @@ från state.db så redan kontrollerade filer inte spawnar processer.
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import Executor, ProcessPoolExecutor, as_completed
+from concurrent.futures.process import BrokenProcessPool
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -15,6 +16,18 @@ import db as state_db
 import ocr_pages
 
 from .context import OperationContext, ensure_terminal_context
+
+
+def _make_pool(jobs: int) -> Executor:
+    """Pool för parallella dokument — processer, aldrig trådar.
+
+    PDFium (pypdfium2, som ``ocr_pages.render_pages`` använder) är inte
+    trådsäkert: samtidiga dokument i trådar gav ``Failed to load document
+    (PDFium: Data format error)`` på nästan varje fil och kunde krascha hela
+    processen. Rendering och bildanalys är dessutom CPU-bundna, så processer
+    ger verklig parallellitet förbi GIL.
+    """
+    return ProcessPoolExecutor(max_workers=jobs)
 
 
 @dataclass
@@ -89,34 +102,85 @@ def run_detect_redactions(options: RedactionsOptions, context: OperationContext 
         return 0
 
     ctx.log(f"Kontrollerar maskeringar i {total} filer (DPI={options.dpi}, jobs={options.jobs})...")
-    done = 0
-    failed = 0
-    with ThreadPoolExecutor(max_workers=options.jobs) as pool:
-        futures = {
-            pool.submit(
-                _detect_one, stem, pdf, txt, options.dpi, wpu_dir, options.root
-            ): stem
-            for stem, pdf in todo
-        }
-        for fut in as_completed(futures):
-            ctx.check_cancelled()
-            done += 1
-            try:
-                stem = fut.result()
-            except Exception as exc:  # noqa: BLE001 - per-fil-fel får inte döda batchen
-                failed += 1
-                stem = futures[fut]
-                ctx.log(
-                    f"Maskeringsdetektering misslyckades för {stem}: {exc}",
-                    level="error",
-                )
-            ctx.progress(done, total, stem)
+    progress = {"done": 0, "failed": 0}
+    ctx.log(f"maskeringar: {options.jobs} arbetsprocesser för {total} filer", level="debug")
+    args = {stem: (pdf, txt, options.dpi, wpu_dir, options.root) for stem, pdf in todo}
+    broken = _run_batch(ctx, options.jobs, list(args), args, progress, total)
+    if broken:
+        # En arbetsprocess dog hårt (t.ex. krasch i PDFium) och tog poolen med sig;
+        # det går inte att se vilken fil som orsakade det. Kör de drabbade filerna
+        # om en i taget i en pool med en arbetare: filerna körs i ordning, så när
+        # poolen bryts igen är den första drabbade filen den skyldiga.
+        ctx.log(
+            f"en arbetsprocess dog — kör {len(broken)} filer om en i taget "
+            f"(första: {', '.join(broken[:3])})",
+            level="warning",
+        )
+        remaining = [stem for stem in args if stem in set(broken)]
+        while remaining:
+            hit = set(_run_batch(ctx, 1, remaining, args, progress, total))
+            if not hit:
+                break
+            culprit_idx = next(i for i, stem in enumerate(remaining) if stem in hit)
+            culprit = remaining[culprit_idx]
+            progress["failed"] += 1
+            progress["done"] += 1
+            ctx.log(
+                f"Maskeringsdetektering misslyckades för {culprit}: arbetsprocessen dog",
+                level="error",
+            )
+            ctx.progress(progress["done"], total, culprit)
+            remaining = [stem for stem in remaining[culprit_idx + 1:] if stem in hit]
+    failed = progress["failed"]
 
     if failed:
         ctx.log(f"Klart med {failed} filfel — se loggen.", level="error")
     else:
         ctx.log("Klart.")
     return 0
+
+
+def _run_batch(
+    ctx: OperationContext,
+    jobs: int,
+    stems: list[str],
+    args: dict[str, tuple],
+    progress: dict[str, int],
+    total: int,
+) -> list[str]:
+    """Kör ``stems`` i en ny pool; returnerar filerna som drabbades av en trasig pool.
+
+    Vanliga undantag är filfel och loggas per fil. ``BrokenProcessPool`` betyder
+    att en arbetsprocess dog; de filerna räknas inte än utan returneras, och
+    anroparen avgör vilken som var skyldig.
+    """
+    broken: list[str] = []
+    pool = _make_pool(jobs)
+    try:
+        futures = {pool.submit(_detect_one, stem, *args[stem]): stem for stem in stems}
+        for fut in as_completed(futures):
+            ctx.check_cancelled()
+            stem = futures[fut]
+            try:
+                fut.result()
+            except BrokenProcessPool:
+                broken.append(stem)
+                continue
+            except Exception as exc:  # noqa: BLE001 - per-fil-fel får inte döda batchen
+                progress["failed"] += 1
+                ctx.log(
+                    f"Maskeringsdetektering misslyckades för {stem}: "
+                    f"{type(exc).__name__}: {exc}",
+                    level="error",
+                )
+            progress["done"] += 1
+            ctx.progress(progress["done"], total, stem)
+    except BaseException:
+        # Avbrott/fel: släpp köade filer i stället för att vänta in hela batchen.
+        pool.shutdown(wait=True, cancel_futures=True)
+        raise
+    pool.shutdown(wait=True)
+    return broken
 
 
 def _detect_one(stem: str, pdf: Path, txt_dir: Path, dpi: int, wpu_dir: Path, root: Path) -> str:

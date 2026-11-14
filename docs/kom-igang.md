@@ -133,6 +133,9 @@ Eller steg för steg:
 ```
 
 Varje steg är idempotent — avbryt och fortsätt när som helst.
+`./install.sh` skapar ett tomt sökindex, så `./web.sh` går att starta direkt efter
+installationen. Utredning och Jämförelse säger då att indexet är tomt och hur det
+fylls; pipelinen kan också startas under **Admin → Pipeline**.
 `scripts/run_pipeline.py` kör därför OCR och ingest även när nedladdningssteget inte
 hittar nya filer, så väntande arbete från en tidigare avbruten körning slutförs.
 

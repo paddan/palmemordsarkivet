@@ -587,3 +587,14 @@ def test_many_stale_pages_give_one_debug_line_cut_at_ten() -> None:
     assert len(stale) == 1
     assert "12 sidor" in stale[0]
     assert "[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]" in stale[0] and "11" not in stale[0].split("första")[1]
+
+
+def test_ensure_table_creates_an_empty_table_once(tmp_path) -> None:
+    import lancedb
+    from ingest import TABLE, _chunk_schema, ensure_table
+
+    assert ensure_table(tmp_path / "lancedb") is True
+    table = lancedb.connect(str(tmp_path / "lancedb")).open_table(TABLE)
+    assert table.count_rows() == 0
+    assert table.schema == _chunk_schema()
+    assert ensure_table(tmp_path / "lancedb") is False, "en befintlig tabell rörs inte"

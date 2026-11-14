@@ -171,3 +171,19 @@ def test_sv_dictionary_writes_nothing_when_a_download_fails(tmp_path) -> None:
 def test_sv_dictionary_url_is_pinned_to_a_commit() -> None:
     assert "/master/" not in install.SV_DICTIONARY_URL
     assert install.SV_DICTIONARY_COMMIT in install.SV_DICTIONARY_URL
+
+
+def test_index_is_ensured_with_the_venv_interpreter(tmp_path) -> None:
+    cmd = install.ensure_index_command(tmp_path)
+    assert cmd[:2] == [str(tmp_path / "bin" / "python"), "-c"]
+    assert "ingest.ensure_table()" in cmd[2]
+
+
+def test_missing_llm_key_is_pointed_out() -> None:
+    hint = install.missing_llm_key_hint({})
+    assert hint is not None and "CLAUDE_CODE_OAUTH_TOKEN" in hint
+
+
+def test_any_llm_key_silences_the_hint() -> None:
+    assert install.missing_llm_key_hint({"DEEPSEEK_API_KEY": "x"}) is None
+    assert install.missing_llm_key_hint({"OPENAI_API_KEY": ""}) is not None

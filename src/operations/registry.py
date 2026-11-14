@@ -50,6 +50,37 @@ _registry = OperationRegistry()
 
 ROOT = Path(__file__).resolve().parents[2]
 
+# Kärnor som lämnas åt systemet och webbgränssnittet när CPU-bundna steg körs.
+RESERVED_CORES = 2
+# Kärnor varje ocrmypdf-körning får (``--per-file-jobs``) om inget annat anges.
+DEFAULT_PER_FILE_JOBS = 2
+
+
+def cpu_jobs(per_worker: int = 1) -> int:
+    """Standardantal parallella arbetare för ett CPU-bundet steg.
+
+    Datorns kärnor minus ``RESERVED_CORES``, delat med hur många kärnor varje
+    arbetare själv använder (ocrmypdf kör ``per_file_jobs`` kärnor per fil).
+    Okänt antal kärnor räknas som 4; resultatet är aldrig under 1.
+    """
+    cores = os.cpu_count() or 4
+    return max(1, (cores - RESERVED_CORES) // max(1, per_worker))
+
+
+def _env_int(name: str, default: int) -> int:
+    """Heltal ur miljön (t.ex. ``JOBS``) med ``default`` när variabeln saknas."""
+    value = os.environ.get(name)
+    return int(value) if value else default
+
+
+_PER_FILE_JOBS = _env_int("PER_FILE_JOBS", DEFAULT_PER_FILE_JOBS)
+# OCR: filer × kärnor per fil ska rymmas i datorns kärnor.
+_OCR_JOBS = _env_int("JOBS", cpu_jobs(_PER_FILE_JOBS))
+# Steg där varje arbetare är en Python-process på en kärna.
+_CPU_JOBS = _env_int("JOBS", cpu_jobs())
+# LLM-anrop är nätverksbundna och styrs av leverantörens gränser, inte kärnorna.
+_LLM_JOBS = _env_int("JOBS", 4)
+
 
 def _p(name: str, flags: str, kind: ParameterKind, default, help_: str, **kw) -> ParameterDefinition:
     return ParameterDefinition(name, (flags,), kind, default, help_, **kw)
@@ -75,7 +106,7 @@ def _register_pipeline_operations() -> None:
             _p("skip_redo", "--skip-redo", "bool", False, "Hoppa över Surya-steget"),
             _p("with_llm", "--with-llm", "bool", False, "Kör LLM-korrigering"),
             _p("profile", "--profile", "str", "", "LLM-konfiguration att använda"),
-            _p("jobs", "--jobs", "int", int(os.environ.get("JOBS", "4")), "Parallella processer"),
+            _p("jobs", "--jobs", "int", _OCR_JOBS, "Parallella processer"),
             _p("test_limit", "--test", "int", 0, "Testläge: N filer"),
         ),
         admin_visible=True, mutating=True, confirmation=None,
@@ -136,8 +167,8 @@ def _register_ocr_operations() -> None:
             _p("ocr", "--ocr", "path", ROOT / "generated" / "ocr", "Output-katalog för OCR-PDF:er"),
             _p("txt", "--txt", "path", ROOT / "generated" / "text", "Output-katalog för .txt"),
             _p("pages_out", "--pages-out", "path", ROOT / "generated" / "text_pages", "Per-sida-output"),
-            _p("jobs", "--jobs", "int", int(os.environ.get("JOBS", "4")), "Parallella processer"),
-            _p("per_file_jobs", "--per-file-jobs", "int", int(os.environ.get("PER_FILE_JOBS", "2")), "OCR-trådar per fil"),
+            _p("jobs", "--jobs", "int", _OCR_JOBS, "Parallella processer"),
+            _p("per_file_jobs", "--per-file-jobs", "int", _PER_FILE_JOBS, "CPU-kärnor per fil"),
             _p("threshold", "--threshold", "float", 50.0, "Score-tröskel"),
             _p("files_from", "--from-list", "path", None, "Filstam-lista"),
             _p("retry_failed", "--retry-failed", "bool", False, "Kör om misslyckade"),
@@ -160,8 +191,8 @@ def _register_ocr_operations() -> None:
             _p("tess_config", "--tess-config", "path", ROOT / "tessdata" / "tesseract.config", "tesseract.config"),
             _p("psm", "--psm", "int", 6, "Page segmentation mode"),
             _p("langs", "--langs", "str", "swe", "Tesseract-språk"),
-            _p("jobs", "--jobs", "int", int(os.environ.get("JOBS", "4")), "Parallella filer"),
-            _p("per_file_jobs", "--per-file-jobs", "int", int(os.environ.get("PER_FILE_JOBS", "2")), "OCR-trådar per fil"),
+            _p("jobs", "--jobs", "int", _OCR_JOBS, "Parallella filer"),
+            _p("per_file_jobs", "--per-file-jobs", "int", _PER_FILE_JOBS, "CPU-kärnor per fil"),
             _p("min_text_chars", "--min-text-chars", "int", 200, "Tröskel för \"har redan text\""),
             _p("image_dpi", "--image-dpi", "int", 300, "Bild-DPI för OCR"),
             _p("errors_log", "--errors-log", "path", ROOT / "generated" / "errors.log", "Fellogg"),
@@ -180,7 +211,7 @@ def _register_ocr_operations() -> None:
             _p("root", "--root", "path", ROOT, "Projektrot"),
             _p("inp", "--in", "path", ROOT / "downloaded" / "files", "PDF-katalog"),
             _p("txt", "--txt", "path", ROOT / "generated" / "text", "Text-katalog"),
-            _p("jobs", "--jobs", "int", int(os.environ.get("JOBS", "4")), "Parallella processer"),
+            _p("jobs", "--jobs", "int", _CPU_JOBS, "Parallella processer"),
             _p("dpi", "--dpi", "int", 72, "Render-DPI"),
             _p("rebuild", "--rebuild", "bool", False, "Kör om alla"),
             _p("rebuild_text", "--rebuild-text", "bool", False, "Regenerera text"),
@@ -214,7 +245,7 @@ def _register_ocr_operations() -> None:
             _p("wpu_dir", "--files-wpu", "path", ROOT / "downloaded" / "wpu_files", "wpu-PDF-katalog"),
             _p("text_dir", "--text-dir", "path", ROOT / "generated" / "text", "Text-katalog"),
             _p("ocr_dir", "--ocr-dir", "path", ROOT / "generated" / "ocr", "OCR-katalog"),
-            _p("jobs", "--jobs", "int", max(1, os.cpu_count() or 4), "Parallella processer"),
+            _p("jobs", "--jobs", "int", _CPU_JOBS, "Parallella processer"),
         ),
         admin_visible=True, mutating=True, confirmation=None,
         run=adapters.merge_wpu_adapter,
@@ -252,7 +283,7 @@ def _register_quality_llm_operations() -> None:
             _p("api_key", "--api-key", "str", "", "API-nyckel", secret=True),
             _p("txt", "--txt", "path", ROOT / "generated" / "text", "Text-katalog"),
             _p("root", "--root", "path", ROOT, "Projektrot"),
-            _p("jobs", "--jobs", "int", int(os.environ.get("JOBS", "4")), "Parallella anrop"),
+            _p("jobs", "--jobs", "int", _LLM_JOBS, "Parallella anrop"),
             _p("dry_run", "--dry-run", "bool", False, "Visa utan att skriva"),
             _p("test", "--test", "str", None, "Korrigera en enskild fil"),
         ),
@@ -443,7 +474,7 @@ def _register_extraction_operations() -> None:
             _p("base_url", "--base-url", "str", "", "API-URL"),
             _p("api_key", "--api-key", "str", "", "API-nyckel", secret=True),
             _p("dry_run", "--dry-run", "bool", False, "Räkna utan LLM-anrop"),
-            _p("jobs", "--jobs", "int", int(os.environ.get("JOBS", "4")), "Parallella sidor"),
+            _p("jobs", "--jobs", "int", _LLM_JOBS, "Parallella sidor"),
             _p("timeout", "--timeout", "float", 120.0, "Timeout per anrop"),
         ),
         admin_visible=True, mutating=True, confirmation=None,
@@ -462,7 +493,7 @@ def _register_extraction_operations() -> None:
             _p("base_url", "--base-url", "str", "", "API-URL"),
             _p("api_key", "--api-key", "str", "", "API-nyckel", secret=True),
             _p("dry_run", "--dry-run", "bool", False, "Räkna utan LLM-anrop"),
-            _p("jobs", "--jobs", "int", int(os.environ.get("JOBS", "4")), "Parallella sidor"),
+            _p("jobs", "--jobs", "int", _LLM_JOBS, "Parallella sidor"),
             _p("timeout", "--timeout", "float", 120.0, "Timeout per anrop"),
         ),
         admin_visible=True, mutating=True, confirmation=None,

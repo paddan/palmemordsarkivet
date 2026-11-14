@@ -30,13 +30,25 @@ WEBBSÖK = "Tillåt webbsök"
 
 
 class _FakeTable:
+    def __init__(self, rows: int = 1234) -> None:
+        self.rows = rows
+
     def count_rows(self) -> int:
-        return 1234
+        return self.rows
 
 
 class _FakeDB:
+    def __init__(self, tables: tuple[str, ...] = ("chunks",), rows: int = 1234) -> None:
+        self.tables = list(tables)
+        self.rows = rows
+
+    def list_tables(self):
+        return self
+
     def open_table(self, name: str) -> _FakeTable:
-        return _FakeTable()
+        if name not in self.tables:
+            raise ValueError(f"Table '{name}' was not found")
+        return _FakeTable(self.rows)
 
 
 class _FakeModel:
@@ -732,3 +744,46 @@ def test_openai_chat_history_stays_bounded(sida: AppTest, monkeypatch) -> None:
     assert messages[0]["role"] == "system"
     assert len(messages) < 25 * 2
     assert len(sida.session_state.chat_history) == 25 * 2
+
+
+def test_saknat_index_forklarar_hur_det_byggs(monkeypatch, tmp_path) -> None:
+    """En ny klon har inget index — sidan ska säga vad som ska köras, inte krascha."""
+    monkeypatch.setenv("STATE_DB", str(tmp_path / "state.db"))
+    monkeypatch.setattr("config.CONFIG_FILE", tmp_path / "llm_config.json")
+    monkeypatch.setattr("lancedb.connect", lambda *a, **k: _FakeDB(tables=()))
+    laddad: list[int] = []
+    monkeypatch.setattr(
+        "sentence_transformers.SentenceTransformer",
+        lambda *a, **k: laddad.append(1) or _FakeModel(),
+    )
+    at = AppTest.from_file(str(UTREDNING), default_timeout=120).run()
+
+    assert not at.exception, at.exception
+    text = " ".join(i.value for i in at.info)
+    assert "Sökindexet saknas" in text
+    assert "./install.sh" in text
+    assert not laddad, "embedding-modellen ska inte laddas utan index"
+
+
+def test_tomt_index_startar_sidan_med_hjalptext(monkeypatch, tmp_path) -> None:
+    """install.sh skapar en tom tabell: sidan ska fungera och säga hur den fylls."""
+    import streamlit as st
+
+    st.cache_resource.clear()  # load() är cachad över testerna i samma process
+    monkeypatch.setenv("STATE_DB", str(tmp_path / "state.db"))
+    monkeypatch.setattr("config.CONFIG_FILE", tmp_path / "llm_config.json")
+    monkeypatch.setattr("lancedb.connect", lambda *a, **k: _FakeDB(rows=0))
+    monkeypatch.setattr(
+        "sentence_transformers.SentenceTransformer", lambda *a, **k: _FakeModel()
+    )
+    at = _run(AppTest.from_file(str(UTREDNING), default_timeout=120), RAG)
+
+    text = " ".join(i.value for i in at.info)
+    assert "Sökindexet är tomt" in text
+    assert "./run_pipeline.sh --test 5" in text
+    assert _slider(at, TOP_K).value == 50, "sidan ritas i övrigt som vanligt"
+    st.cache_resource.clear()  # lämna inte den tomma tabellen åt nästa test
+
+
+def test_fyllt_index_visar_ingen_hjalptext(sida: AppTest) -> None:
+    assert not any("Sökindexet" in i.value for i in sida.info)

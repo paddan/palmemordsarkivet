@@ -326,7 +326,53 @@ def test_merge_wpu_preserves_legacy_defaults() -> None:
     defaults = _defaults("merge-wpu")
 
     assert defaults["margin"] == merge_wpu.DEFAULT_MARGIN == 5
-    assert defaults["jobs"] == max(1, os.cpu_count() or 4)
+    from operations.registry import cpu_jobs
+
+    assert defaults["jobs"] == cpu_jobs()
+
+
+@pytest.mark.parametrize(
+    ("cores", "per_worker", "expected"),
+    [
+        (18, 1, 16),  # två kärnor lämnas åt systemet och webbgränssnittet
+        (18, 2, 8),   # OCR: 8 filer × 2 kärnor i ocrmypdf = 16 kärnor
+        (8, 2, 3),
+        (4, 1, 2),
+        (2, 2, 1),    # aldrig noll
+        (1, 1, 1),
+        (None, 1, 2),  # okänt antal kärnor → anta 4
+    ],
+)
+def test_cpu_jobs_scales_with_cores(monkeypatch, cores, per_worker, expected) -> None:
+    from operations import registry
+
+    monkeypatch.setattr(registry.os, "cpu_count", lambda: cores)
+
+    assert registry.cpu_jobs(per_worker) == expected
+
+
+def test_cpu_bound_defaults_follow_core_count() -> None:
+    """Utan JOBS i miljön följer de CPU-bundna stegen datorns kärnor; LLM-stegen
+    (nätverksbundna anrop) behåller 4."""
+    root = Path(__file__).resolve().parents[1]
+    code = """
+from operations.registry import get_registry
+def d(op): return {p.name: p.default for p in get_registry().get(op).parameters}
+print(d('run-pipeline')['jobs'], d('ocr')['jobs'], d('ocr')['per_file_jobs'],
+      d('ocr-tesseract')['jobs'], d('detect-redactions')['jobs'], d('merge-wpu')['jobs'],
+      d('llm-correct')['jobs'], d('extract-entities')['jobs'], d('extract-map-observations')['jobs'])
+"""
+    env = {k: v for k, v in os.environ.items() if k not in ("JOBS", "PER_FILE_JOBS")}
+    env["PYTHONPATH"] = str(root / "src")
+    result = subprocess.run(
+        [sys.executable, "-c", code], cwd=root, env=env, text=True,
+        capture_output=True, check=True,
+    )
+    from operations.registry import cpu_jobs
+
+    ocr = str(cpu_jobs(2))
+    cpu = str(cpu_jobs())
+    assert result.stdout.split() == [ocr, ocr, "2", ocr, cpu, cpu, "4", "4", "4"]
 
 
 def test_merge_pages_requires_exactly_one_target() -> None:

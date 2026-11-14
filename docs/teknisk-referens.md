@@ -50,6 +50,8 @@ LanceDB-källor och ersätts i stället för att dupliceras.
 - `.venv/` med `pip install -e .[web]` (bl.a. Streamlit, `folium` och `streamlit-folium`)
 - en befintlig `.venv/` återanvänds; saknar den pip (t.ex. skapad av `uv venv`/`uv sync`, som bara installerar grundberoendena) körs först `python -m ensurepip --upgrade`, och paketen installeras med `.venv/bin/python -m pip`; kör en befintlig `.venv/` äldre Python än den nyaste skrivs en uppmaning att ta bort den och köra om
 - med `--dev`: `.venv/` med `pip install -e '.[dev,web]'` så `.venv/bin/python scripts/test.py --static` även kan köra `ruff` och `mypy`
+- skapar en tom `chunks`-tabell i `generated/lancedb/` om den saknas (`ingest.ensure_table`), så att `./web.sh` startar direkt; en befintlig tabell rörs inte och ingest fyller den tomma tabellen som vanligt
+- påminner till sist om LLM-nyckeln när ingen av `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `DEEPSEEK_API_KEY` eller `OPENROUTER_API_KEY` finns i miljön (nyckeln sparas aldrig, så den kan inte sättas av installationen)
 - Laddar ner `swe_best.traineddata` (~12 MB) via `scripts/setup_tessdata.py`
 
 Surya-OCR ingår som standard. Hoppa över det (snabbare install) med:
@@ -157,7 +159,12 @@ Wpu-PDF:er får exakt samma OCR-behandling som palme-PDF:er: `scripts/ocr.py` k�
 
 Om en wpu-PDF saknar text efter både Tesseract och Surya (`surya_failed_at` satt)
 hoppar `scripts/merge_wpu.py` över den tyst; vanliga saknade textfiler varnas
-fortfarande som resume-problem.
+fortfarande som resume-problem. Saknas texten trots att filen har
+`tesseract_done_at` har den raderats av en tidigare jämförelse — jämförelsen
+görs mot alla texter i `generated/text/`, så två wpu-dubbletter med samma
+dokument-ID jämförs också mot varandra. Den filen markeras då som avgjord med en
+debugrad i stället för att ge `[saknar text]` vid varje körning, eftersom
+`ocr_tesseract` aldrig läser om den.
 
 Surya-steget för låga kvalitetspoäng körs sen mot kvarvarande
 `generated/text/`-filer och hanterar palme- och wpu-filer identiskt.
@@ -207,6 +214,18 @@ du delarna direkt:
 .venv/bin/python scripts/ocr_tesseract.py --retry-blacklist    # försök även Tesseract-blacklistade filer
 .venv/bin/python scripts/ocr_tesseract.py --help
 ```
+
+**Standardvärden för parallellitet** följer datorns kärnor
+(`operations.registry.cpu_jobs`): två kärnor lämnas åt systemet och
+webbgränssnittet. OCR-stegen (`run-pipeline`, `ocr`, `ocr-tesseract`) kör
+`(kärnor − 2) / --per-file-jobs` filer samtidigt, eftersom varje ocrmypdf-körning
+själv använder `--per-file-jobs` kärnor (standard 2); `detect-redactions` och
+`merge-wpu` kör `kärnor − 2` processer. På en dator med 18 kärnor blir det 8
+respektive 16. LLM-stegen (`llm-correct`, `extract-entities`,
+`extract-map-observations`) är nätverksbundna och har kvar 4. Miljövariablerna
+`JOBS` och `PER_FILE_JOBS` går före alla standardvärden. Observera att `jobs` i
+`ocr` och `run-pipeline` också används för maskeringsdetekteringen och
+`merge-wpu` inne i OCR-steget.
 
 Filer som upprepat misslyckas i Tesseract (t.ex. korrupt JPEG inuti PDF:en,
 eller PDF:er som ocrmypdf inte kan hantera) markeras med
@@ -601,7 +620,7 @@ Idempotent: sidor som redan korrigerats spåras via `llm_corrections`-tabellen o
 ```
 
 Sidorna är oberoende, så flera rättas samtidigt via en delad semafor
-(`--jobs N`, default 4 eller env `JOBS`). DB-skrivningarna sker synkront i
+(`--jobs N`, default 4 eller env `JOBS`; LLM-anrop följer inte antalet kärnor). DB-skrivningarna sker synkront i
 event loop-tråden, så den delade sqlite-anslutningen är säker.
 
 Kostnad: Claude Haiku är billig (~$0,25/M tokens). En typisk OCR-sida
@@ -1723,7 +1742,7 @@ per-dokumentresultat behålls; ett avbrutet jobb markeras aldrig `succeeded`.
 | `scripts/quality.py` → `src/quality.py` | Heuristisk kvalitetsbedömning av `generated/text/*.txt` (`--per-page` finns) |
 | `scripts/normalize.py` → `src/normalize_text.py` | Regelbaserad OCR-normalisering (körs automatiskt av `scripts/ocr.py`) |
 | `scripts/llm_correct.py` → `src/llm_correct.py` | LLM-korrektion av dåliga OCR-sidor via Claude Haiku |
-| `scripts/detect_redactions.py` → `src/operations/detect_redactions.py` | Kör redaktionsdetektering på befintliga text/OCR-par |
+| `scripts/detect_redactions.py` → `src/operations/detect_redactions.py` | Kör redaktionsdetektering på befintliga text/OCR-par, parallellt i separata processer (`--jobs`) — aldrig trådar, eftersom PDFium inte är trådsäkert; dör en arbetsprocess körs de drabbade filerna om en i taget så att bara den skyldiga filen blir ett fel |
 | `scripts/ingest.py` → `src/rag/ingest.py` | Bygg vektorindex (LanceDB + BM25 FTS) |
 | `src/rag/ask.py` | Frågefunktioner — RAG-läge och MCP-läge (importeras av Utredning-sidan och mcp_server) samt `stop_notice` som flaggar avklippta modellsvar |
 | `src/rag/mcp_server.py` | MCP-server med `search_archive` och `get_page` (startas av ask.py/Utredning.py) |

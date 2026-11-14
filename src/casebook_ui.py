@@ -14,6 +14,7 @@ import streamlit as st
 
 import citations as _citations
 import db as _state_db
+import web_log as _web_log
 
 
 def state_conn():
@@ -211,6 +212,43 @@ _LAYOUT_CSS = """
 .palme-usage .palme-usage-titel { font-weight: 600; }
 </style>
 """
+
+
+MISSING_INDEX_HELP = (
+    "**Sökindexet saknas.** Sidan söker i vektorindexet (`generated/lancedb`, "
+    "tabellen `chunks`), som `./install.sh` skapar tomt och pipelinen fyller. "
+    "Kör `./install.sh` igen, eller `./run_pipeline.sh` — eller starta "
+    "**Pipeline** under Admin i sidofältet. Ladda om sidan efteråt."
+)
+
+
+EMPTY_INDEX_HELP = (
+    "**Sökindexet är tomt.** Installationen skapar bara en tom tabell; den fylls "
+    "av pipelinen. Kör `./run_pipeline.sh` (eller `./run_pipeline.sh --test 5` "
+    "för en snabb provkörning) eller starta **Pipeline** under Admin i "
+    "sidofältet. Ladda om sidan när ingest är klar."
+)
+
+
+def show_empty_index_notice(rows: int, page: str) -> None:
+    """Förklara att indexet är tomt; sidan fungerar i övrigt (t.ex. inställningar)."""
+    if rows:
+        return
+    _web_log.get_logger(page).debug("sökindexet är tomt (0 chunks) — visar hjälptext")
+    st.info(EMPTY_INDEX_HELP)
+
+
+def stop_without_index(index_ready: bool, page: str) -> None:
+    """Visa hur indexet byggs och stoppa sidan om tabellen saknas.
+
+    Kontrollen görs före den cachade laddningen, så ett saknat index aldrig
+    cachas och sidan fungerar direkt efter ingest utan omstart.
+    """
+    if index_ready:
+        return
+    _web_log.get_logger(page).warning("sökindexet saknas (tabellen chunks) — sidan stoppas")
+    st.info(MISSING_INDEX_HELP)
+    st.stop()
 
 
 def render_page_header(titel: str, meta: str = "") -> None:

@@ -28,6 +28,7 @@ from claude_agent_sdk import (  # noqa: E402
     ThinkingConfigAdaptive,
     query,
 )
+from ingest import _table_exists  # noqa: E402
 
 import backends as _backends  # noqa: E402
 import casebook_ui as _casebook_ui  # noqa: E402
@@ -160,7 +161,11 @@ elif backend.get("env") and not os.environ.get(backend["env"]):
     st.error(f"Sätt `{backend['env']}` i miljön för att använda {backend['name']}.")
     st.stop()
 
+_casebook_ui.stop_without_index(
+    _table_exists(lancedb.connect(str(ROOT / "generated" / "lancedb")), TABLE), "jämförelse"
+)
 table, embed_model = _load()
+_casebook_ui.show_empty_index_notice(table.count_rows(), "jämförelse")
 
 with st.form("compare"):
     topic = st.text_input(

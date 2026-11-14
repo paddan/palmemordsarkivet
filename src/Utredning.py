@@ -234,6 +234,7 @@ from claude_agent_sdk import (  # noqa: E402
     UserMessage,
     query,
 )
+from ingest import _table_exists  # noqa: E402
 
 _log = web_log.get_logger("utredning")
 
@@ -660,6 +661,10 @@ def linkify_citations(text: str, known_sources: set[str] | None = None) -> str:
     return linked
 
 
+_index_ready = _table_exists(lancedb.connect(str(ROOT / "generated" / "lancedb")), TABLE)
+if not _index_ready:
+    _casebook_ui.render_page_header("Palmemordsarkivet", "fråga arkivet med källhänvisningar")
+_casebook_ui.stop_without_index(_index_ready, "utredning")
 table, embed_model = load()
 # Kompakt sidhuvud (delas med övriga sidor via casebook_ui); indexstorleken
 # står i metadelen i stället för på en egen rad.
@@ -667,6 +672,7 @@ _casebook_ui.render_page_header(
     "Palmemordsarkivet",
     f"fråga arkivet med källhänvisningar · index: {table.count_rows():,} chunks",
 )
+_casebook_ui.show_empty_index_notice(table.count_rows(), "utredning")
 
 _casebook_ui.render_pdf_opener(ROOT)
 
