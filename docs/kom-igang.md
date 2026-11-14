@@ -218,6 +218,12 @@ tillbaka den om omskanningen blev sämre. Saknas PDF:en går sidan inte att
 skanna om, men en sparad läsning kan fortfarande återställas. Länken
 `?doc=<filstam>&page=<n>` öppnar en sida direkt.
 
+Vill du skanna om många dåliga sidor på en gång: Admin → OCR → *Skanna om sidor*
+(eller `./rescan_pages.sh --dry-run` för att först se urvalet). Den bättre läsningen
+behålls, och en sämre sparas i historiken som underkänd. Admin ber dig bekräfta innan
+jobbet startar. Med motorn `llm-vision` väljer du en LLM-profil med bildmodell (även i
+Sidgranskning); en extern profil får sidbilderna och kostar per sida.
+
 ### Karta
 
 Karta-fliken finns i Streamlit-appen och visar observationer runt mordkvällen på

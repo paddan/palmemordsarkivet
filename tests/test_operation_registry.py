@@ -421,10 +421,12 @@ def test_rescan_page_parameters_and_defaults() -> None:
     by_name = {parameter.name: parameter for parameter in definition.parameters}
     assert by_name["pdf_stem"].required and by_name["pdf_stem"].kind == "str"
     assert by_name["page"].required and by_name["page"].kind == "int"
-    assert by_name["engine"].choices == ("surya-layout", "surya", "tesseract", "vision")
+    assert by_name["engine"].choices == (
+        "surya-layout", "surya", "tesseract", "vision", "llm-vision")
+    assert "--profile" in by_name["profile"].flags and by_name["profile"].kind == "str"
     assert _defaults("rescan-page") | {"root": None} == {
         "root": None, "pdf_stem": None, "page": None, "engine": "surya-layout",
-        "restore_reading": None, "dpi": 300, "reindex": True,
+        "profile": "", "restore_reading": None, "dpi": 300, "reindex": True,
     }
 
 
@@ -443,3 +445,28 @@ def test_rescan_page_cli_flags() -> None:
     ])
     assert params["restore_reading"] == 7 and params["reindex"] is False
     assert params["engine"] == "tesseract"
+
+
+def test_rescan_pages_operation_defaults() -> None:
+    from operations.registry import get_registry
+
+    definition = get_registry().get("rescan-pages")
+
+    assert (definition.label, definition.group, definition.mutating) == (
+        "Skanna om sidor", "OCR", True)
+    # en massomskanning kräver en uttrycklig bekräftelse i Admin (kostnad för llm-vision)
+    assert definition.confirmation is not None
+    assert "läses om" in definition.confirmation
+    assert "extern tjänst" in definition.confirmation and "kostnad" in definition.confirmation
+    by_name = {parameter.name: parameter for parameter in definition.parameters}
+    assert by_name["engine"].choices == (
+        "surya-layout", "surya", "tesseract", "vision", "llm-vision")
+    assert by_name["source"].choices == ("any", "files", "wpu")
+    assert _defaults("rescan-pages") | {"root": None} == {
+        "root": None, "engine": "surya-layout", "profile": "", "threshold": 70.0,
+        "source": "any", "max_pages": 0, "dry_run": False, "reindex": True,
+        "jobs": 4, "dpi": 300,
+    }
+    params = parse_operation_args(definition, ["--max-pages", "2", "--dry-run", "--no-reindex"])
+    assert params["max_pages"] == 2 and params["dry_run"] is True
+    assert params["reindex"] is False

@@ -1585,7 +1585,7 @@ def test_rescan_page_form_hides_restore_and_lists_all_documents(tmp_path, monkey
 
     fields = [p.name for p in admin_ui.form_fields(get_registry().get("rescan-page"))]
     assert "restore_reading" not in fields
-    assert fields == ["reindex", "pdf_stem", "engine", "page", "dpi"]
+    assert fields == ["reindex", "pdf_stem", "engine", "profile", "page", "dpi"]
 
     form = _picker_form(tmp_path, monkeypatch, "rescan-page")
     assert not form.exception

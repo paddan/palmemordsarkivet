@@ -177,6 +177,7 @@ def ingest_adapter(context, params: Mapping) -> None:
         unusable_list=params["unusable_list"],
         reindex_since=reindex_since,
         context=context,
+        only_stems=params.get("only_stems"),
     )
     _raise_on_failure("ingest", rc)
 
@@ -258,9 +259,29 @@ def rescan_page_adapter(context, params: Mapping) -> None:
         dpi=params["dpi"],
         reindex=params["reindex"],
         restore_reading=params.get("restore_reading"),
+        profile=params.get("profile") or "",
         context=context,
     )
     _raise_on_failure("rescan-page", rc)
+
+
+def rescan_pages_adapter(context, params: Mapping) -> None:
+    from .rescan_pages import run_rescan_pages
+
+    rc = run_rescan_pages(
+        root=Path(params.get("root") or PROJECT_ROOT),
+        engine=params["engine"],
+        profile=params.get("profile") or "",
+        threshold=params["threshold"],
+        source=params["source"],
+        max_pages=params["max_pages"],
+        dry_run=params["dry_run"],
+        reindex=params["reindex"],
+        jobs=params["jobs"],
+        dpi=params["dpi"],
+        context=context,
+    )
+    _raise_on_failure("rescan-pages", rc)
 
 
 def extract_map_observations_adapter(context, params: Mapping) -> None:

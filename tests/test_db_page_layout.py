@@ -123,3 +123,84 @@ def test_count_pages_for_stem(tmp_path):
     record_page(conn, pdf_stem="doc", page_num=2, engine="surya-layout", text="b", score=50.0)
     record_page(conn, pdf_stem="annan", page_num=1, engine="tesseract", text="c", score=50.0)
     assert count_pages_for_stem(conn, "doc") == 2
+
+
+# --- Historikskälet rejected (migration 013) och urvalsfrågor -----------------
+
+def _archive(conn, reason, **kw):
+    from db import archive_page_reading
+    args = dict(pdf_stem="a", page_num=1, engine="surya", text="t", markdown=None,
+                layout_json=None, engine_identity=None, score=50.0, reason=reason)
+    args.update(kw)
+    return archive_page_reading(conn, **args)
+
+
+def test_rejected_reason_is_allowed(tmp_path):
+    conn = _fresh(tmp_path)
+    try:
+        assert _archive(conn, "rejected") > 0
+    finally:
+        conn.close()
+
+
+def test_migration_13_keeps_readings_and_allows_rejected(tmp_path):
+    conn = _fresh(tmp_path)
+    try:
+        conn.execute("DROP TABLE pdf_page_readings")
+        conn.execute(
+            """CREATE TABLE pdf_page_readings (
+                id INTEGER PRIMARY KEY, pdf_stem TEXT NOT NULL,
+                page_num INTEGER NOT NULL, engine TEXT NOT NULL, text TEXT,
+                markdown TEXT, layout_json TEXT, engine_identity TEXT, score REAL,
+                recorded_at TEXT NOT NULL,
+                reason TEXT NOT NULL CHECK(reason IN ('rescan', 'restore')))"""
+        )
+        conn.execute("DELETE FROM schema_version WHERE version > 12")
+        conn.execute("PRAGMA user_version = 12")
+        rid = _archive(conn, "rescan")
+        init_schema(conn)
+        row = conn.execute("SELECT * FROM pdf_page_readings WHERE id=?", (rid,)).fetchone()
+        assert row is not None and row["reason"] == "rescan"
+        assert _archive(conn, "rejected") > rid
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+    finally:
+        conn.close()
+
+
+def test_list_rescan_candidates_filters_and_sorts(tmp_path):
+    from db import list_rescan_candidates, record_quality_page, upsert_pdf_file
+    conn = _fresh(tmp_path)
+    try:
+        upsert_pdf_file(conn, pdf_stem="a", source="files", pdf_path="a.pdf")
+        upsert_pdf_file(conn, pdf_stem="w", source="wpu", pdf_path="w.pdf")
+        record_quality_page(conn, pdf_stem="a", page_num=1, score=65)
+        record_quality_page(conn, pdf_stem="a", page_num=2, score=30)
+        record_quality_page(conn, pdf_stem="a", page_num=3, score=80)
+        record_quality_page(conn, pdf_stem="a", page_num=4, score=10, image_page=True)
+        record_quality_page(conn, pdf_stem="w", page_num=1, score=40)
+        rows = list_rescan_candidates(conn, threshold=70, source="files")
+        assert [r["score"] for r in rows] == [30, 65]
+        wpu = list_rescan_candidates(conn, threshold=70, source="wpu")
+        assert [r["pdf_stem"] for r in wpu] == ["w"]
+        assert len(list_rescan_candidates(conn, threshold=70, source=None)) == 3
+    finally:
+        conn.close()
+
+
+def test_page_read_with_matches_engine_and_identity(tmp_path):
+    from db import page_read_with
+    conn = _fresh(tmp_path)
+    try:
+        record_page(conn, pdf_stem="a", page_num=1, engine="surya", text="x", score=90.0)
+        _archive(conn, "rescan", engine="llm-vision", engine_identity="llm-vision:A:m")
+        _archive(conn, "rescan", engine="llm", engine_identity=None)
+        assert page_read_with(conn, "a", 1, engine="surya", engine_identity=None)
+        assert page_read_with(conn, "a", 1, engine="llm-vision",
+                              engine_identity="llm-vision:A:m")
+        assert not page_read_with(conn, "a", 1, engine="llm-vision",
+                                  engine_identity="llm-vision:B:m")
+        assert not page_read_with(conn, "a", 2, engine="surya", engine_identity=None)
+        conn.execute("DELETE FROM pdf_page_readings WHERE engine='llm-vision'")
+        assert not page_read_with(conn, "a", 1, engine="llm-vision", engine_identity=None)
+    finally:
+        conn.close()

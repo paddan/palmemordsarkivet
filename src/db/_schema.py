@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 DEFAULT_DB: Path = Path(os.environ.get("STATE_DB", str(ROOT / "generated" / "db" / "state.db")))
 
-SCHEMA_VERSION: int = 12
+SCHEMA_VERSION: int = 13
 
 LLM_USAGE_SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS llm_usage (
@@ -91,7 +91,7 @@ CREATE TABLE IF NOT EXISTS pdf_page_readings (
     engine_identity TEXT,
     score           REAL,
     recorded_at     TEXT NOT NULL,
-    reason          TEXT NOT NULL CHECK(reason IN ('rescan', 'restore'))
+    reason          TEXT NOT NULL CHECK(reason IN ('rescan', 'restore', 'rejected'))
 );
 CREATE INDEX IF NOT EXISTS idx_page_readings_page
     ON pdf_page_readings(pdf_stem, page_num)
@@ -554,6 +554,29 @@ def _migration_012_page_readings(conn: sqlite3.Connection) -> None:
             conn.execute(statement)
 
 
+def _migration_013_rejected_reason(conn: sqlite3.Connection) -> None:
+    """Tillåt historikskälet ``rejected`` (underkänd vid jämförelse).
+
+    SQLite kan inte ändra en CHECK-regel, så tabellen byggs om med bevarade id:n.
+    """
+    conn.execute("ALTER TABLE pdf_page_readings RENAME TO pdf_page_readings_old")
+    conn.execute("DROP INDEX IF EXISTS idx_page_readings_page")
+    for statement in PAGE_READINGS_SCHEMA_SQL.split(";"):
+        if statement.strip():
+            conn.execute(statement)
+    conn.execute(
+        """
+        INSERT INTO pdf_page_readings(id, pdf_stem, page_num, engine, text, markdown,
+                                      layout_json, engine_identity, score,
+                                      recorded_at, reason)
+        SELECT id, pdf_stem, page_num, engine, text, markdown,
+               layout_json, engine_identity, score, recorded_at, reason
+        FROM pdf_page_readings_old
+        """
+    )
+    conn.execute("DROP TABLE pdf_page_readings_old")
+
+
 MIGRATIONS: tuple[_Migration, ...] = (
     _Migration(6, "pdf_files OCR-felstatus", _migration_006_pdf_file_ocr_status),
     _Migration(7, "admin_jobs jobbmodell", _migration_007_admin_jobs),
@@ -562,6 +585,7 @@ MIGRATIONS: tuple[_Migration, ...] = (
     _Migration(10, "LLM-räknare per profil", _migration_010_llm_usage),
     _Migration(11, "Markdown och layout per sida", _migration_011_page_layout),
     _Migration(12, "läsningshistorik per sida", _migration_012_page_readings),
+    _Migration(13, "historikskälet rejected", _migration_013_rejected_reason),
 )
 
 

@@ -43,6 +43,7 @@ src/
   download.py          # Google Drive PDF downloader (state via db)
   quality.py           # OCR quality scoring (0–100 heuristics + optional hunspell)
   ocr_pages.py         # Per-page OCR pipeline (Tesseract/Surya) + redaktionsdetektering
+  llm_vision.py        # Bildmotorn llm-vision: en OpenAI-kompatibel LLM-profil skriver av sidbilden som Markdown (EXIT_LLM_FATAL = 4)
   surya_worker.py      # Fristående Surya 2-worker (egen venv, ingen projektimport): en sida per JSON-rad, rå HTML-block ut, felkoder
   surya_client.py      # Klient för Surya-workern: startar den i egen session, en sida per rad med tidsgräns, felkoder, --identity-probe
   surya_layout.py      # Ren layoutmodul: Suryas HTML-block → typade block, ren text, Markdown, JSON och [MASKAD]-infogning (parse_page)
@@ -106,6 +107,8 @@ src/
     pipeline.py         # Full pipeline-orkestrering
     neo4j.py            # Lokal Podman/Neo4j-livscykel
     rescan.py           # rescan-page: skanna om en sida / återställ historisk läsning (pdf_page_readings)
+    page_readings.py    # Delade hjälpare för rescan-page/rescan-pages: motorer, ocr_argv, vision-profilkontroll, arkivera/återställ/underkänn läsning, comparison_score
+    rescan_pages.py     # rescan-pages: massomskanning av sidor under poängtröskeln, behåll den bättre läsningen
   admin_ui.py           # Testbara adminpresentatörer och formulärhelpers
   pages/
     8_Admin.py          # Lokal Streamlit-adminsida (bakgrundsjobb + operationer)
@@ -170,6 +173,10 @@ samma kommando som `.venv/bin/python scripts/run_pipeline.py`. Kör med
 
 # Skanna om en sida (historiken i pdf_page_readings; --restore-reading ID återställer)
 .venv/bin/python scripts/rescan_page.py --pdf-stem "<stam>" --page 3 [--engine tesseract] [--no-reindex]
+
+# Skanna om många sidor under en poängtröskel (behåller den bättre läsningen)
+.venv/bin/python scripts/rescan_pages.py --engine tesseract --threshold 30 --max-pages 2 --dry-run
+.venv/bin/python scripts/rescan_pages.py --engine llm-vision --profile "<profil>" --max-pages 50
 
 # wpu.nu (valfritt)
 .venv/bin/python scripts/download_wpu.py && .venv/bin/python scripts/merge_wpu.py
@@ -635,7 +642,7 @@ alfanumerisk andel och längd utan Markdown-syntax respektive utan sidhuvudraden
 visar bara titel/källa), så ingen `$`-escaping behövs där — lägg till den om
 chunktext någon gång renderas med `st.markdown`.
 
-**Redaktionsdetektering (ocr_pages.py)**: Hittar svarta maskeringsblock i bilder och infogar `[MASKAD]` i texten. På som standard; `--no-detect-redactions` stänger av. Idempotens spåras via `pdf_files.redaction_checked_at` i state.db — `.redact`-markörfilerna är borttagna. `scripts/detect_redactions.py` förfiltrerar listan baserat på databasen så filer som redan kollats spawnar inga subprocesser alls. Filerna analyseras i en `ProcessPoolExecutor` (`_make_pool`), aldrig i trådar: PDFium (pypdfium2) är inte trådsäkert, och med trådar gav nästan varje fil `Failed to load document (PDFium: Data format error)` — felade filer markeras aldrig som kontrollerade och togs därför om varje körning. Tester som monkeypatchar `_detect_one` måste också byta `_make_pool` mot en trådpool, eftersom patchen inte når barnprocesserna. Dör en arbetsprocess hårt (`BrokenProcessPool`) körs de drabbade filerna om i en pool med en arbetare; den första drabbade filen i ordningen är den skyldiga och blir ensam ett fel — annars fäller en krasch hela batchen.
+**Redaktionsdetektering (ocr_pages.py)**: Hittar svarta maskeringsblock i bilder och infogar `[MASKAD]` i texten. På som standard; `--no-detect-redactions` stänger av. Idempotens spåras via `pdf_files.redaction_checked_at` i state.db — `.redact`-markörfilerna är borttagna. `scripts/detect_redactions.py` förfiltrerar listan baserat på databasen så filer som redan kollats spawnar inga subprocesser alls. Filerna analyseras i en `ProcessPoolExecutor` (`_make_pool`), aldrig i trådar: PDFium (pypdfium2) är inte trådsäkert, och med trådar gav nästan varje fil `Failed to load document (PDFium: Data format error)` — felade filer markeras aldrig som kontrollerade och togs därför om varje körning. Tester som monkeypatchar `_detect_one` måste också byta `_make_pool` mot en trådpool, eftersom patchen inte når barnprocesserna. Dör en arbetsprocess hårt (`BrokenProcessPool`) körs de drabbade filerna om i en pool med en arbetare; den första drabbade filen i ordningen är den skyldiga och blir ensam ett fel — annars fäller en krasch hela batchen. När `[MASKAD]` infogas uppdateras `text_mtime` (`touch_text_mtime`) — utan det såg normalisering och kvalitetssteget aldrig ändringen och Surya-redo valde sidor på gamla poäng. Normaliseringen tar därför också med filer vars disk-mtime är nyare än `text_mtime`.
 
 **Per-dokument-cleanup (`scripts/ocr.py` + Surya)**: Efter att `ocr_pages.py` är klar kör `scripts/ocr.py` automatiskt `merge_pages.merge_one` + `normalize_text.process_file`. Idempotens och per-sida-text spåras i `pdf_pages`-tabellen i state.db — `page-NNN.txt`/`.json`-markörerna existerar inte längre. Surya-redo betraktar alla befintliga `pdf_pages`-rader som redan försökt per sida (även `engine='llm'`), annars kan `scripts/run_pipeline.py` starta Surya-processer som direkt hoppar alla sidor.
 
@@ -746,11 +753,56 @@ SIGTERM-hanteraren som dödar Surya-workerns processgrupp. `--force` ger exitkod
 om en angiven sida inte gick att läsa; rc 3 och övriga icke-noll-koder blir
 `OperationFailed` med den gällande läsningen orörd. Efter OCR/återställning körs
 `operations.ocr.merge_and_normalize` (delas med OCR-stegen) med `only_pages={page}` — bara den sidan slås in i textfilen, så en inaktuell grannrad aldrig skriver över en oarkiverad filsida — och, med omindexering,
-`db.delete_ingest` + inkrementell ingest med registrets standardvärden för
-`ingest` — ingest-raden tas bort eftersom en ny läsning kan ge samma text men ny
-Markdown. `--restore-reading` är CLI-only och döljs i Admin via
+`db.delete_ingest` + ingest av **bara det dokumentet** (`only_stems={stam}`, en intern
+parameter utan CLI-flagga; föräldralös rensning hoppas då över) med registrets
+standardvärden för `ingest` — ingest-raden tas bort eftersom en ny läsning kan ge samma
+text men ny Markdown. Utan `only_stems` indexerade en omskanning om alla inaktuella filer
+(8 235 efter en OCR-körning). `--restore-reading` är CLI-only och döljs i Admin via
 `admin_ui.ADMIN_HIDDEN_PARAMS`; dokumentväljaren använder källan
-`state:pdf_files` (alla dokument, inte bara de med per-sida-rader).
+`state:pdf_files` (alla dokument, inte bara de med per-sida-rader). Dokument vars
+text `merge_wpu` raderat som sämre dubblett (`page_review.is_removed_duplicate`:
+`tesseract_done_at` satt men ingen textfil) döljs i både Sidgranskningens och Admins
+väljare, och `rescan-page` vägrar dem — `merge_one(create_missing=True)` hade annars
+byggt en textfil av bara den omskannade sidan, en ofullständig dubblett i indexet.
+
+**Massomskanning (`src/operations/rescan_pages.py`, `page_readings.py`, `llm_vision.py`)**:
+`rescan-pages` skannar om alla sidor under `--threshold` (poäng ur `quality_pages`; bildsidor
+och opoängsatta utelämnas) och är ett vanligt skrivande jobb. **Urvalsregeln som hindrar upprepning:**
+en sida väljs inte om den redan lästs med samma motor (`pdf_pages.engine`); för `llm-vision` måste
+även `engine_identity` (`llm-vision:<profil>:<modell>`) stämma, så en annan modell får läsa om.
+För övriga motorer räknas inte identiteten — ett nytt Surya-bygge (llama-server-bygget i
+identiteten) är **inte** en ny motor och väljer ingenting på nytt. Raderade dubbletter och dokument
+vars PDF saknas väljs aldrig. `--max-pages` tar de sämsta sidorna först och `--dry-run` skriver
+bara urvalet — det är kostnadsbromsen för `llm-vision`. **Behåll den bättre läsningen:** den gällande
+läsningen arkiveras före OCR (samma `archive_current` som `rescan-page`); därefter jämförs ny och
+gammal text med `page_readings.comparison_score` (normaliserad text, kvalitetspoäng utan hunspell).
+En sämre (eller tom) ny läsning som faktiskt skrevs förkastas: den lagras i historiken med skälet
+**`rejected`** (visas i Sidgranskning som "underkänd vid jämförelse"; schemaversion 13) och den gamla
+läsningen återställs. En kraschad eller avbruten läsning blir **inte** `rejected`: är
+`pdf_pages`-raden oförändrad efter OCR räknas sidan som misslyckad — historikraden tas bort och den
+gällande läsningen rörs inte. Vinner en `hel-fils-OCR`-läsning (sidan hade ingen
+`pdf_pages`-rad) behåller sidan ändå en `pdf_pages`-rad med den motorn, så Full OCR:s Surya-redo
+inte väljer den igen; raden får jämförelsepoängen (`reject_new_reading(fallback_score=…)`) när den
+gamla läsningen saknade egen poäng, så Sidgranskning inte visar "–". **`llm-vision` är inte `llm`:** `llm` (`llm_correct.py`) rättar redan OCR:ad text
+utan bild; `llm-vision` läser sidbilden (PNG, högst 2000 px längsta sida) via en OpenAI-kompatibel
+profil (Claude stöds inte) och skickar bilden till profilens endpoint — extern tjänst om den inte är
+localhost. Svarta fält infogas av pixeldetekteringen, inte av modellen. Profilen provas med en
+provbild före körningen (`check_vision_profile`). Exitkod **4** (`EXIT_LLM_FATAL`: 401/402/403/429 efter
+återförsök) avbryter resten av körningen på samma sätt som exitkod 3 för Surya (inga markeringar som
+permanent fel); fem dokument i rad där varje sida misslyckas avbryter också. Dokument körs parallellt
+(`--jobs`, standard 4) bara för `llm-vision`, som är nätverksbunden; övriga motorer tar ett i taget.
+Kvalitetspoängen räknas om för de berörda dokumenten även med `--no-reindex`, annars ligger de gamla
+poängen kvar och sidorna väljs om — även efter ett avbrott (`OperationCancelled`: bara kvalitet,
+ingen omindexering, med `ctx.without_cancellation()` eftersom kvalitetssteget annars stoppar på det
+redan begärda avbrottet). `llm_vision` gör upp till fem försök per sida vid 429/5xx/nätfel (väntan
+2, 4, 8, 16 s, eller ett numeriskt `Retry-After` kapat till 60 s) innan 429 blir fatalt.
+`markdown_to_text` tar bara bort Markdown-syntax utan eget textinnehåll (`#`, `>`, `**`/`__`,
+tabellstreck och avgränsarrader) — punktnummer (`12.`, `2)`) och listtecken är arkivets text och
+står kvar, eftersom den rena texten indexeras, citeras och poängsätts. Admin kräver en bekräftelse
+(`confirmation` i registret) före start av `rescan-pages`. `rescan-page` har dessutom en valfri
+`--profile` (bara för `llm-vision`, ignoreras annars); Sidgranskning visar en profilrullista
+(`llm_vision.vision_profile_names`: Admins profilkatalog avsmalnad till OpenAI-kompatibla profiler)
+när `llm-vision` väljs och spärrar *Skanna om sidan* när ingen sådan profil finns.
 
 **Sidgranskningens statusfragment (`src/pages/9_Sidgranskning.py`)**: sidans långlivade `state_conn()` används bara i sidkörningen. `st.fragment(run_every=2)` kan köras på en annan tråd, så slutstatusen läses med en egen `db.connect()` som stängs i `finally` i samma anrop och tråd; `check_same_thread` är kvar på. Lägg aldrig tillbaka den fångade anslutningen i fragmentet — det ger `sqlite3.ProgrammingError` när jobbet avslutas.
 

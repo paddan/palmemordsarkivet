@@ -146,7 +146,11 @@ innehållet.
 
 Fliken **Sidgranskning** visar en PDF-sida bredvid texten som OCR:en gav (text,
 Markdown, layoutblock och blankettfält), och låter dig skanna om just den sidan
-med en annan motor eller återställa en tidigare läsning.
+med en annan motor eller återställa en tidigare läsning. För att skanna om
+många sidor på en gång finns operationen **Skanna om sidor** i Admin
+(`./rescan_pages.sh`): den läser om alla sidor under en kvalitetspoäng med vald
+motor — även en LLM-profil som läser sidbilden — och behåller den bättre
+läsningen. Se [Teknisk referens](docs/teknisk-referens.md).
 
 ### Jämförelse
 

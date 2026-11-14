@@ -195,6 +195,19 @@ class OperationContext:
         if self._cancel_requested():
             raise OperationCancelled("Operationen avbröts")
 
+    def without_cancellation(self) -> OperationContext:
+        """Samma logg och progress, men ``check_cancelled`` stoppar aldrig.
+
+        För korta städsteg efter ett avbrott (t.ex. att poängsätta om det som
+        redan skrivits) — avbrottet är redan begärt och skulle annars stoppa
+        steget direkt. Grace-tider och debugläge följer med.
+        """
+        return OperationContext(
+            sink=self._sink, cancel_requested=lambda: False,
+            terminate_grace_seconds=self._terminate_grace_seconds,
+            pipe_drain_seconds=self._pipe_drain_seconds, debug=self._debug,
+        )
+
     def run_process(
         self,
         argv: Sequence[str],

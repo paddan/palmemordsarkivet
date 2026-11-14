@@ -221,3 +221,20 @@ def test_normalize_markdown_keeps_pipes_and_indent():
         "---\n**F:** ja"
     )
     assert normalize_markdown(out) == out
+
+
+def test_file_changed_on_disk_without_db_update_is_reprocessed(txt_dir, db_path):
+    """En skrivare som missat att uppdatera text_mtime (som maskeringsdetekteringen
+    gjorde) får inte göra filen osynlig för normalisering — disken avgör också."""
+    import os
+
+    f = txt_dir / "a.txt"
+    f.write_text("ren text", encoding="utf-8")
+    _run_main([], txt_dir, db_path)
+    f.write_text("ﬁnns ny text", encoding="utf-8")
+    future = time.time() + 3600
+    os.utime(f, (future, future))
+
+    _run_main([], txt_dir, db_path)
+
+    assert f.read_text(encoding="utf-8") == "finns ny text"

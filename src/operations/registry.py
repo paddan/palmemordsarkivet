@@ -327,7 +327,9 @@ def _register_page_ocr_operations() -> None:
             _p("pdf_stem", "--pdf-stem", "str", None, "Dokumentets filstam", required=True),
             _p("page", "--page", "int", None, "Sidnummer (1-baserat)", required=True),
             _p("engine", "--engine", "choice", "surya-layout", "OCR-motor",
-               choices=("surya-layout", "surya", "tesseract", "vision")),
+               choices=("surya-layout", "surya", "tesseract", "vision", "llm-vision")),
+            _p("profile", "--profile", "str", "",
+               "LLM-profil som läser sidbilden (krävs för llm-vision)"),
             # Sätts bara av Sidgranskning (Återställ); dolt i Admin-formuläret.
             _p("restore_reading", "--restore-reading", "int", None,
                "Återställ historisk läsning med detta id i stället för att OCR:a"),
@@ -337,6 +339,36 @@ def _register_page_ocr_operations() -> None:
         ),
         admin_visible=True, mutating=True, confirmation=None,
         run=adapters.rescan_page_adapter,
+    ))
+
+    _registry.register(OperationDefinition(
+        id="rescan-pages", label="Skanna om sidor", group="OCR",
+        description=(
+            "Skanna om alla sidor med låg kvalitetspoäng med vald motor och behåll "
+            "den bättre läsningen; den sämre sparas i historiken."
+        ),
+        parameters=(
+            _p("root", "--root", "path", ROOT, "Projektrot"),
+            _p("engine", "--engine", "choice", "surya-layout", "OCR-motor",
+               choices=("surya-layout", "surya", "tesseract", "vision", "llm-vision")),
+            _p("profile", "--profile", "str", "",
+               "LLM-profil som läser sidbilderna (krävs för llm-vision)"),
+            _p("threshold", "--threshold", "float", 70.0, "Poängtröskel"),
+            _p("source", "--source", "choice", "any", "Källa", choices=("any", "files", "wpu")),
+            _p("max_pages", "--max-pages", "int", 0, "Högst antal sidor (0 = alla)"),
+            _p("dry_run", "--dry-run", "bool", False, "Visa urvalet utan att skanna"),
+            _p("reindex", "--no-reindex", "bool", True,
+               "Hoppa över omindexeringen av dokumenten efteråt"),
+            _p("jobs", "--jobs", "int", _LLM_JOBS, "Parallella dokument (llm-vision)"),
+            _p("dpi", "--dpi", "int", 300, "Render-DPI"),
+        ),
+        admin_visible=True, mutating=True,
+        confirmation=(
+            "Jag förstår att alla valda sidor (upp till Högst antal sidor) läses om och "
+            "att den bättre läsningen blir gällande. Med llm-vision och en extern profil "
+            "skickas sidbilderna till en extern tjänst, med kostnad per sida."
+        ),
+        run=adapters.rescan_pages_adapter,
     ))
 
 

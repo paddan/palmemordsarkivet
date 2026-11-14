@@ -23,10 +23,12 @@ sys.path.insert(0, str(ROOT / "src"))
 
 import casebook_ui as _casebook_ui  # noqa: E402
 import db  # noqa: E402
+import llm_vision  # noqa: E402
 import page_review as _page_review  # noqa: E402
 import web_log  # noqa: E402
 from operations import job_service as _job_service  # noqa: E402
 from operations.exceptions import OperationFailed  # noqa: E402
+from operations.page_readings import VISION_ENGINE  # noqa: E402
 from operations.registry import get_registry  # noqa: E402
 from surya_layout import LayoutBlock  # noqa: E402
 
@@ -85,7 +87,7 @@ def _fmt_score(score: float | None) -> str:
 
 
 # --- Dokument- och sidval -----------------------------------------------------
-stems = [r["pdf_stem"] for r in db.list_documents_for_review(conn)]
+stems = _page_review.reviewable_documents(db.list_documents_for_review(conn), root)
 qp_doc = st.query_params.get("doc", "")
 if any(part in qp_doc for part in ("/", "\\", "..")):
     # Stammen blir en sökväg under downloaded/ och generated/text — inga katalogsteg.
@@ -257,8 +259,9 @@ def _start(params: dict[str, object], what: str) -> None:
         log.debug("startar %s för %s s.%s (%s): reindex=%s restore=%s",
                   OPERATION, stem, page, what, full.get("reindex"), full["restore_reading"])
     else:
-        log.debug("startar %s för %s s.%s (%s): motor=%s reindex=%s",
-                  OPERATION, stem, page, what, full.get("engine"), full.get("reindex"))
+        log.debug("startar %s för %s s.%s (%s): motor=%s profil=%s reindex=%s",
+                  OPERATION, stem, page, what, full.get("engine"), full.get("profile", ""),
+                  full.get("reindex"))
     try:
         started = _job_service.start_job(OPERATION, full)
     except db.ActiveAdminJobError as exc:
@@ -282,17 +285,41 @@ if done:
 
 with st.container(border=True):
     st.markdown("**Skanna om sidan**")
-    c_engine, c_reindex, c_button = st.columns([2, 2, 2], vertical_alignment="bottom")
+    c_engine, c_profile, c_reindex, c_button = st.columns([2, 2, 2, 2],
+                                                          vertical_alignment="bottom")
     with c_engine:
         engine = st.selectbox("Motor", engine_choices,
                               index=engine_choices.index(default_engine), key="sg_engine")
+    # llm-vision kräver en LLM-profil (samma katalog som Admin, bara bildkapabla tjänster);
+    # utan den misslyckas jobbet alltid, så knappen spärras när ingen profil finns.
+    vision = engine == VISION_ENGINE
+    profile = ""
+    vision_names: list[str] = llm_vision.vision_profile_names() if vision else []
+    with c_profile:
+        if vision and vision_names:
+            profile = str(st.selectbox(
+                "LLM-profil", vision_names, key="sg_profile",
+                help="LLM-konfigurationen som läser sidbilden (OpenAI-kompatibel, med "
+                     "bildmodell). Skapas under Admin → Inställningar.",
+            ))
     with c_reindex:
         reindex = st.checkbox("Uppdatera sökindexet", value=default_reindex, key="sg_reindex")
     with c_button:
         if st.button("Skanna om sidan", key="sg_rescan", type="primary",
-                     disabled=busy or pdf_path is None,
+                     disabled=busy or pdf_path is None or (vision and not profile),
                      width="stretch"):
-            _start({"engine": engine, "reindex": reindex}, "omskanning")
+            params: dict[str, object] = {"engine": engine, "reindex": reindex}
+            if vision:
+                params["profile"] = profile
+            _start(params, "omskanning")
+    if vision and not vision_names:
+        log.debug("llm-vision vald men ingen OpenAI-kompatibel LLM-profil finns")
+        st.caption("Motorn llm-vision kräver en OpenAI-kompatibel LLM-profil med "
+                   "bildmodell (OpenAI, OpenRouter, Ollama eller egen endpoint) — "
+                   "skapa en under Admin → Inställningar.")
+    elif vision:
+        st.caption("Sidbilden skickas till profilens endpoint — en extern tjänst, med "
+                   "kostnad, om den inte är localhost.")
     if missing_doc:
         st.caption("Omskanning kräver att dokumentets PDF finns i arkivet.")
     elif pdf_path is None:
@@ -341,7 +368,10 @@ with st.expander(f"Historik ({len(view.readings)} tidigare läsningar)"):
     shown = st.session_state.get("sg_show_reading")
     for reading in view.readings:
         rid = int(reading["id"])
-        reason = "omskanning" if reading["reason"] == "rescan" else "återställning"
+        reason = {
+            "rescan": "omskanning",
+            "rejected": "underkänd vid jämförelse",
+        }.get(reading["reason"], "återställning")
         r_text, r_show, r_restore = st.columns([6, 1, 1], vertical_alignment="center")
         with r_text:
             st.caption(_page_review.escape_markdown_dollars(

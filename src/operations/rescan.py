@@ -23,33 +23,53 @@ sätter bara en avbrottsflagga i sin egen process.
 
 from __future__ import annotations
 
-import sys
-from contextlib import closing
 from pathlib import Path
 
 import db as state_db
-from normalize_text import markdown_is_fresh
-from page_review import WHOLE_FILE_ENGINE, file_page, find_pdf, page_count, text_page_count
+from llm_vision import EXIT_LLM_FATAL
+from page_review import (
+    WHOLE_FILE_ENGINE,
+    find_pdf,
+    is_removed_duplicate,
+    page_count,
+    text_page_count,
+)
 from surya_client import EXIT_SURYA_UNAVAILABLE
 
 from .context import OperationContext, ensure_terminal_context
 from .exceptions import OperationFailed
-
-ROOT = Path(__file__).resolve().parents[2]
-
-ENGINES: tuple[str, ...] = ("surya-layout", "surya", "tesseract", "vision")
-
-
-def _connect():
-    conn = state_db.connect()
-    state_db.init_schema(conn)
-    return closing(conn)
+from .page_readings import (
+    ENGINES,
+    VISION_ENGINE,
+    archive_current,
+    check_vision_profile,
+    forget_failed_attempt,
+    load_vision_profile,
+    ocr_argv,
+    reindex_stems,
+    row_snapshot,
+)
+from .page_readings import (
+    connect as _connect,
+)
+from .page_readings import (
+    restore_reading as restore_reading_row,
+)
 
 
 def _validate_page(root: Path, pdf_stem: str, page: int, ctx: OperationContext) -> Path:
     """PDF:en för stammen; ``OperationFailed`` om den saknas eller sidan inte finns."""
     if not pdf_stem:
         raise OperationFailed("Ange ett dokument (--pdf-stem).")
+    with _connect() as conn:
+        row = state_db.get_pdf_file(conn, pdf_stem)
+    if row is not None and is_removed_duplicate(root, pdf_stem, row["tesseract_done_at"]):
+        # En omskanning hade byggt en ny textfil av bara den här sidan — en
+        # ofullständig dubblett i indexet bredvid den fullständiga kopian.
+        raise OperationFailed(
+            f"{pdf_stem} är en dubblett vars text merge_wpu ersatt med den andra "
+            "kopian (palmemordsarkivet/wpu.nu) — skanna om den kopian i stället."
+        )
     pdf: Path | None = find_pdf(root, pdf_stem)
     if pdf is None:
         raise OperationFailed(
@@ -93,88 +113,6 @@ def _validate_restore_page(root: Path, pdf_stem: str, page: int, ctx: OperationC
             f"({count} sidor)", level="debug")
 
 
-def _archive_current(
-    root: Path, pdf_stem: str, page: int, reason: str, ctx: OperationContext,
-) -> int | None:
-    """Spara den gällande läsningen i historiken; id:t eller ``None`` om text saknas.
-
-    Gällande är sidan i textfilen. Stämmer ``pdf_pages``-raden med den
-    (``markdown_is_fresh``) kopieras raden med Markdown och layout. Har raden
-    text ``NULL`` eller avviker den sparas textfilens sida — med radens motor när
-    raden har (inaktuell) text, annars ``hel-fils-OCR`` — utan Markdown, layout,
-    motoridentitet och poäng, som inte hör till den texten. Finns ingen sida i
-    textfilen kopieras raden om den har text, annars arkiveras ingenting.
-    """
-    with _connect() as conn:
-        row = state_db.get_page_row(conn, pdf_stem, page)
-        file_text = file_page(root, pdf_stem, page)
-        row_text = row["text"] if row is not None else None
-        if row is not None and row_text is not None and (
-            file_text is None or markdown_is_fresh(row_text, file_text)
-        ):
-            why = "raden stämmer med textfilen" if file_text is not None else (
-                "ingen sida i textfilen att jämföra med")
-            fields = {
-                "engine": row["engine"], "text": row_text, "markdown": row["markdown"],
-                "layout_json": row["layout_json"], "engine_identity": row["engine_identity"],
-                "score": row["score"],
-            }
-        elif file_text is not None:
-            if row is None:
-                why, engine = "ingen pdf_pages-rad, textfilens sida", WHOLE_FILE_ENGINE
-            elif row_text is None:
-                why, engine = (f"pdf_pages-raden ({row['engine']}) har text NULL, "
-                               "textfilens sida"), WHOLE_FILE_ENGINE
-            else:
-                why, engine = (f"pdf_pages-raden ({row['engine']}) avviker från "
-                               "textfilen, textfilens sida"), str(row["engine"])
-            fields = {
-                "engine": engine, "text": file_text, "markdown": None,
-                "layout_json": None, "engine_identity": None, "score": None,
-            }
-        else:
-            ctx.log(f"rescan {pdf_stem} s{page}: ingen gällande läsning att arkivera "
-                    "(ingen sida i textfilen och "
-                    + ("ingen pdf_pages-rad)" if row is None else "pdf_pages-raden har text NULL)"),
-                    level="debug")
-            return None
-        reading_id: int = state_db.archive_page_reading(
-            conn, pdf_stem=pdf_stem, page_num=page, reason=reason, **fields,
-        )
-    ctx.log(f"rescan {pdf_stem} s{page}: arkiverade läsning {reading_id} "
-            f"({fields['engine']}, poäng {fields['score']}, orsak {reason}; {why})",
-            level="debug")
-    return reading_id
-
-
-def _row_snapshot(pdf_stem: str, page: int) -> dict | None:
-    """Den gällande ``pdf_pages``-raden som dict (för att se om ett försök ändrade den)."""
-    with _connect() as conn:
-        row = state_db.get_page_row(conn, pdf_stem, page)
-    return dict(row) if row is not None else None
-
-
-def _forget_failed_attempt(
-    pdf_stem: str, page: int, reading_id: int | None, before: dict | None,
-    ctx: OperationContext,
-) -> None:
-    """Ta bort historikraden som sparades före ett misslyckat eller avbrutet försök.
-
-    Raden behålls om ``pdf_pages`` ändå hann ändras — då är den den enda kopian
-    av läsningen som ersattes.
-    """
-    if reading_id is None:
-        return
-    if _row_snapshot(pdf_stem, page) != before:
-        ctx.log(f"rescan {pdf_stem} s{page}: försöket misslyckades men pdf_pages "
-                f"ändrades, historikrad {reading_id} behålls", level="warning")
-        return
-    with _connect() as conn:
-        state_db.delete_page_reading(conn, reading_id)
-    ctx.log(f"rescan {pdf_stem} s{page}: försöket misslyckades, historikrad "
-            f"{reading_id} borttagen (gällande läsning orörd)", level="debug")
-
-
 def _load_reading(pdf_stem: str, page: int, reading_id: int):
     """Den historiska läsningen; ``OperationFailed`` om den inte hör till sidan."""
     with _connect() as conn:
@@ -196,18 +134,14 @@ def _load_reading(pdf_stem: str, page: int, reading_id: int):
 
 def _ocr_page(
     root: Path, pdf: Path, page: int, engine: str, dpi: int, ctx: OperationContext,
+    profile: str = "",
 ) -> None:
     """OCR:a sidan med ``ocr_pages.py --force``; ``OperationFailed`` vid fel.
 
     Den gällande raden i ``pdf_pages`` ersätts bara när sidan faktiskt lästs —
     ett misslyckat försök lämnar den orörd.
     """
-    argv = [
-        sys.executable, str(ROOT / "src" / "ocr_pages.py"),
-        "--in", str(pdf), "--out-dir", str(root / "generated" / "text_pages"),
-        "--engine", engine, "--pages", str(page), "--dpi", str(dpi), "--force",
-    ]
-    rc = ctx.run_process(argv, cwd=root)
+    rc = ctx.run_process(ocr_argv(root, pdf, [page], engine, dpi, profile), cwd=root)
     ctx.log(f"rescan {pdf.stem} s{page}: ocr_pages ({engine}) rc={rc}", level="debug")
     if rc == EXIT_SURYA_UNAVAILABLE:
         raise OperationFailed(
@@ -215,46 +149,17 @@ def _ocr_page(
             f"(exitkod {rc}) — orsaken står i jobbloggen (Admin → Logg). "
             "Den gällande läsningen är orörd."
         )
+    if rc == EXIT_LLM_FATAL:
+        raise OperationFailed(
+            f"LLM-tjänsten gick inte att använda för {pdf.stem} sida {page} "
+            f"(exitkod {rc}: profil, nyckel, kredit eller kvot) — orsaken står i "
+            "jobbloggen (Admin → Logg). Den gällande läsningen är orörd."
+        )
     if rc != 0:
         raise OperationFailed(
             f"Omskanningen av {pdf.stem} sida {page} med {engine} misslyckades "
             f"(exitkod {rc}). Den gällande läsningen är orörd."
         )
-
-
-def _restore(pdf_stem: str, page: int, reading, ctx: OperationContext) -> None:
-    """Skriv den historiska läsningen som gällande rad i ``pdf_pages``."""
-    with _connect() as conn:
-        state_db.record_page(
-            conn, pdf_stem=pdf_stem, page_num=page, engine=reading["engine"],
-            text=reading["text"], score=reading["score"], markdown=reading["markdown"],
-            layout_json=reading["layout_json"], engine_identity=reading["engine_identity"],
-        )
-    ctx.log(f"rescan {pdf_stem} s{page}: återställde läsning {reading['id']} "
-            f"({reading['engine']}, poäng {reading['score']})", level="debug")
-
-
-def _reindex(root: Path, pdf_stem: str, ctx: OperationContext) -> None:
-    """Tvinga omindexering av dokumentet och kör inkrementell ingest.
-
-    Ingest-raden tas bort först: en ny läsning kan ge byte-identisk text (och då
-    oförändrad mtime) men ny Markdown, och utan raden räknas dokumentet som nytt.
-    Övriga ingest-värden är registrets standardvärden för operationen ``ingest``.
-    """
-    from .adapters import ingest_adapter
-    from .registry import get_registry
-
-    with _connect() as conn:
-        state_db.delete_ingest(conn, pdf_stem)
-        conn.commit()
-    ctx.log(f"rescan {pdf_stem}: ingest-raden borttagen, dokumentet indexeras om",
-            level="debug")
-    params: dict[str, object] = {
-        parameter.name: parameter.default
-        for parameter in get_registry().get("ingest").parameters
-    }
-    params.update(root=root, rebuild=False)
-    ingest_adapter(ctx, params)
 
 
 def run_rescan_page(
@@ -267,10 +172,13 @@ def run_rescan_page(
     reindex: bool,
     restore_reading: int | None,
     context: OperationContext | None = None,
+    profile: str = "",
 ) -> int:
     """Skanna om en sida (eller återställ läsningen ``restore_reading``). Returnerar 0.
 
     All validering sker före första skrivningen; fel ger ``OperationFailed``.
+    ``profile`` krävs för motorn ``llm-vision`` (löses och bildkontrolleras före
+    arkiveringen) och ignoreras för övriga motorer och vid återställning.
     """
     ctx = ensure_terminal_context(context)
     root = Path(root)
@@ -281,19 +189,24 @@ def run_rescan_page(
         _validate_restore_page(root, pdf_stem, page, ctx)
         reading = _load_reading(pdf_stem, page, restore_reading)
         ctx.check_cancelled()
-        _archive_current(root, pdf_stem, page, "restore", ctx)
-        _restore(pdf_stem, page, reading, ctx)
+        archive_current(root, pdf_stem, page, "restore", ctx)
+        restore_reading_row(pdf_stem, page, reading, ctx)
     else:
         reading = None
         pdf = _validate_page(root, pdf_stem, page, ctx)
+        if engine == VISION_ENGINE:
+            check_vision_profile(load_vision_profile(profile), ctx)
+        elif profile:
+            ctx.log(f"rescan {pdf_stem} s{page}: profilen {profile!r} ignoreras för "
+                    f"motorn {engine}", level="debug")
         ctx.check_cancelled()
         ctx.log(f"rescan {pdf_stem} s{page}: motor {engine}, dpi {dpi}", level="debug")
-        before = _row_snapshot(pdf_stem, page)
-        reading_id = _archive_current(root, pdf_stem, page, "rescan", ctx)
+        before = row_snapshot(pdf_stem, page)
+        reading_id = archive_current(root, pdf_stem, page, "rescan", ctx)
         try:
-            _ocr_page(root, pdf, page, engine, dpi, ctx)
+            _ocr_page(root, pdf, page, engine, dpi, ctx, profile)
         except BaseException:
-            _forget_failed_attempt(pdf_stem, page, reading_id, before, ctx)
+            forget_failed_attempt(pdf_stem, page, reading_id, before, ctx)
             raise
         with _connect() as conn:
             row = state_db.get_page_row(conn, pdf_stem, page)
@@ -324,7 +237,7 @@ def run_rescan_page(
 
     if reindex:
         ctx.check_cancelled()
-        _reindex(root, pdf_stem, ctx)
+        reindex_stems(root, {pdf_stem}, ctx)
     else:
         ctx.log(f"rescan {pdf_stem}: ingen omindexering (--no-reindex)", level="debug")
 

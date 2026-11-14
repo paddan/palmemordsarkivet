@@ -210,6 +210,41 @@ def test_rescan_button_starts_job_with_params(miljo):
     assert "restore_reading" not in params
 
 
+def test_llm_vision_rescan_sends_selected_profile(miljo, monkeypatch):
+    monkeypatch.setattr("llm_vision.vision_profile_names", lambda: ["Bild", "Annan"])
+    at = _kor(STEM, 1)
+    assert at.selectbox(key="sg_engine").value != "llm-vision"
+    at.selectbox(key="sg_engine").set_value("llm-vision").run()
+    assert not at.exception, at.exception
+    assert at.selectbox(key="sg_profile").options == ["Bild", "Annan"]
+    assert any("extern tjänst" in c.value for c in at.caption)
+    at.selectbox(key="sg_profile").set_value("Annan").run()
+    at.button(key="sg_rescan").click().run()
+    assert not at.exception, at.exception
+    op, params = miljo["calls"][0]
+    assert op == "rescan-page"
+    assert params["engine"] == "llm-vision" and params["profile"] == "Annan"
+
+
+def test_llm_vision_without_profile_disables_rescan(miljo, monkeypatch):
+    monkeypatch.setattr("llm_vision.vision_profile_names", lambda: [])
+    at = _kor(STEM, 1)
+    at.selectbox(key="sg_engine").set_value("llm-vision").run()
+    assert not at.exception, at.exception
+    assert at.button(key="sg_rescan").disabled is True
+    assert not [w for w in at.selectbox if w.key == "sg_profile"]
+    assert any("kräver en OpenAI-kompatibel LLM-profil" in c.value for c in at.caption)
+
+
+def test_other_engines_send_no_profile(miljo):
+    at = _kor(STEM, 1)
+    at.selectbox(key="sg_engine").set_value("tesseract").run()
+    assert not [w for w in at.selectbox if w.key == "sg_profile"]
+    at.button(key="sg_rescan").click().run()
+    _, params = miljo["calls"][0]
+    assert params["engine"] == "tesseract" and "profile" not in params
+
+
 def test_rescan_button_disabled_while_job_active(miljo):
     miljo["state"]["active"] = {
         "id": "annat", "operation": "ocr", "status": "running",

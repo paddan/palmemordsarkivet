@@ -195,3 +195,19 @@ def test_null_text_row_is_treated_as_no_row(conn, tmp_path):
     assert view.markdown is None and view.blocks == [] and view.engine_identity is None
     assert view.stale is False
     assert view.current_text == "sida ur hel-fils-OCR"
+
+
+def test_reviewable_documents_hides_removed_duplicates(conn, tmp_path):
+    """Dokument vars text merge_wpu raderat som sämre dubblett visas inte."""
+    from db import list_documents_for_review, mark_tesseract_done, upsert_pdf_file
+
+    _write_text(tmp_path, "kvar", ["text"])
+    mark_tesseract_done(conn, "kvar", pdf_path="/x/kvar.pdf", source="palme")
+    mark_tesseract_done(conn, "dubblett", pdf_path="/x/dubblett.pdf", source="palme")
+    # Aldrig OCR:ad (ingen textfil, Tesseract inte klar): går fortfarande att skanna.
+    upsert_pdf_file(conn, pdf_stem="ny", source="wpu", pdf_path="/x/ny.pdf")
+    conn.commit()
+
+    stems = page_review.reviewable_documents(list_documents_for_review(conn), tmp_path)
+
+    assert stems == ["kvar", "ny"]

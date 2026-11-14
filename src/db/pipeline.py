@@ -813,7 +813,7 @@ def archive_page_reading(
     text: str | None, markdown: str | None, layout_json: str | None,
     engine_identity: str | None, score: float | None, reason: str,
 ) -> int:
-    """Spara en läsning i historiken (``reason``: ``rescan`` eller ``restore``)."""
+    """Spara en läsning i historiken (``reason``: ``rescan``, ``restore`` eller ``rejected``)."""
     cur = conn.execute(
         """
         INSERT INTO pdf_page_readings(pdf_stem, page_num, engine, text, markdown,
@@ -826,6 +826,48 @@ def archive_page_reading(
     )
     conn.commit()
     return int(cur.lastrowid or 0)
+
+
+def list_rescan_candidates(
+    conn: sqlite3.Connection, *, threshold: float, source: str | None
+) -> list[sqlite3.Row]:
+    """Sidor med poäng under ``threshold`` (bildsidor och opoängsatta utelämnas).
+
+    ``source`` är ``files``/``wpu`` eller ``None`` för alla. Lägst poäng först.
+    """
+    sql = """
+        SELECT q.pdf_stem, q.page_num, q.score, f.tesseract_done_at, f.source
+        FROM quality_pages q
+        JOIN pdf_files f ON f.pdf_stem = q.pdf_stem
+        WHERE q.score IS NOT NULL AND q.score < ?
+          AND COALESCE(q.image_page, 0) = 0
+    """
+    params: list[object] = [threshold]
+    if source is not None:
+        sql += " AND f.source = ?"
+        params.append(source)
+    sql += " ORDER BY q.score ASC, q.pdf_stem, q.page_num"
+    return list(conn.execute(sql, params))
+
+
+def page_read_with(
+    conn: sqlite3.Connection, pdf_stem: str, page_num: int, *,
+    engine: str, engine_identity: str | None,
+) -> bool:
+    """Har sidan lästs med ``engine`` (gällande rad eller historik)?
+
+    När ``engine_identity`` anges måste även den stämma.
+    """
+    for table in ("pdf_pages", "pdf_page_readings"):
+        sql = (f"SELECT 1 FROM {table} WHERE pdf_stem=? AND page_num=? "
+               "AND engine=?")
+        params: list[object] = [pdf_stem, page_num, engine]
+        if engine_identity is not None:
+            sql += " AND engine_identity=?"
+            params.append(engine_identity)
+        if conn.execute(sql + " LIMIT 1", params).fetchone() is not None:
+            return True
+    return False
 
 
 def delete_page_reading(conn: sqlite3.Connection, reading_id: int) -> None:
@@ -875,7 +917,7 @@ def get_page_row(
 
 
 def list_documents_for_review(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    """Alla dokument (stem, källa, PDF-sökväg) för sidgranskningens val, sorterat på stem."""
+    """Alla dokument (stem, källa, PDF-sökväg, Tesseract klar) för sidgranskningens val, sorterat på stem."""
     return list(conn.execute(
-        "SELECT pdf_stem, source, pdf_path FROM pdf_files ORDER BY pdf_stem"
+        "SELECT pdf_stem, source, pdf_path, tesseract_done_at FROM pdf_files ORDER BY pdf_stem"
     ))

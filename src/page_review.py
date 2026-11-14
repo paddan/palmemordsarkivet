@@ -7,6 +7,7 @@ historiska läsningar och en renderad sidbild med ritade layoutramar.
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -99,6 +100,32 @@ def render_page_image(pdf_path: Path, page_num: int, dpi: int = 150) -> Image:
         return image
     finally:
         doc.close()
+
+
+def is_removed_duplicate(root: Path, pdf_stem: str, tesseract_done_at: str | None) -> bool:
+    """Sant när ``merge_wpu`` har raderat dokumentets text som sämre dubblett.
+
+    Tesseract är klar men textfilen saknas: merge_wpu behåller bara den bättre
+    kopian av ett palme/wpu-par och tar bort den andras ``text/``-fil (raden i
+    ``pdf_files`` ligger kvar). Texten finns i den andra kopian.
+    """
+    return (tesseract_done_at is not None
+            and not (root / "generated" / "text" / f"{pdf_stem}.txt").exists())
+
+
+def reviewable_documents(rows: Iterable[sqlite3.Row], root: Path) -> list[str]:
+    """Stammar att visa i dokumentväljaren — utan dubbletter vars text raderats."""
+    stems: list[str] = []
+    hidden: list[str] = []
+    for row in rows:
+        if is_removed_duplicate(root, row["pdf_stem"], row["tesseract_done_at"]):
+            hidden.append(row["pdf_stem"])
+        else:
+            stems.append(row["pdf_stem"])
+    if hidden:
+        log.debug("döljer %d dokument vars text raderats som sämre dubblett (t.ex. %s)",
+                  len(hidden), hidden[:3])
+    return stems
 
 
 def file_page(root: Path, pdf_stem: str, page_num: int) -> str | None:

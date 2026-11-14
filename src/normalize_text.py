@@ -202,6 +202,15 @@ def run_normalize(
                 files.append(f)
             elif f.stem in needing:
                 files.append(f)
+            elif f.stat().st_mtime > row["text_mtime"] + 1:
+                # Filen ändrad på disk utan att text_mtime uppdaterats (t.ex. äldre
+                # maskeringsdetektering) — disken går före databasen.
+                ctx.log(
+                    f"[delta] {f.stem}: normaliseras — filen på disk ({f.stat().st_mtime:.0f}) "
+                    f"nyare än text_mtime ({row['text_mtime']:.0f})",
+                    level="debug",
+                )
+                files.append(f)
         skipped = len(all_files) - len(files)
 
     if not files:

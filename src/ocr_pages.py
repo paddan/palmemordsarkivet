@@ -21,10 +21,13 @@ Engines:
     surya      — Surya-modeller (radbaserad, 0.17) via helpers i den här modulen
     surya-layout — Surya 2 i en egen venv (``surya_client.SuryaWorker``): layoutblock
                  → ren text, Markdown och blocklayout (``surya_layout.parse_page``)
+    llm-vision — en namngiven LLM-profil (``--profile``) skriver av sidbilden som
+                 Markdown (``llm_vision``); inget PDF-textlager
 
 Kör:
     python ocr_pages.py --in path/to/foo.pdf --out-dir text_pages
     python ocr_pages.py --in foo.pdf --out-dir out --engine surya
+    python ocr_pages.py --in foo.pdf --out-dir out --engine llm-vision --profile "Gemini"
 """
 
 from __future__ import annotations
@@ -54,6 +57,7 @@ except Exception:  # pragma: no cover
     def score_text(text: str, use_hunspell: bool = False) -> dict:
         return {"chars": len(text), "score": 0.0}
 
+import llm_vision  # noqa: E402 — openai importeras först när en klient skapas
 from surya_client import (  # noqa: E402 — ren klient, ingen Surya-import
     EXIT_SURYA_UNAVAILABLE,
     MAX_PAGE_PIXELS,
@@ -67,6 +71,11 @@ from surya_client import (  # noqa: E402 — ren klient, ingen Surya-import
 # surya-layout); annars hade workern svarat PAGE_TOO_LARGE (4,2 % av arkivets sidor
 # i 300 dpi enligt piloten).
 LAYOUT_MAX_PIXELS = MAX_PAGE_PIXELS
+
+# Motorn llm-vision: autentiserings-, kredit- eller kvotfel från LLM-tjänsten (eller
+# en okänd/olämplig profil). Resten av filen hoppas; anroparen ska avbryta hela
+# körningen, eftersom ingen följande sida kommer att gå bättre.
+EXIT_LLM_FATAL: int = llm_vision.EXIT_LLM_FATAL
 
 # Så många dödsfall (WORKER_DIED/PROTOCOL_MISMATCH) i rad tål en fil innan den
 # avbryts med EXIT_SURYA_UNAVAILABLE; däremellan startas workern om per sida.
@@ -543,6 +552,11 @@ def detect_redactions_file(
         state_db.mark_redaction_checked(
             conn, pdf.stem, has_redactions=(n_blocks > 0),
         )
+        if updated:
+            # Texten skrevs om: utan ny text_mtime ser normalisering och
+            # kvalitetssteget inte [MASKAD]-raderna, och redo väljer sidor på
+            # inaktuella poäng.
+            state_db.touch_text_mtime(conn, pdf.stem, text_mtime=txt_file.stat().st_mtime)
     except Exception as e:  # pragma: no cover
         log_error("ocr_pages.detect_redactions", pdf.name, f"db: {e}")
 
@@ -573,6 +587,7 @@ def run_ocr_pages(
     context=None,
     surya_worker=None,
     force: bool = False,
+    profile: str | None = None,
 ) -> int:
     """OCR:a en PDF per sida. Returnerar exitkod.
 
@@ -589,6 +604,11 @@ def run_ocr_pages(
     kvar tills den nya läsningen skrivs, och kunde en sådan sida inte läsas blir
     exitkoden 1 — annars hade anroparen inte kunnat skilja ett misslyckat försök
     från en lyckad omskanning.
+
+    ``profile`` (krävs för motorn ``llm-vision``): LLM-profilen som läser sidbilden.
+    En okänd eller olämplig profil, och ``VisionError(fatal=True)`` (HTTP
+    401/402/403, 429 efter återförsök), ger ``EXIT_LLM_FATAL`` (4); ett vanligt
+    ``VisionError`` (t.ex. avklippt svar) hoppar bara sidan.
     """
     ctx = _ctx(context)
     pdf = Path(inp)
@@ -624,6 +644,21 @@ def run_ocr_pages(
         ctx.log("--force kräver --pages (bara angivna sidor skannas om)", level="error")
         return 1
 
+    vision_profile: llm_vision.VisionProfile | None = None
+    vision_client = None
+    if engine == "llm-vision":
+        try:
+            vision_profile = llm_vision.load_profile(profile or "")
+            vision_client = llm_vision.make_client(vision_profile)
+        except (ValueError, llm_vision.VisionError) as e:
+            ctx.log(f"[llm-vision] {pdf.stem}: {e}", level="error")
+            log_error("ocr_pages.llm_vision", pdf.name, str(e))
+            return EXIT_LLM_FATAL
+        ctx.log(f"[llm-vision] {pdf.stem}: profil {vision_profile.name}, modell "
+                f"{vision_profile.model} — sidbilder skickas till "
+                f"{llm_vision.destination(vision_profile)}")
+    vision_tokens: list[tuple[int | None, int | None]] = []
+
     page_lines: dict[int, list[dict]] = {}
     page_dpi: dict[int, int] = {}  # layoutsidor som renderats under den begärda dpi:n
     want_pdf_patch = engine in ("surya", "surya-layout") and bool(ocr_dir) and not no_update_pdf
@@ -644,6 +679,8 @@ def run_ocr_pages(
     # verkligen ska OCR:as, och stängs (hela processgruppen) när loopen lämnas.
     layout_worker = None
     identity: str | None = None
+    if vision_profile is not None:
+        identity = f"llm-vision:{vision_profile.name}:{vision_profile.model}"
     with contextlib.ExitStack() as stack:
         for page_num, image in render_pages(pdf, dpi):
             ctx.check_cancelled()
@@ -698,6 +735,18 @@ def run_ocr_pages(
                     _log_layout_trace(ctx, pdf.stem, page_num, trace, markdown)
                     if want_pdf_patch:
                         page_lines[page_num] = lines
+                elif engine == "llm-vision":
+                    assert vision_profile is not None
+                    result = llm_vision.transcribe(image, vision_profile, client=vision_client)
+                    vision_tokens.append((result.input_tokens, result.output_tokens))
+                    ctx.log(f"  [{pdf.stem} p{page_num}] llm-vision: {len(result.markdown)} "
+                            f"tecken Markdown, token ↑{result.input_tokens} "
+                            f"↓{result.output_tokens}, {len(redaction_blocks)} maskeringar",
+                            level="debug")
+                    markdown = llm_vision.insert_mask_markers(
+                        result.markdown, redaction_blocks, image.height
+                    )
+                    text = llm_vision.markdown_to_text(markdown)
                 elif engine == "surya":
                     if want_pdf_patch:
                         text, lines = ocr_surya_lines(image)
@@ -746,6 +795,17 @@ def run_ocr_pages(
                 )
                 aborted = True
                 break
+            except llm_vision.VisionError as e:
+                log_error("ocr_pages.llm_vision", f"{pdf.name}#p{page_num}", str(e))
+                if e.fatal:
+                    ctx.log(f"  [{pdf.stem} p{page_num}] LLM-tjänsten går inte att använda — "
+                            f"resten av filen hoppas (exitkod {EXIT_LLM_FATAL}): {e}",
+                            level="error")
+                    aborted = True
+                    break
+                ctx.log(f"  [{pdf.stem} p{page_num}] llm-vision kunde inte läsa sidan: {e}",
+                        level="error")
+                continue
             except SuryaPageError as e:
                 worker_deaths = 0
                 ctx.log(f"  [{pdf.stem} p{page_num}] Surya kunde inte läsa sidan ({e.code}): {e}",
@@ -767,7 +827,7 @@ def run_ocr_pages(
                 conn, pdf_stem=pdf.stem, page_num=page_num,
                 engine=engine, text=text, score=scored.get("score"),
                 markdown=markdown, layout_json=layout_json,
-                engine_identity=identity if engine == "surya-layout" else None,
+                engine_identity=identity if engine in ("surya-layout", "llm-vision") else None,
             )
             n_done += 1
             recorded_pages.add(page_num)
@@ -780,6 +840,10 @@ def run_ocr_pages(
             f"(t.ex. {skipped_pages[:10]})",
             level="debug",
         )
+    if engine == "llm-vision":
+        ctx.log(f"[llm-vision] {pdf.stem}: {len(vision_tokens)} sidor, "
+                f"↑{_token_sum(t[0] for t in vision_tokens)} "
+                f"↓{_token_sum(t[1] for t in vision_tokens)} token")
     ctx.log(f"Klart {pdf.stem}: {n_done} OCR:ade, {n_skipped} hoppade, "
             f"{n_total} sidor totalt.")
 
@@ -821,6 +885,8 @@ def run_ocr_pages(
                 ctx.log(f"  [pdf-patch] FEL: {e}", level="error")
                 log_error("ocr_pages.pdf_patch", pdf.name, str(e))
     if aborted:
+        if engine == "llm-vision":
+            return EXIT_LLM_FATAL
         return int(EXIT_SURYA_UNAVAILABLE)  # konstanten är Any för mypy
     if force and only_pages is not None:
         unread = sorted(p for p in only_pages if p <= n_total and p not in recorded_pages)
@@ -829,6 +895,12 @@ def run_ocr_pages(
                     "den tidigare läsningen står kvar", level="error")
             return 1
     return 0
+
+
+def _token_sum(values) -> str:
+    """Summan av rapporterade token, ``?`` när tjänsten inte rapporterade några."""
+    known = [v for v in values if v is not None]
+    return str(sum(known)) if known else "?"
 
 
 def _cap_layout_render(ctx, pdf: Path, page_num: int, image, dpi: int):
@@ -893,10 +965,16 @@ def main() -> int:
                     help="output-katalog (env: OUT_DIR); krävs ej för --engine detect-only")
     ap.add_argument("--engine",
                     default=os.environ.get("ENGINE", "tesseract"),
-                    choices=["tesseract", "vision", "surya", "surya-layout", "detect-only"],
+                    choices=["tesseract", "vision", "surya", "surya-layout", "llm-vision",
+                             "detect-only"],
                     help="OCR-motor (default: tesseract). surya-layout: Surya 2-layout med Markdown "
-                         "(kräver separat venv, PALME_SURYA_PYTHON). detect-only: bara "
-                         "redaktionsdetektering, ingen om-OCR")
+                         "(kräver separat venv, PALME_SURYA_PYTHON). llm-vision: LLM-profilen i "
+                         "--profile skriver av sidbilden som Markdown (exitkod 4 vid nyckel-, "
+                         "kredit- eller kvotfel). detect-only: bara redaktionsdetektering, "
+                         "ingen om-OCR")
+    ap.add_argument("--profile",
+                    default=os.environ.get("PROFILE"),
+                    help="LLM-profil för --engine llm-vision (namn ur LLM-konfigurationen)")
     ap.add_argument("--langs",
                     default=os.environ.get("LANGS", "swe"),
                     help="tesseract-språk (default: swe)")
@@ -933,6 +1011,7 @@ def main() -> int:
         no_detect_redactions=args.no_detect_redactions,
         txt_dir=args.txt_dir,
         force=args.force,
+        profile=args.profile,
     )
 
 

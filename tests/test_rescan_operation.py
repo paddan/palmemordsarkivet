@@ -305,6 +305,8 @@ def test_reindex_flag_runs_incremental_ingest(archive, monkeypatch) -> None:
     assert call["db_dir"] == archive / "generated" / "lancedb"
     assert call["chunk_chars"] == 800 and call["chunk_overlap"] == 150
     assert call["limit"] is None and call["reindex_since"] is None
+    # Bara det omskannade dokumentet — inte hela arkivets inaktuella filer.
+    assert call["only_stems"] == {STEM}
 
 
 def test_reindex_failure_fails_the_job(archive, monkeypatch) -> None:
@@ -630,3 +632,140 @@ def test_restore_leaves_stale_neighbour_page_in_file(archive) -> None:
 
     assert _file_page(archive, 2) == OLD_TEXT
     assert _file_page(archive, 3) == "sida tre"
+
+
+def test_rescan_refuses_document_removed_as_duplicate(archive) -> None:
+    """merge_wpu raderar textfilen för den sämre kopian av ett dubblettpar.
+
+    En omskanning av en sida skulle då bygga en ny textfil av bara den sidan och
+    lägga en ofullständig dubblett i indexet bredvid den fullständiga kopian.
+    """
+    (archive / "generated" / "text" / f"{STEM}.txt").unlink()
+    conn = state_db.connect()
+    state_db.init_schema(conn)
+    state_db.mark_tesseract_done(conn, STEM, pdf_path="x", source="palme")
+    conn.close()
+    fake = _FakeOcr()
+
+    with pytest.raises(OperationFailed, match="dubblett"):
+        _run(archive, fake)
+
+    assert fake.calls == []
+    assert not (archive / "generated" / "text" / f"{STEM}.txt").exists()
+
+
+# --- motorn llm-vision -----------------------------------------------------------
+
+
+@pytest.fixture
+def vision_profile(monkeypatch):
+    """Profilen ``Syn`` och en bildkontroll som godkänns (inga nätanrop)."""
+    import llm_vision
+
+    profile = llm_vision.VisionProfile(name="Syn", model="m1", base_url="https://openrouter.ai/api/v1",
+                                       api_key="hemlig", external=True)
+    checks: list[str] = []
+
+    def fake_load(name: str):
+        if name != "Syn":
+            raise ValueError(f"Okänd LLM-konfiguration {name!r}.")
+        return profile
+
+    monkeypatch.setattr(llm_vision, "load_profile", fake_load)
+    monkeypatch.setattr(llm_vision, "check_profile",
+                        lambda p, *, client=None: checks.append(p.name))
+    return checks
+
+
+def test_rescan_llm_vision_passes_profile(archive, vision_profile) -> None:
+    _record(2, "tesseract", OLD_TEXT)
+    fake = _FakeOcr()
+
+    rc, sink = _run(archive, fake, engine="llm-vision", profile="Syn")
+
+    assert rc == 0
+    argv = fake.calls[0]
+    assert argv[argv.index("--engine") + 1] == "llm-vision"
+    assert argv[argv.index("--profile") + 1] == "Syn"
+    assert vision_profile == ["Syn"]
+    assert any("openrouter.ai (extern)" in m for _, m in sink.lines)
+    assert not any("hemlig" in m for _, m in sink.lines)
+
+
+def test_rescan_other_engine_does_not_pass_profile(archive, vision_profile) -> None:
+    fake = _FakeOcr()
+
+    _run(archive, fake, profile="Syn")
+
+    assert "--profile" not in fake.calls[0]
+    assert vision_profile == []
+
+
+@pytest.mark.parametrize("profile", ["", "Okänd"])
+def test_rescan_llm_vision_bad_profile_fails_before_any_write(archive, vision_profile,
+                                                               profile) -> None:
+    _record(2, "tesseract", OLD_TEXT)
+    fake = _FakeOcr()
+
+    with pytest.raises(OperationFailed) as info:
+        _run(archive, fake, engine="llm-vision", profile=profile)
+
+    assert fake.calls == []
+    assert _state()[1] == []
+    message = str(info.value).lower()
+    assert "profil" in message or "llm-konfiguration" in message
+
+
+def test_rescan_llm_vision_failed_image_check_fails_before_any_write(archive, monkeypatch) -> None:
+    import llm_vision
+
+    monkeypatch.setattr(llm_vision, "load_profile", lambda name: llm_vision.VisionProfile(
+        name=name, model="text", base_url="http://localhost:11434/v1", api_key="", external=False))
+
+    def reject(profile, *, client=None):
+        raise llm_vision.VisionError(f"profilen {profile.name} kan inte läsa bilder", fatal=True)
+
+    monkeypatch.setattr(llm_vision, "check_profile", reject)
+    fake = _FakeOcr()
+
+    with pytest.raises(OperationFailed, match="kan inte läsa bilder"):
+        _run(archive, fake, engine="llm-vision", profile="Text")
+
+    assert fake.calls == [] and _state()[1] == []
+
+
+def test_rescan_llm_vision_fatal_exit_code_is_explained(archive, vision_profile) -> None:
+    _record(2, "tesseract", OLD_TEXT)
+
+    with pytest.raises(OperationFailed) as info:
+        _run(archive, _FakeOcr(rc=4), engine="llm-vision", profile="Syn")
+
+    assert "LLM-tjänsten" in str(info.value)
+    row, readings = _state()
+    assert row["text"] == OLD_TEXT and readings == []
+
+
+def test_ocr_pages_cli_passes_profile(monkeypatch, tmp_path) -> None:
+    seen: dict = {}
+    monkeypatch.setattr(ocr_pages, "run_ocr_pages", lambda **kwargs: seen.update(kwargs) or 0)
+    monkeypatch.setattr(ocr_pages, "_install_sigterm_handler", lambda: None)
+    monkeypatch.setattr(sys, "argv", ["ocr_pages.py", "--in", str(tmp_path / "a.pdf"),
+                                      "--out-dir", str(tmp_path), "--engine", "llm-vision",
+                                      "--profile", "Syn"])
+
+    assert ocr_pages.main() == 0
+    assert seen["engine"] == "llm-vision" and seen["profile"] == "Syn"
+
+
+def test_rescan_adapter_passes_profile(monkeypatch, tmp_path) -> None:
+    from operations import adapters, rescan
+
+    seen: dict = {}
+    monkeypatch.setattr(rescan, "run_rescan_page", lambda **kwargs: seen.update(kwargs) or 0)
+
+    adapters.rescan_page_adapter(None, {
+        "root": tmp_path, "pdf_stem": STEM, "page": 2, "engine": "llm-vision",
+        "profile": "Syn", "dpi": 300, "reindex": False, "restore_reading": None,
+    })
+
+    assert seen["engine"] == "llm-vision" and seen["profile"] == "Syn"

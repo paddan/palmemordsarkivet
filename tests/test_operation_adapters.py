@@ -555,6 +555,8 @@ def test_run_detect_redactions_parallel_real_pdfs(tmp_path: Path, monkeypatch) -
         for stem in stems:
             row = db.get_pdf_file(conn, stem)
             assert row["redaction_checked_at"] is not None, stem
+            # Texten skrevs om: normalisering/kvalitet/ingest måste se ändringen.
+            assert row["text_mtime"] == (txt_dir / f"{stem}.txt").stat().st_mtime, stem
     finally:
         conn.close()
     assert all(

@@ -598,3 +598,26 @@ def test_ensure_table_creates_an_empty_table_once(tmp_path) -> None:
     assert table.count_rows() == 0
     assert table.schema == _chunk_schema()
     assert ensure_table(tmp_path / "lancedb") is False, "en befintlig tabell rörs inte"
+
+
+def test_only_stems_limits_selection_and_skips_orphan_cleanup(tmp_path, monkeypatch) -> None:
+    """Omskanning av en sida får bara indexera sitt dokument (``only_stems``).
+
+    Utan begränsningen indexerade ``rescan-page`` om alla filer som blivit
+    inaktuella sedan förra körningen (8 235 st efter en OCR-körning). Den
+    föräldralösa rensningen förutsätter hela fillistan och får inte köras då.
+    """
+    import ingest as ingest_mod
+
+    for name in ("a.txt", "b.txt", "c.txt"):
+        (tmp_path / name).write_text("x", encoding="utf-8")
+    cleaned: list[object] = []
+    monkeypatch.setattr(ingest_mod, "_rensa_foraldralosa", lambda *a: cleaned.append(a))
+
+    files = ingest_mod._valj_filer(
+        tmp_path, None, None, {"a.txt": 1.0, "gone.txt": 1.0}, set(), None, None,
+        only_stems={"b"},
+    )
+
+    assert [f.name for f in files] == ["b.txt"]
+    assert cleaned == []

@@ -13,7 +13,7 @@ Inspektera med t.ex. `sqlite3 generated/db/state.db`. Tabellerna:
 - `downloads` — palmemordsarkivet- och wpu-nedladdningar (Drive-ID eller URL, sha1 där det finns, filename, bytes)
 - `pdf_files` — per-PDF-status (redaction_checked_at, merged_at, normalized_at, text_mtime, tesseract_done_at, tesseract_failed, tesseract_blacklisted_at, surya_failed_at)
 - `pdf_pages` — per-sida OCR-resultat (text, engine, score; för motorn `surya-layout` även `markdown` — `NULL` för tom sida —, `layout_json` med blocklayouten — `{"dpi": N, "blocks": [...]}`, där `dpi` är upplösningen sidbilden faktiskt renderades i; rader från före renderingstaket är en ren blocklista och läses som 300 dpi — och `engine_identity` med workerns `--identity`-svar). Äldre rader kan ha `text = NULL` (markörer); då är sidan i `generated/text/<stem>.txt` den gällande läsningen
-- `pdf_page_readings` — historik över tidigare läsningar av en sida (motor, text, Markdown, layout, motoridentitet, poäng, `reason` = `rescan`/`restore`). `rescan-page` sparar den gällande läsningen här innan den skrivs över, så att en sämre omskanning kan återställas
+- `pdf_page_readings` — historik över tidigare läsningar av en sida (motor, text, Markdown, layout, motoridentitet, poäng, `reason` = `rescan`/`restore`/`rejected`; `rejected` = en ny läsning som underkändes vid jämförelse). `rescan-page` sparar den gällande läsningen här innan den skrivs över, så att en sämre omskanning kan återställas
 - `quality` / `quality_pages` — kvalitetspoäng per fil och sida
 - `ingest` — vad som indexerats i LanceDB och med vilken text_mtime
 - `llm_corrections` — vilka sidor som LLM-korrigerats
@@ -164,7 +164,8 @@ fortfarande som resume-problem. Saknas texten trots att filen har
 görs mot alla texter i `generated/text/`, så två wpu-dubbletter med samma
 dokument-ID jämförs också mot varandra. Den filen markeras då som avgjord med en
 debugrad i stället för att ge `[saknar text]` vid varje körning, eftersom
-`ocr_tesseract` aldrig läser om den.
+`ocr_tesseract` aldrig läser om den. Sådana dokument döljs i Sidgranskningen
+och kan inte skannas om sida för sida.
 
 Surya-steget för låga kvalitetspoäng körs sen mot kvarvarande
 `generated/text/`-filer och hanterar palme- och wpu-filer identiskt.
@@ -226,6 +227,12 @@ respektive 16. LLM-stegen (`llm-correct`, `extract-entities`,
 `JOBS` och `PER_FILE_JOBS` går före alla standardvärden. Observera att `jobs` i
 `ocr` och `run-pipeline` också används för maskeringsdetekteringen och
 `merge-wpu` inne i OCR-steget.
+
+Maskeringsdetekteringen skriver om textfilen när den infogar `[MASKAD]` och
+uppdaterar då `pdf_files.text_mtime`, så att normalisering, kvalitetspoäng och
+Surya-redo ser ändringen. Normaliseringen tar dessutom med en fil vars mtime på
+disken är nyare än `text_mtime` — en äldre version uppdaterade den inte, och
+filerna normaliserades och poängsattes då aldrig om.
 
 Filer som upprepat misslyckas i Tesseract (t.ex. korrupt JPEG inuti PDF:en,
 eller PDF:er som ocrmypdf inte kan hantera) markeras med
@@ -506,11 +513,71 @@ bakgrundsjobb (ett skrivande jobb åt gången) och sparar den tidigare läsninge
 |---|---|---|
 | `--pdf-stem` | (krävs) | Dokumentets filstam; PDF:en söks i `downloaded/files`, sedan `downloaded/wpu_files` |
 | `--page` | (krävs) | Sidnummer, 1-baserat; måste ligga inom PDF:ens sidantal (vid återställning textfilens) |
-| `--engine` | `surya-layout` | `surya-layout`, `surya`, `tesseract` eller `vision` |
+| `--engine` | `surya-layout` | `surya-layout`, `surya`, `tesseract`, `vision` eller `llm-vision` |
+| `--profile` | – | LLM-profil som läser sidbilden; krävs för `llm-vision`, ignoreras annars |
 | `--dpi` | `300` | Render-DPI före OCR |
 | `--no-reindex` | av | Hoppa över omindexeringen; annars indexeras dokumentet om direkt |
 | `--restore-reading` | – | Återställ läsningen med detta id ur historiken i stället för att OCR:a. Döljs i Admin-formuläret; sätts av Sidgranskningens *Återställ* |
 | `--root` | projektroten | Projektrot |
+
+#### Skanna om många sidor (`scripts/rescan_pages.py`)
+
+Operationen `rescan-pages` (Admin → OCR → *Skanna om sidor*, CLI `./rescan_pages.sh`)
+skannar om **alla sidor under en poängtröskel** med vald motor som ett vanligt
+bakgrundsjobb och **behåller den bättre läsningen** per sida. Dokumenten tas ett i
+taget (flera samtidigt för `llm-vision`); för varje dokument arkiveras de gällande
+läsningarna, sidorna OCR:as med `ocr_pages.py --pages … --force`, och den nya läsningen
+jämförs mot den gamla med kvalitetspoängen (normaliserad text, utan hunspell). En sämre
+eller tom ny läsning förkastas: den sparas i historiken med skälet `rejected`
+("underkänd vid jämförelse" i Sidgranskning) och den gamla läsningen återställs; saknade
+den gamla läsningen egen poäng (en textfilsida) får raden jämförelsepoängen. En sida vars
+läsning kraschade eller aldrig skrevs räknas som misslyckad: historikraden tas bort och
+den gällande läsningen rörs inte.
+Efteråt poängsätts de berörda dokumenten om och indexeras om (om inte `--no-reindex`).
+Avbryts jobbet poängsätts de dokument som redan fått ny text ändå om, men de indexeras
+inte om (det sker vid nästa ingest). I Admin måste en bekräftelseruta kryssas i innan
+jobbet kan startas.
+
+```bash
+.venv/bin/python scripts/rescan_pages.py --engine tesseract --threshold 30 --max-pages 2 --dry-run
+.venv/bin/python scripts/rescan_pages.py --engine surya-layout --threshold 50
+.venv/bin/python scripts/rescan_pages.py --engine llm-vision --profile "<profil>" --max-pages 50
+```
+
+| Flagga | Standard | Betydelse |
+|---|---|---|
+| `--engine` | `surya-layout` | `surya-layout`, `surya`, `tesseract`, `vision` eller `llm-vision` |
+| `--profile` | – | LLM-profil som läser sidbilderna; krävs för `llm-vision` |
+| `--threshold` | `70` | Sidor med kvalitetspoäng under värdet väljs (bildsidor och opoängsatta utelämnas) |
+| `--source` | `any` | `any`, `files` (palme) eller `wpu` |
+| `--max-pages` | `0` | Högst så många sidor, de sämsta först; `0` = alla |
+| `--dry-run` | av | Skriv bara ut urvalet, ändra ingenting |
+| `--no-reindex` | av | Hoppa över omindexeringen (kvalitetspoängen räknas om ändå) |
+| `--jobs` | `4` | Parallella dokument; gäller bara `llm-vision` |
+| `--dpi` | `300` | Render-DPI före OCR |
+| `--root` | projektroten | Projektrot |
+
+**Urvalet upprepas inte:** en sida väljs inte om den redan lästs med samma motor. För
+`llm-vision` måste även motoridentiteten (`llm-vision:<profil>:<modell>`) stämma, så en
+annan profil eller modell får läsa om; för övriga motorer är ett nytt Surya-bygge inte en
+ny motor. Raderade dubbletter och dokument vars PDF saknas väljs aldrig.
+
+**Motorn `llm-vision`** låter en LLM-profil läsa sidbilden och skriva av den som Markdown
+(ren text härleds ur Markdownen). Profilen måste vara OpenAI-kompatibel (Claude stöds inte
+ännu) och provas med en provbild före körningen. Bilden skickas till profilens endpoint:
+en **lokal** modell (Ollama på localhost) lämnar inte datorn, en **extern** tjänst får
+sidbilderna och kostar per sida. Kostnadsbromsar: `--dry-run` visar omfattningen och
+`--max-pages` begränsar antalet sidor (de sämsta först). Svarta maskeringar infogas av
+pixeldetekteringen, inte av modellen. Den rena texten (det som indexeras och citeras)
+härleds ur Markdownen genom att bara ta bort syntax utan eget textinnehåll — rubrikens
+`#`, citatets `>`, `**`/`__` och tabellstreck; punktnummer (`12.`, `2)`) och listtecken
+står kvar ordagrant. Vid 429, 5xx eller nätfel görs upp till fem försök per sida (väntan
+2, 4, 8 och 16 s, eller serverns numeriska `Retry-After`, högst 60 s); en 429 som
+kvarstår efter sista försöket är fatal.
+
+Avbrott: exitkod 3 (Surya saknas) och exitkod 4 (LLM-tjänsten vägrar: 401/402/403/429
+efter återförsök) samt fem dokument i rad där varje sida misslyckas ger ett avbrutet jobb
+utan att något markeras som permanent fel. Enstaka misslyckade sidor ger bara slutkod 1.
 
 Flöde vid omskanning: PDF:en och sidnumret valideras **före all skrivning**
 (saknad PDF eller sida utanför 1–N ger `OperationFailed`, ingen historikrad) →
@@ -521,8 +588,8 @@ det är `ocr_pages.py` som har SIGTERM-hanteraren som stänger Surya-workerns
 processgrupp vid avbrott) → `merge_one` (`create_missing=True`, `only_pages={N}`: bara den omskannade sidan slås in, så en inaktuell grannrad i `pdf_pages` aldrig skriver över en oarkiverad sida i textfilen) →
 `normalize_text.process_file` → `mark_normalized` → om omindexering är på tas
 dokumentets rad i `ingest` bort (en ny läsning kan ge byte-identisk text men ny
-Markdown, och mtime-jämförelsen hade då hoppat dokumentet) och inkrementell ingest
-körs med registrets standardvärden för operationen `ingest`. Ingen PDF-textlager-
+Markdown, och mtime-jämförelsen hade då hoppat dokumentet) och ingest körs för
+bara det dokumentet med registrets standardvärden för operationen `ingest`. Ingen PDF-textlager-
 patch görs (`--ocr-dir` skickas inte), så en återställning lämnar inget
 inaktuellt textlager efter sig.
 
@@ -570,8 +637,8 @@ läsningen, byte för byte som före omskanningen.
 
 Att tänka på:
 
-- Omindexeringen är en vanlig inkrementell ingest: den tar alla inaktuella filer,
-  inte bara dokumentet, och laddar embedding-modellen (tar en stund).
+- Omindexeringen gäller bara det omskannade dokumentet; andra inaktuella filer
+  väntar på nästa `ingest`. Embedding-modellen laddas ändå (tar en stund).
 - Efter en omskanning kan ett dokument ha färre `pdf_pages`-rader än PDF:en har
   sidor. Det spelar bara roll för Tesseract-misslyckade stammar: där läser
   Surya-fallbacken då de återstående sidorna vid nästa körning.
@@ -1149,7 +1216,12 @@ som inte är Streamlit ligger i `src/page_review.py` (`load_page_view`,
   och sida (`st.number_input` 1–sidantal plus *Föregående*/*Nästa*). Query-
   parametrarna `doc=<pdf_stem>&page=<n>` öppnar en sida direkt och skrivs
   tillbaka vid varje val, så adressen går att länka till. En `doc` utanför
-  `pdf_files` läggs ändå till i listan.
+  `pdf_files` läggs ändå till i listan. Dokument vars text `merge_wpu` raderat
+  som sämre dubblett (Tesseract klar men ingen textfil,
+  `page_review.reviewable_documents`) visas inte — texten finns i den andra
+  kopian. Samma regel gäller Admins dokumentväljare för omskanning, och
+  `rescan-page` vägrar sådana dokument: en omskanning hade annars byggt en ny
+  textfil av bara den sidan och lagt en ofullständig dubblett i indexet.
 - **Sidbild:** renderas bara via `render_page_image` (validerar sidnumret) i
   110 dpi och cachas med `st.cache_data` på `(pdf-sökväg, sida, dpi, PDF:ens
   mtime)`. **Visa layoutblock** ritar blockramarna; blockens bbox skalas från
@@ -1173,7 +1245,11 @@ som inte är Streamlit ligger i `src/page_review.py` (`load_page_view`,
   `job_service.start_job` med registrets parameternamn (`root`, `pdf_stem`,
   `page`, `engine`, `dpi`, `reindex`, och `restore_reading` vid återställning —
   då skickas ingen motor, registrets standard fylls i); motorlistan och
-  standardvärdena läses ur registret. Saknas PDF:en men textfilen finns är
+  standardvärdena läses ur registret. Väljs motorn `llm-vision` visas en
+  rullista **LLM-profil** (`llm_vision.vision_profile_names`: samma profilkatalog
+  som Admin, bara OpenAI-kompatibla profiler med endpoint och modell,
+  standardprofilen först) och `profile` skickas med; finns ingen sådan profil är
+  *Skanna om sidan* inaktiverad med en förklaring. Saknas PDF:en men textfilen finns är
   *Skanna om sidan* inaktiverad med en förklaring, medan *Återställ* fungerar.
   Ett `doc`-värde i länken som innehåller `/`, `\` eller `..` avvisas med en
   varning och behandlas som inget val. Ingen OCR körs i
@@ -1737,6 +1813,9 @@ per-dokumentresultat behålls; ett avbrutet jobb markeras aldrig `succeeded`.
 | `src/ocr_db_helper.py` | CLI-hjälpare för tesseract-steget: tesseract-status och `text_mtime`-stämpling i `state.db` |
 | `scripts/ocr_pages.py` → `src/ocr_pages.py` | Per-sida OCR (Tesseract/Surya), lagrar sidtext och metadata i `state.db` |
 | `scripts/rescan_page.py` → `src/operations/rescan.py` | Skanna om en sida (`ocr_pages.py --force`) eller återställ en historisk läsning; historiken i `pdf_page_readings` |
+| `scripts/rescan_pages.py` → `src/operations/rescan_pages.py` | Massomskanning av sidor under en poängtröskel; behåller den bättre läsningen, underkända sparas som `rejected` |
+| `src/operations/page_readings.py` | Delade hjälpare för `rescan-page`/`rescan-pages`: motorlista, `ocr_argv`, vision-profilkontroll, arkivera/återställ/underkänn läsning, `comparison_score` |
+| `src/llm_vision.py` | Bildmotorn `llm-vision`: OpenAI-kompatibel LLM-profil skriver av sidbilden som Markdown (exitkod 4 vid fatalt tjänstefel) |
 | `scripts/merge_pages.py` → `src/merge_pages.py` | Slå ihop per-sida-text från `state.db` in i `generated/text/<stem>.txt` |
 | `scripts/build_user_words.py` → `src/build_user_words.py` | Bygg `tessdata/swe.user-words.auto` från `generated/text/*.txt` |
 | `scripts/quality.py` → `src/quality.py` | Heuristisk kvalitetsbedömning av `generated/text/*.txt` (`--per-page` finns) |

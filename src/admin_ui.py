@@ -285,6 +285,20 @@ FORM_LAYOUT: dict[str, dict[str, Any]] = {
             "reindex": "Indexera om dokumentet",
         },
     },
+    "rescan-pages": {
+        "button": "Skanna om",
+        "labels": {
+            "engine": "Motor",
+            "profile": "LLM-profil",
+            "threshold": "Poängtröskel",
+            "source": "Källa",
+            "max_pages": "Högst antal sidor",
+            "dry_run": "Bara visa urvalet",
+            "reindex": "Indexera om dokumenten",
+            "jobs": "Parallella dokument",
+            "dpi": "Render-DPI",
+        },
+    },
 }
 
 # Formulärets fält grupperas per sort så att likartade fält hamnar intill
@@ -368,9 +382,24 @@ OPERATION_HELP: dict[str, SectionHelp] = {
         (
             ("reindex", "Uppdaterar sökindexet för dokumentet direkt efteråt, så att den nya texten och Markdown syns i Utredning."),
             ("pdf_stem", "Väljs bland alla dokument i state.db, även de som bara har hel-fils-OCR."),
-            ("engine", "surya-layout läser rubriker, tabeller och blanketter och sparar Markdown (kräver separat Surya 2-installation), surya är den gamla radläsningen, tesseract är snabbast och vision använder en bildmodell."),
+            ("engine", "surya-layout läser rubriker, tabeller och blanketter och sparar Markdown (kräver separat Surya 2-installation), surya är den gamla radläsningen, tesseract är snabbast, vision använder macOS bildigenkänning och llm-vision låter en LLM-profil skriva av sidbilden som Markdown."),
+            ("profile", "Bara för llm-vision: LLM-konfigurationen som läser sidbilden, med en bildmodell (OpenAI-kompatibel; Claude stöds inte ännu). Sidbilden skickas till profilens endpoint — en extern tjänst om den inte är localhost — och profilen testas med en provbild före omskanningen. Ignoreras för övriga motorer."),
             ("page", "Sidnumret i PDF:en, med början på 1."),
             ("dpi", "Upplösning när sidan renderas före OCR."),
+        ),
+    ),
+    "rescan-pages": SectionHelp(
+        "Skannar om alla sidor under poängtröskeln med vald motor och behåller den bättre läsningen; den sämre sparas i historiken (Sidgranskning) så att den kan återställas. Sidor som redan lästs med samma motor väljs inte igen.",
+        (
+            ("dry_run", "Skriver bara ut vilka sidor som skulle skannas om och ändrar ingenting — ett billigt sätt att se omfattningen innan en betald körning."),
+            ("reindex", "Uppdaterar sökindexet för de berörda dokumenten efteråt, så att nya läsningar syns i Utredning. Kvalitetspoängen räknas om ändå."),
+            ("engine", "surya-layout läser rubriker, tabeller och blanketter (kräver separat Surya 2-installation), surya är den gamla radläsningen, tesseract är snabbast, vision använder macOS bildigenkänning och llm-vision låter en LLM-profil skriva av sidbilden som Markdown."),
+            ("profile", "Bara för llm-vision: LLM-konfigurationen som läser sidbilderna, med en bildmodell (OpenAI-kompatibel; Claude stöds inte ännu). Sidbilderna skickas till profilens endpoint — en extern tjänst, med kostnad, om den inte är localhost. Ignoreras för övriga motorer."),
+            ("source", "Begränsar urvalet till palme-filer eller wpu-filer; any tar båda."),
+            ("threshold", "Sidor med kvalitetspoäng under värdet skannas om (0–100). Bildsidor och sidor utan poäng utelämnas."),
+            ("max_pages", "Högst så många sidor, de sämsta först. 0 betyder alla — använd ett litet tal som kostnadsbroms för llm-vision."),
+            ("jobs", "Hur många dokument som läses samtidigt. Gäller bara llm-vision; övriga motorer tar ett dokument i taget."),
+            ("dpi", "Upplösning när sidorna renderas före OCR."),
         ),
     ),
     "merge-pages": SectionHelp(
@@ -1682,7 +1711,7 @@ def _page_stems() -> list[str]:
 
 
 def _document_stems() -> list[str]:
-    """Alla dokument i ``pdf_files`` (underlag för omskanning av en sida)."""
+    """Dokumenten i ``pdf_files`` utom raderade dubbletter (underlag för omskanning av en sida)."""
     import os
 
     def build() -> list:
@@ -1692,7 +1721,12 @@ def _document_stems() -> list[str]:
 
         with closing(state_db.connect()) as conn:
             state_db.init_schema(conn)
-            return [row["pdf_stem"] for row in state_db.list_documents_for_review(conn)]
+            from page_review import reviewable_documents
+
+            stems: list[str] = reviewable_documents(
+                state_db.list_documents_for_review(conn), ROOT
+            )
+            return stems
 
     return _cached(("document_stems", os.environ.get("STATE_DB", "")), build)
 

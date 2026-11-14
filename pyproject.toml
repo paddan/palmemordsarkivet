@@ -93,6 +93,7 @@ py-modules = [
     "llm_config_cli",
     "normalize_text",
     "llm_correct",
+    "llm_vision",
     "merge_pages",
     "merge_wpu",
     "karta",

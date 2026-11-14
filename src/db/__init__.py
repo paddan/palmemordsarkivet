@@ -450,6 +450,9 @@ from .pipeline import (
     list_redo_pages as list_redo_pages,
 )
 from .pipeline import (
+    list_rescan_candidates as list_rescan_candidates,
+)
+from .pipeline import (
     list_surya_fallback_candidates as list_surya_fallback_candidates,
 )
 from .pipeline import (
@@ -502,6 +505,9 @@ from .pipeline import (
 )
 from .pipeline import (
     page_exists as page_exists,
+)
+from .pipeline import (
+    page_read_with as page_read_with,
 )
 from .pipeline import (
     record_download as record_download,

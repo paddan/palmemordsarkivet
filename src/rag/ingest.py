@@ -18,6 +18,7 @@ import os
 import re
 import sys
 import time
+from collections.abc import Collection
 from pathlib import Path
 from typing import Any
 
@@ -1034,9 +1035,22 @@ def _valj_filer(
     table_sources: set[str],
     state_conn,
     ctx: Any,
+    only_stems: Collection[str] | None = None,
 ) -> list[Path]:
-    """Lista textfilerna (sorterade), rensa föräldralösa poster och begränsa till ``limit``."""
+    """Lista textfilerna (sorterade), rensa föräldralösa poster och begränsa till ``limit``.
+
+    ``only_stems`` begränsar urvalet till de dokumenten (omskanning av en sida).
+    Då hoppas den föräldralösa rensningen över: den jämför mot hela fillistan
+    och hade annars tagit bort alla andra dokument ur indexet.
+    """
     files = sorted(text_dir.glob("*.txt"))
+    if only_stems is not None:
+        wanted = set(only_stems)
+        files = [f for f in files if f.stem in wanted]
+        if ctx is not None:
+            ctx.log(f"ingest begränsad till {len(files)} av {len(wanted)} begärda dokument "
+                    f"({', '.join(sorted(wanted))[:200]})", level="debug")
+        return files[:limit] if limit else files
     if not limit and (already or table_sources):
         _rensa_foraldralosa(table, files, already, table_sources, state_conn, ctx)
     if limit:
@@ -1056,8 +1070,12 @@ def run_ingest(
     unusable_list: Path,
     reindex_since: float | None,
     context=None,
+    only_stems: Collection[str] | None = None,
 ) -> int:
-    """Indexera text till LanceDB. Returnerar exitkod."""
+    """Indexera text till LanceDB. Returnerar exitkod.
+
+    ``only_stems`` (bara intern, ingen CLI-flagga) indexerar enbart de dokumenten.
+    """
     ctx = _ctx(context)
 
     # Fallback till standardmodellen när anroparen skickar ett tomt modellnamn
@@ -1082,7 +1100,8 @@ def run_ingest(
     ctx.log(f"Laddar embedding-modell {model_name} (första gången tar några minuter)…")
     model = SentenceTransformer(model_name)
 
-    files = _valj_filer(text_dir, limit, table, already, table_sources, state_conn, ctx)
+    files = _valj_filer(text_dir, limit, table, already, table_sources, state_conn, ctx,
+                        only_stems=only_stems)
 
     todo, _skipped = _planera_indexering(
         files, already, table_sources, reindex_since, unusable_sources, ctx
