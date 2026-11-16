@@ -1,6 +1,6 @@
 # AGENTS.md
 
-This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
+Instruktioner för kodagenter (Claude Code och Codex) som arbetar i det här repot.
 
 ## Commit och push
 
@@ -27,7 +27,7 @@ När du gör förändringar i projektet ska du **alltid** uppdatera den använda
 - `docs/teknisk-referens.md` — detaljerad dokumentation (svenska): flödesdiagram, alla steg/flaggor, state-db, kunskapsgraf, LLM-config, filöversikt, tester
 - `docs/jev-reranker-pilot.md` — pilotstudie (svenska): Jev mot BGE som reranker, mått, begränsningar och rekommendation, samt uppföljningen som mätte kandidatlistans storlek (RAG och MCP), höjde `top_k` till 50 i båda lärna och gjorde Jev valbar även i utredningsläget
 - `docs/surya-layout-pilot.md` — spik och pilot (svenska): vad Surya 2 (layout + Markdown) ger för SPANINGSUPPSLAG-blanketter och förhör, maskeringarnas beteende, hastighet och konsekvenser för planen i `docs/superpowers/plans/2026-10-25-surya-layout-markdown.md`, samt piloten mot 50 riktiga arkivsidor (lines mot layout, blankettfält, repliker, sökkvalitet, `PAGE_TOO_LARGE`) med utfall per acceptanskriterium och rekommendationen att behålla `lines` som standard; dokumentet innehåller också hastighetsutredningen 2026-10-28
-- `AGENTS.md` — instruktioner för framtida Codex-sessioner
+- `AGENTS.md` — instruktioner för kodagenternas sessioner
 
 ## Project Overview
 
@@ -268,7 +268,7 @@ Omräkningen sker med `Decimal` på rådata-strängen, inte `float(värde) *
 hade annars sparats rakt in i profilen. Formuläret visar då priset som
 skrivskyddad text i stället för de tre
 `number_input`-fälten. OpenAI och DeepSeek anger inget pris i `/v1/models`,
-så deras profiler faller tillbaka på manuell inmatning som tidigare. Samma
+så deras profiler faller tillbaka på manuell inmatning. Samma
 fem minuters `st.cache_data`-cache (utan nyckelvärdet i cache-nyckeln) som
 modellistan. Texten byggs med `format_fetched_price` och måste escapa `$`
 (`\$`) innan den går till `st.caption` — två `$` i samma markdown-block blir
@@ -419,12 +419,12 @@ kryssrutan. OpenAI-vägen tar bort `web_search` ur verktygslistan när taket är
 nått; Claude-vägen får taket via `MCP_WEB_SEARCH_BUDGET` och servern svarar
 "budgeten är slut". Serverns räknare är processvid — i Streamlit-processen
 nollställs den av `stream_openai_mcp` vid varje fråga, och i Claude-vägen är
-servern ny per fråga. Tursgränsen styr bägge vägarna (Claude hade tidigare ett
-eget, lägre tak) och räknar turer, inte anrop: modellen kan begära flera verktyg i
+servern ny per fråga. Tursgränsen styr bägge vägarna och räknar turer, inte
+anrop: modellen kan begära flera verktyg i
 samma tur.
 
-**Regeln är sedan utvidgad två gånger på ägarens begäran** (listor av objekttyper
-läckte — varje klass som inte stod i listan passerade tyst, t.ex. en förkortning i
+**Osäkerhet och nulägesfrågor är skäl att söka** (en lista av objekttyper räcker
+inte — varje klass som inte står i listan passerar tyst, t.ex. en förkortning i
 en liggarepost och en ordförandes mandattid): (1) **osäkerhet är alltid ett skäl
 att söka** — tvekar modellen, eller ger materialet inget entydigt svar, söker den
 innan den svarar, och den ska söka innan den avslutar med att något "inte
@@ -432,9 +432,8 @@ framgår"; (2) **nulägesfrågor söks alltid** — vad som gäller i dag eller 
 ligger efter det arkivet kan svara på i tid. Nulägesuppgifter ska dateras. Ett
 medvetet beslut: uppgifter som finns **offentligt** på nätet får tas med även om
 de hör till en persons privatliv — det som styr är källan och datumet, inte en
-egen gallringsregel. Priset är fler sökningar: en körning gjorde 16 webbsökningar
-(~$0,12) efter en mandattid som inte finns på nätet, så kryssrutan är den enda
-kostnadsbromsen. Av samma skäl fick tursgränsen ett tvingat svar:
+egen gallringsregel. Priset är fler sökningar, och taket för betalda sökningar
+(ovan) är bromsen. Av samma skäl fick tursgränsen ett tvingat svar:
 **Verktygsomgångar (max)** (3–30, standard 15) är taket för verktygsomgångar, och när taket nås görs en
 sista förfrågan med `tool_choice="none"` så det hämtade underlaget alltid
 sammanfattas i stället för att bara en avklippt-notis visas. Ta inte bort den
@@ -699,7 +698,7 @@ bara urvalet — det är kostnadsbromsen för `llm-vision`. **Behåll den bättr
 läsningen arkiveras före OCR (samma `archive_current` som `rescan-page`); därefter jämförs ny och
 gammal text med `page_readings.comparison_score` (normaliserad text, kvalitetspoäng utan hunspell).
 En sämre, **lika bra** eller tom ny läsning som faktiskt skrevs förkastas — bara en strikt högre
-poäng vinner. Oavgjort räknades tidigare som förbättring: en provkörning med `vision` "förbättrade"
+poäng vinner. Oavgjort räknas inte som förbättring, eftersom en provkörning med `vision` "förbättrade"
 20 av 20 sidor, men 15 var 0 mot 0 (kodlistor) och vision-texten var sämre än Suryas. Poängen är en
 heuristik, inte ett facit, och får inte tolkas som att en motor är bättre. `--force` (Sidgranskningens
 *Ersätt alltid*) hoppar över jämförelsen så den nya läsningen alltid blir gällande — den gamla
