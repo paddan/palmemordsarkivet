@@ -88,28 +88,33 @@ except Exception:  # pragma: no cover
         pass
 
 
+def _log_repair(message: str) -> None:
+    print(f"  [pdf-repair] {message}", file=sys.stderr)
+
+
 def render_pages(pdf_path: Path, dpi: int):
+    """Rendera dokumentets sidor i ordning som ``(sidnummer, PIL-bild)``.
+
+    En sida PDFium inte kan ladda läses ur en qpdf-lagad kopia
+    (``pdf_repair``); går inte heller det loggas sidan och hoppas över.
+    """
     import pypdfium2 as pdfium  # local import — Surya/Vision-pad kanske saknar
-    pdf = pdfium.PdfDocument(str(pdf_path))
-    try:
+
+    from pdf_repair import open_pdf
+    with open_pdf(pdf_path, on_repair=_log_repair) as pdf:
         for i in range(len(pdf)):
             try:
-                page = pdf[i]
+                page = pdf.page(i + 1)
                 yield i + 1, page.render(scale=dpi / 72).to_pil()
             except pdfium.PdfiumError as exc:
                 print(f"  [render_pages] sida {i + 1} kunde inte laddas: {exc}", file=sys.stderr)
-    finally:
-        pdf.close()
 
 
 def render_page(pdf_path: Path, page_num: int, dpi: int):
-    """Rendera en enda sida (1-baserad) i ``dpi`` som PIL-bild."""
-    import pypdfium2 as pdfium  # local import — Surya/Vision-pad kanske saknar
-    pdf = pdfium.PdfDocument(str(pdf_path))
-    try:
-        return pdf[page_num - 1].render(scale=dpi / 72).to_pil()
-    finally:
-        pdf.close()
+    """Rendera en enda sida (1-baserad) i ``dpi`` som PIL-bild (med qpdf-reservväg)."""
+    from pdf_repair import open_pdf
+    with open_pdf(pdf_path, on_repair=_log_repair) as pdf:
+        return pdf.page(page_num).render(scale=dpi / 72).to_pil()
 
 
 def cap_layout_image(pdf_path: Path, page_num: int, image, dpi: int, limit: int):

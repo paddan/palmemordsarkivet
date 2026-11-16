@@ -362,6 +362,75 @@ def test_failed_page_keeps_old_and_continues(root, quality_calls) -> None:
     assert rc != 0
 
 
+def test_unloadable_page_is_skipped_not_failed(root, quality_calls, monkeypatch) -> None:
+    """En sida PDFium inte kan ladda hoppas över: ingen OCR, inget fel, exitkod 0."""
+    import operations.rescan_pages as rp
+
+    _pdf_doc(root, "doc", {1: BAD, 2: BAD}, rows={1: BAD, 2: BAD})
+    monkeypatch.setattr(rp, "unloadable_pages", lambda pdf, pages, **kw: {2})
+    fake = _FakeOcr({"doc": {1: GOOD}})
+
+    summary, sink = _scan(root, fake)
+
+    assert _pages_scanned(fake) == [1]
+    assert summary.skipped == 1 and summary.failed == 0 and summary.improved == 1
+    assert summary.exit_code == 0
+    assert _readings("doc") and all(r["page_num"] == 1 for r in _readings("doc"))
+    assert any(lvl == "warning" and "s2" in m for lvl, m in sink.lines)
+
+
+def test_page_check_is_serialized_across_threads(root, quality_calls, vision_profile,
+                                                monkeypatch) -> None:
+    """Med parallella dokument (llm-vision) körs PDFium-kontrollen aldrig samtidigt."""
+    import threading
+    import time
+
+    import operations.rescan_pages as rp
+
+    active = 0
+    peak = 0
+    guard = threading.Lock()
+
+    def slow_check(pdf, pages, **kw):
+        nonlocal active, peak
+        with guard:
+            active += 1
+            peak = max(peak, active)
+        time.sleep(0.05)
+        with guard:
+            active -= 1
+        return set()
+
+    for i in range(4):
+        _pdf_doc(root, f"d{i}", {1: BAD}, rows={1: BAD})
+    monkeypatch.setattr(rp, "unloadable_pages", slow_check)
+    fake = _FakeOcr({f"d{i}": {1: GOOD} for i in range(4)})
+
+    summary, _ = _scan(root, fake, engine="llm-vision", profile="Bild", jobs=4)
+
+    assert summary.improved == 4
+    assert peak == 1
+
+
+def test_broken_pdfs_never_abort_the_run(root, quality_calls) -> None:
+    """Fler trasiga PDF:er i rad än avbrottsgränsen stoppar inte körningen."""
+    from operations.rescan_pages import MAX_FAILED_DOCUMENTS_IN_ROW
+
+    n = MAX_FAILED_DOCUMENTS_IN_ROW + 1
+    for i in range(n):
+        _pdf_doc(root, f"trasig{i}", {1: BAD}, score=10, rows={1: BAD})
+        (root / "downloaded" / "files" / f"trasig{i}.pdf").write_bytes(b"%PDF trasig")
+    _pdf_doc(root, "hel", {1: BAD}, score=20, rows={1: BAD})
+    fake = _FakeOcr({"hel": {1: GOOD}})
+
+    summary, _ = _scan(root, fake)
+
+    assert len(fake.calls) == 1
+    assert summary.skipped == n and summary.failed == 0 and summary.improved == 1
+    assert summary.exit_code == 0
+    assert _readings("trasig0") == []
+
+
 def test_surya_unavailable_aborts(root, quality_calls) -> None:
     from operations.exceptions import OperationFailed
 

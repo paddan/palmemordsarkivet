@@ -7,7 +7,7 @@ historiska läsningar och en renderad sidbild med ritade layoutramar.
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -77,31 +77,57 @@ def find_pdf(root: Path, pdf_stem: str) -> Path | None:
     return None
 
 
+def _log_repair(message: str) -> None:
+    log.info("%s", message)
+
+
 def page_count(pdf_path: Path) -> int:
-    """Antal sidor i en PDF (pypdfium2)."""
+    """Antal sidor i en PDF (pypdfium2, med qpdf-reservväg)."""
+    from pdf_repair import open_pdf
+
+    with open_pdf(pdf_path, on_repair=_log_repair) as doc:
+        return int(len(doc))
+
+
+def unloadable_pages(pdf_path: Path, pages: list[int],
+                     on_repair: Callable[[str], None] | None = None) -> set[int]:
+    """De av ``pages`` (1-baserade) som inte går att ladda, inte ens ur en qpdf-lagad kopia.
+
+    Går dokumentet inte att öppna alls (trasig fil, HTML eller ljud med
+    PDF-ändelse) är alla sidorna oladdbara. En sida utanför dokumentet räknas
+    också som oladdbar. ``on_repair`` får en rad när reservvägen används.
+    """
     import pypdfium2 as pdfium
 
-    doc = pdfium.PdfDocument(str(pdf_path))
+    from pdf_repair import open_pdf
+
     try:
-        return int(len(doc))
-    finally:
-        doc.close()
+        with open_pdf(pdf_path, on_repair=on_repair or _log_repair) as doc:
+            bad: set[int] = set()
+            for page in pages:
+                if not 1 <= page <= len(doc):
+                    bad.add(page)
+                    continue
+                try:
+                    doc.page(page).close()
+                except pdfium.PdfiumError:
+                    bad.add(page)
+            return bad
+    except pdfium.PdfiumError:
+        return set(pages)
 
 
 def render_page_image(pdf_path: Path, page_num: int, dpi: int = 150) -> Image:
-    """Rendera sida ``page_num`` (1-baserad) som PIL-bild."""
-    import pypdfium2 as pdfium
+    """Rendera sida ``page_num`` (1-baserad) som PIL-bild (med qpdf-reservväg)."""
+    from pdf_repair import open_pdf
 
-    doc = pdfium.PdfDocument(str(pdf_path))
-    try:
+    with open_pdf(pdf_path, on_repair=_log_repair) as doc:
         if not 1 <= page_num <= len(doc):
             raise ValueError(
                 f"Sidan {page_num} finns inte i {pdf_path.name} (giltigt: 1–{len(doc)})"
             )
-        image: Image = doc[page_num - 1].render(scale=dpi / 72).to_pil()
+        image: Image = doc.page(page_num).render(scale=dpi / 72).to_pil()
         return image
-    finally:
-        doc.close()
 
 
 def is_removed_duplicate(root: Path, pdf_stem: str, tesseract_done_at: str | None) -> bool:

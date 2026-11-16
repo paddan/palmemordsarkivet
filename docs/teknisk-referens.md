@@ -44,7 +44,7 @@ LanceDB-källor och ersätts i stället för att dupliceras.
 
 `scripts/install.py` sköter pipeline- och webgränssnittsberoendena via Homebrew och pip:
 
-- `ocrmypdf`, `tesseract-lang`, `poppler`, `unpaper`, `hunspell` via brew
+- `ocrmypdf`, `tesseract-lang`, `poppler`, `qpdf`, `unpaper`, `hunspell` via brew
 - sv_SE-ordlista till `~/Library/Spelling/` (för kvalitetspoängen): länkad från brews hunspell om den finns där, annars hämtad från LibreOffices ordlistor (LGPL-3, pinnad commit `SV_DICTIONARY_COMMIT`); båda filerna skrivs först när båda hämtats
 - `.venv/` skapas med den nyaste Python ≥ 3.11 som finns i `PATH` (`python3`, `python3.11`–`python3.30`)
 - `.venv/` med `pip install -e .[web]` (bl.a. Streamlit, `folium` och `streamlit-folium`)
@@ -586,6 +586,16 @@ kvarstår efter sista försöket är fatal.
 Avbrott: exitkod 3 (Surya saknas) och exitkod 4 (LLM-tjänsten vägrar: 401/402/403/429
 efter återförsök) samt fem dokument i rad där varje sida misslyckas ger ett avbrutet jobb
 utan att något markeras som permanent fel. Enstaka misslyckade sidor ger bara slutkod 1.
+Sidor som PDFium inte kan ladda läses ur en tillfällig qpdf-lagad kopia
+(`pdf_repair.open_pdf`; originalet ändras aldrig). Det gäller t.ex. en sida vars
+objekt är markerat fritt i en äldre xref-sektion och återanvänds i en stegvis
+uppdatering — qpdf och poppler läser den, PDFium inte. Samma reservväg används av
+all sidrendering (`ocr_pages.render_pages`/`render_page`, Sidgranskning). Sidor som
+inte går att ladda ens så (trasig fil, en HTML-/ljudfil med `.pdf`-ändelse, eller
+qpdf saknas) kontrolleras före OCR:en (`page_review.unloadable_pages`) och hoppas
+över med en varning. De räknas
+som "hoppade (trasig PDF)", inte som misslyckade, och påverkar varken slutkoden
+eller avbrottsgränsen — en trasig PDF stoppar aldrig körningen.
 
 Flöde vid omskanning: PDF:en och sidnumret valideras **före all skrivning**
 (saknad PDF eller sida utanför 1–N ger `OperationFailed`, ingen historikrad) →
@@ -1862,6 +1872,7 @@ per-dokumentresultat behålls; ett avbrutet jobb markeras aldrig `succeeded`.
 | `src/search_fuzzy.py` | OCR-tolerant fuzzy-sökning (difflib token-index över chunk-korpusen) |
 | `src/redactions.py` → `src/pages/5_Maskeringar.py` | Maskeringsutforskaren: aggregera `[MASKAD]` ur `pdf_pages`, visa kontext |
 | `src/page_review.py` → `src/pages/9_Sidgranskning.py` | Sidgranskning: PDF-sida bredvid text/Markdown/layout/blankettfält, omskanning och återställning via `rescan-page` |
+| `src/pdf_repair.py` | Reservväg för PDF-sidor som PDFium inte kan ladda: läser dem ur en tillfällig qpdf-lagad kopia (`open_pdf`) |
 | `src/compare.py` → `src/pages/6_Jämförelse.py` | Vittnesjämförelse (korsförhörsläge — letar motstridiga uppgifter) |
 | `src/karta.py` → `src/pages/7_Karta.py` | Kartmodulen: validera observationer, bygg tidslinje-GeoJSON och rendera karta |
 | `src/map_extract.py` | Ren parsing/tidsnormalisering/platsmatchning för kartobservations-kandidater |

@@ -718,7 +718,15 @@ modellen skrev annars egna `[svärtat]` på rätt ställe *och* pixeldetektering
 modellens varianter och `apply_masks` infogar pixelblocken bara när modellen inte skrev någon markör. Profilen provas med en
 provbild före körningen (`check_vision_profile`). Exitkod **4** (`EXIT_LLM_FATAL`: 401/402/403/429 efter
 återförsök) avbryter resten av körningen på samma sätt som exitkod 3 för Surya (inga markeringar som
-permanent fel); fem dokument i rad där varje sida misslyckas avbryter också. Dokument körs parallellt
+permanent fel); fem dokument i rad där varje sida misslyckas avbryter också. Sidor som PDFium inte
+kan ladda läses ur en qpdf-lagad kopia (`pdf_repair.open_pdf`, används av `ocr_pages.render_pages`/
+`render_page` och `page_review`; kopian är tillfällig och originalet ändras aldrig) — mönstret är ett
+sidobjekt som är fritt i en äldre xref-sektion och återanvänds i en stegvis uppdatering, som qpdf
+och poppler läser men PDFium inte. Går sidan inte att ladda ens så (eller saknas qpdf)
+(`page_review.unloadable_pages`, kontrolleras före OCR:en) hoppas den över med en varning och
+räknas varken som misslyckad, i slutkoden eller mot femgränsen — en trasig PDF får aldrig stoppa
+körningen eller ge exitkod 1. Kontrollen körs under `_PDFIUM_LOCK` eftersom dokumenten går i
+parallella trådar för `llm-vision` och PDFium inte är trådsäkert. Dokument körs parallellt
 (`--jobs`, standard 4) bara för `llm-vision`, som är nätverksbunden; övriga motorer tar ett i taget.
 Kvalitetspoängen räknas om för de berörda dokumenten även med `--no-reindex`, annars ligger de gamla
 poängen kvar och sidorna väljs om — även efter ett avbrott (`OperationCancelled`: bara kvalitet,

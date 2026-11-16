@@ -272,7 +272,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     print("→ brew-paket…")
-    subprocess.run(["brew", "install", "--quiet", "ocrmypdf", "tesseract-lang", "poppler", "unpaper", "hunspell"], check=False)
+    subprocess.run(["brew", "install", "--quiet", "ocrmypdf", "tesseract-lang", "poppler", "qpdf", "unpaper", "hunspell"], check=False)
 
     # Hunspell svensk ordlista: symlänka brew-ordlistan om den saknas.
     # brew-hunspells sv_SE.aff/.dic till ~/Library/Spelling om de inte redan finns.

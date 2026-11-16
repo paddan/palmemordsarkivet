@@ -86,6 +86,7 @@ py-modules = [
     "download_wpu",
     "quality",
     "page_review",
+    "pdf_repair",
     "ocr_pages",
     "ocr_db_helper",
     "build_user_words",

@@ -19,6 +19,11 @@ I slutet poängsätts de berörda dokumenten om (``quality.run_quality``) och �
 med ``reindex`` — indexeras om. Avbrott: exitkod 3 (Surya saknas), exitkod 4
 (LLM-tjänsten vägrar) och fem dokument i rad där varje sida misslyckades ger
 ``OperationFailed``; enstaka misslyckade sidor ger bara exitkod 1 i slutet.
+Sidor som PDFium inte kan ladda ens ur en qpdf-lagad kopia (``pdf_repair``;
+OCR:en läser lagade sidor ur kopian) hoppas över med en varning före OCR:en; de
+räknas varken som misslyckade, i exitkoden eller mot avbrottsgränsen — en trasig
+PDF ska aldrig stoppa körningen. Kontrollen görs under ``_PDFIUM_LOCK``, eftersom
+dokumenten kan gå i parallella trådar och PDFium inte är trådsäkert.
 Vid ``OperationFailed`` poängsätts och indexeras det som hann skannas; vid
 ``OperationCancelled`` poängsätts det bara (ingen omindexering) innan avbrottet
 kastas vidare.
@@ -41,7 +46,13 @@ from pathlib import Path
 
 import db as state_db
 from llm_vision import EXIT_LLM_FATAL
-from page_review import WHOLE_FILE_ENGINE, find_pdf, is_removed_duplicate, page_count
+from page_review import (
+    WHOLE_FILE_ENGINE,
+    find_pdf,
+    is_removed_duplicate,
+    page_count,
+    unloadable_pages,
+)
 from surya_client import EXIT_SURYA_UNAVAILABLE
 
 from .context import OperationContext, ensure_terminal_context
@@ -61,6 +72,10 @@ from .page_readings import (
     row_snapshot,
 )
 from .page_readings import connect as _connect
+
+# PDFium är inte trådsäkert, och dokumenten går i parallella trådar för llm-vision:
+# all PDFium-användning i arbetstrådarna (sidkontrollen) sker under låset.
+_PDFIUM_LOCK = threading.Lock()
 
 # Så många dokument i rad där varje sida misslyckades avbryter körningen.
 MAX_FAILED_DOCUMENTS_IN_ROW = 5
@@ -179,6 +194,8 @@ class RescanSummary:
     improved: int = 0
     kept_old: int = 0
     failed: int = 0
+    # Sidor som hoppades över eftersom PDF:en inte gick att ladda (trasig PDF).
+    skipped: int = 0
     # Kvalitetsbedömningen av de berörda dokumenten misslyckades.
     quality_failed: bool = False
 
@@ -195,6 +212,7 @@ class _DocResult:
     improved: int = 0
     kept_old: int = 0
     failed: int = 0
+    skipped: int = 0
 
     @property
     def touched(self) -> bool:
@@ -266,6 +284,18 @@ def _rescan_document(
                 level="warning")
         result.scanned = result.failed = len(pages)
         return result
+    with _PDFIUM_LOCK:
+        broken = unloadable_pages(
+            pdf, pages, on_repair=lambda message: ctx.log(f"rescan-pages {stem}: {message}",
+                                                          level="debug"))
+    if broken:
+        result.skipped = len(broken)
+        ctx.log(f"rescan-pages {stem}: PDF:en går inte att ladda för sidorna "
+                f"{', '.join(f's{p}' for p in sorted(broken))} (trasig PDF) — hoppar över, "
+                "den gällande läsningen står kvar", level="warning")
+        pages = [p for p in pages if p not in broken]
+        if not pages:
+            return result
 
     attempts: list[tuple[int, dict | None, int | None]] = []
     try:
@@ -493,9 +523,13 @@ def rescan_pages(
         summary.improved += result.improved
         summary.kept_old += result.kept_old
         summary.failed += result.failed
+        summary.skipped += result.skipped
         if result.touched:
             touched.add(result.stem)
-        failed_in_row = failed_in_row + 1 if result.all_failed else 0
+        # Ett dokument som bara hade trasiga sidor säger inget om motorn: det
+        # varken ökar eller nollställer räknaren.
+        if result.scanned:
+            failed_in_row = failed_in_row + 1 if result.all_failed else 0
         if failed_in_row >= MAX_FAILED_DOCUMENTS_IN_ROW and not stop.is_set():
             stop.set()
             raise OperationFailed(
@@ -544,7 +578,8 @@ def rescan_pages(
 def _log_summary(summary: RescanSummary, ctx: OperationContext, *, prefix: str = "") -> None:
     ctx.log(f"{prefix}Skanna om sidor: {summary.selected} valda, {summary.scanned} "
             f"skannade, {summary.improved} förbättrade, {summary.kept_old} behöll gammal, "
-            f"{summary.failed} misslyckades.")
+            f"{summary.failed} misslyckades"
+            + (f", {summary.skipped} hoppade (trasig PDF)" if summary.skipped else "") + ".")
 
 
 def run_rescan_pages(
