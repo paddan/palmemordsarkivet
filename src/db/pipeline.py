@@ -554,6 +554,17 @@ def record_quality_page(
     conn.commit()
 
 
+def get_quality_page(
+    conn: sqlite3.Connection, pdf_stem: str, page_num: int,
+) -> sqlite3.Row | None:
+    """Sidans kvalitetsrad (``score``, ``image_page``) eller ``None``."""
+    row: sqlite3.Row | None = conn.execute(
+        "SELECT score, image_page FROM quality_pages WHERE pdf_stem=? AND page_num=?",
+        (pdf_stem, page_num),
+    ).fetchone()
+    return row
+
+
 def get_bad_pages(
     conn: sqlite3.Connection, *, threshold: float
 ) -> list[sqlite3.Row]:
@@ -614,6 +625,55 @@ def list_worst_quality(conn: sqlite3.Connection, limit: int) -> list[sqlite3.Row
         "SELECT pdf_stem, source_type, score, pct_swe FROM quality "
         "ORDER BY score ASC LIMIT ?",
         (limit,),
+    ))
+
+
+def quality_histogram(
+    conn: sqlite3.Connection, *, pages: bool = False,
+) -> tuple[list[tuple[int, int]], int]:
+    """Antal poäng per 10-poängsintervall (0 = 0–9 … 9 = 90–100).
+
+    ``pages=True`` räknar ``quality_pages`` utan bildsidor; andra värdet är
+    antalet utelämnade bildsidor (alltid 0 för dokument)."""
+    table = "quality_pages" if pages else "quality"
+    where = "score IS NOT NULL" + (" AND image_page = 0" if pages else "")
+    rows = conn.execute(
+        f"SELECT MIN(MAX(CAST(score / 10 AS INTEGER), 0), 9) AS bucket, COUNT(*) AS n "
+        f"FROM {table} WHERE {where} GROUP BY bucket ORDER BY bucket"
+    ).fetchall()
+    images = 0
+    if pages:
+        images = conn.execute(
+            "SELECT COUNT(*) FROM quality_pages WHERE image_page = 1"
+        ).fetchone()[0]
+    return [(int(r["bucket"]), int(r["n"])) for r in rows], int(images)
+
+
+def page_scores_by_engine(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Sidpoäng med sidans motor: ``engine``, ``image_page``, ``score``.
+
+    Sidor utan ``pdf_pages``-rad lästes som hel fil: ``textlager`` när
+    original-PDF:en hade text (``quality.source_type``), annars ``tesseract``
+    (OCR:en av hela filen görs med Tesseract via ocrmypdf)."""
+    return list(conn.execute(
+        """
+        SELECT CASE WHEN p.engine IS NOT NULL THEN p.engine
+                    WHEN d.source_type = 'text-layer' THEN 'textlager'
+                    ELSE 'tesseract' END AS engine,
+               q.image_page AS image_page, q.score AS score
+          FROM quality_pages q
+          LEFT JOIN pdf_pages p USING (pdf_stem, page_num)
+          LEFT JOIN quality d USING (pdf_stem)
+         WHERE q.score IS NOT NULL
+        """
+    ))
+
+
+def document_scores_by_source(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Dokumentpoäng med källtyp (``text-layer``/``ocr``): ``source_type``, ``score``."""
+    return list(conn.execute(
+        "SELECT COALESCE(source_type, '?') AS source_type, score FROM quality "
+        "WHERE score IS NOT NULL"
     ))
 
 

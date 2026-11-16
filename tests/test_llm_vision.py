@@ -309,7 +309,41 @@ def test_vision_profile_names_lists_openai_compatible_profiles_default_first(
     assert llm_vision.vision_profile_names() == ["Lokal", "Router"]
 
 
-def test_prompt_is_swedish_and_silent_about_masks() -> None:
+def test_prompt_is_swedish_and_asks_for_mask_markers() -> None:
     assert "[oläsligt]" in llm_vision.PROMPT
     assert "Markdown" in llm_vision.PROMPT
-    assert "MASKAD" not in llm_vision.PROMPT
+    assert "[MASKAD]" in llm_vision.PROMPT
+
+
+@pytest.mark.parametrize("marker", [
+    "[svärtat]", "[Svärtad]", "[ svärtade ]", "[maskerat]", "[maskerad text]",
+    "[överstruket]", "[censurerat]", "[redacted]", "[REDACTED]", "[blacked out]",
+    "[svart fält]", "███", "■■■■", "[MASKAD]",
+])
+def test_normalize_mask_markers_rewrites_model_variants(marker: str) -> None:
+    out = llm_vision.normalize_mask_markers(f"bodde på {marker} sedan 1983")
+    assert out == "bodde på [MASKAD] sedan 1983"
+
+
+def test_normalize_mask_markers_leaves_other_brackets() -> None:
+    text = "[oläsligt] och [sic] och [1] och ett ensamt █"
+    assert llm_vision.normalize_mask_markers(text) == text
+
+
+def test_apply_masks_keeps_model_markers_and_skips_pixel_insertion() -> None:
+    """Regression: modellens [svärtat] stod kvar och pixeldetekteringen lade
+    dessutom till lika många [MASKAD] som egna stycken — dubbla markörer."""
+    markdown = "Rad ett [svärtat]\nRad två\nStockholm, [svärtat]."
+
+    out = llm_vision.apply_masks(markdown, [(10, 20), (300, 320)], 400)
+
+    assert out == "Rad ett [MASKAD]\nRad två\nStockholm, [MASKAD]."
+
+
+def test_apply_masks_falls_back_to_pixel_blocks_without_model_markers() -> None:
+    markdown = "Rad ett\nRad två\nRad tre\nRad fyra"
+
+    out = llm_vision.apply_masks(markdown, [(120, 280)], 400)
+
+    assert out == llm_vision.insert_mask_markers(markdown, [(120, 280)], 400)
+    assert out.count("[MASKAD]") == 1

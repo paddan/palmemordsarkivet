@@ -288,12 +288,14 @@ FORM_LAYOUT: dict[str, dict[str, Any]] = {
     "rescan-pages": {
         "button": "Skanna om",
         "labels": {
+            "pdf_stem": "Bara dokument",
             "engine": "Motor",
             "profile": "LLM-profil",
             "threshold": "Poängtröskel",
             "source": "Källa",
             "max_pages": "Högst antal sidor",
             "dry_run": "Bara visa urvalet",
+            "force": "Ersätt alltid",
             "reindex": "Indexera om dokumenten",
             "jobs": "Parallella dokument",
             "dpi": "Render-DPI",
@@ -392,6 +394,8 @@ OPERATION_HELP: dict[str, SectionHelp] = {
         "Skannar om alla sidor under poängtröskeln med vald motor och behåller den bättre läsningen; den sämre sparas i historiken (Sidgranskning) så att den kan återställas. Sidor som redan lästs med samma motor väljs inte igen.",
         (
             ("dry_run", "Skriver bara ut vilka sidor som skulle skannas om och ändrar ingenting — ett billigt sätt att se omfattningen innan en betald körning."),
+            ("force", "Den nya läsningen blir gällande även när den får lägre eller lika poäng — poängen är en heuristik och ibland vet du bättre. Den gamla läsningen sparas i historiken och kan återställas i Sidgranskning. Sidor som redan lästs med samma motor hoppas ändå över."),
+            ("pdf_stem", "Skannar om alla sidor i det valda dokumentet i stället för poängurvalet; tröskel och källa gäller då inte, men sidor som redan lästs med motorn hoppas över och Högst antal sidor gäller. Lämna tomt för poängurvalet."),
             ("reindex", "Uppdaterar sökindexet för de berörda dokumenten efteråt, så att nya läsningar syns i Utredning. Kvalitetspoängen räknas om ändå."),
             ("engine", "surya-layout läser rubriker, tabeller och blanketter (kräver separat Surya 2-installation), surya är den gamla radläsningen, tesseract är snabbast, vision använder macOS bildigenkänning och llm-vision låter en LLM-profil skriva av sidbilden som Markdown."),
             ("profile", "Bara för llm-vision: LLM-konfigurationen som läser sidbilderna, med en bildmodell (OpenAI-kompatibel; Claude stöds inte ännu). Sidbilderna skickas till profilens endpoint — en extern tjänst, med kostnad, om den inte är localhost. Ignoreras för övriga motorer."),
@@ -433,6 +437,7 @@ OPERATION_HELP: dict[str, SectionHelp] = {
             ("per_page", "Skriver även poäng per sida — det Surya-redo och LLM-korrigeringen bygger på."),
             ("rebuild", "Bedömer om även filer som redan har poäng."),
             ("top", "Skriver de N sämsta filerna i loggen."),
+            ("histogram", "Skriver hur poängen fördelar sig (dokument och sidor, 10 poäng per rad, med kumulativt antal under varje gräns) och poängen per OCR-motor och källtyp."),
             ("limit", "Begränsar körningen — bra för en snabb kontroll."),
         ),
     ),
@@ -574,6 +579,13 @@ FILE_PICKERS: dict[tuple[str, str], dict[str, Any]] = {
         "sources": ("state:pdf_files",),
         "pattern": "",
         "empty": "— välj dokument —",
+        "as": "stem",
+    },
+    # Dokumentläget: alla dokument ska kunna väljas, som för rescan-page.
+    ("rescan-pages", "pdf_stem"): {
+        "sources": ("state:pdf_files",),
+        "pattern": "",
+        "empty": "— alla dokument (poängurval) —",
         "as": "stem",
     },
     ("llm-correct", "test"): {

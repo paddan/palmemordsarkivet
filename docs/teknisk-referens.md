@@ -527,8 +527,10 @@ skannar om **alla sidor under en poängtröskel** med vald motor som ett vanligt
 bakgrundsjobb och **behåller den bättre läsningen** per sida. Dokumenten tas ett i
 taget (flera samtidigt för `llm-vision`); för varje dokument arkiveras de gällande
 läsningarna, sidorna OCR:as med `ocr_pages.py --pages … --force`, och den nya läsningen
-jämförs mot den gamla med kvalitetspoängen (normaliserad text, utan hunspell). En sämre
-eller tom ny läsning förkastas: den sparas i historiken med skälet `rejected`
+jämförs mot den gamla med kvalitetspoängen (normaliserad text, utan hunspell). Bara en
+strikt högre poäng behåller den nya läsningen; en sämre, lika bra eller tom ny läsning
+förkastas (lika poäng, t.ex. 0 mot 0 för en kodlista som heuristiken inte kan bedöma, är
+inget belägg för en förbättring): den sparas i historiken med skälet `rejected`
 ("underkänd vid jämförelse" i Sidgranskning) och den gamla läsningen återställs; saknade
 den gamla läsningen egen poäng (en textfilsida) får raden jämförelsepoängen. En sida vars
 läsning kraschade eller aldrig skrevs räknas som misslyckad: historikraden tas bort och
@@ -542,12 +544,15 @@ jobbet kan startas.
 .venv/bin/python scripts/rescan_pages.py --engine tesseract --threshold 30 --max-pages 2 --dry-run
 .venv/bin/python scripts/rescan_pages.py --engine surya-layout --threshold 50
 .venv/bin/python scripts/rescan_pages.py --engine llm-vision --profile "<profil>" --max-pages 50
+.venv/bin/python scripts/rescan_pages.py --engine surya-layout --pdf-stem "<stam>"   # hela dokumentet
 ```
 
 | Flagga | Standard | Betydelse |
 |---|---|---|
 | `--engine` | `surya-layout` | `surya-layout`, `surya`, `tesseract`, `vision` eller `llm-vision` |
 | `--profile` | – | LLM-profil som läser sidbilderna; krävs för `llm-vision` |
+| `--pdf-stem` | – | Dokumentläge: alla sidor i dokumentet, oavsett `--threshold` och `--source`. Sidor som redan lästs med motorn (gällande läsning eller historik, även underkända; för `llm-vision` samma modell) hoppas över, så en upprepad körning tar bara de sidor som återstår (`--max-pages` räknas efter bortvalet, `--dry-run` gäller). En raderad dubblett eller saknad PDF vägras före skrivning |
+| `--force` | av | Ingen poängjämförelse: den nya läsningen blir gällande även med lägre eller lika poäng; den gamla sparas i historiken (`rescan`) och kan återställas. Sidor som redan lästs med motorn hoppas ändå över |
 | `--threshold` | `70` | Sidor med kvalitetspoäng under värdet väljs (bildsidor och opoängsatta utelämnas) |
 | `--source` | `any` | `any`, `files` (palme) eller `wpu` |
 | `--max-pages` | `0` | Högst så många sidor, de sämsta först; `0` = alla |
@@ -567,8 +572,11 @@ ny motor. Raderade dubbletter och dokument vars PDF saknas väljs aldrig.
 ännu) och provas med en provbild före körningen. Bilden skickas till profilens endpoint:
 en **lokal** modell (Ollama på localhost) lämnar inte datorn, en **extern** tjänst får
 sidbilderna och kostar per sida. Kostnadsbromsar: `--dry-run` visar omfattningen och
-`--max-pages` begränsar antalet sidor (de sämsta först). Svarta maskeringar infogas av
-pixeldetekteringen, inte av modellen. Den rena texten (det som indexeras och citeras)
+`--max-pages` begränsar antalet sidor (de sämsta först). Svarta maskeringar märks av
+modellen med `[MASKAD]` där de står i texten; modellens egna varianter (`[svärtat]`,
+`[maskerat]`, `[redacted]`, `███` …) skrivs om till `[MASKAD]`. Pixeldetekteringen är
+reserv: dess markörer (egna stycken, placerade efter höjd) läggs bara in när modellen
+inte skrev någon markör, så att markörerna aldrig dubbleras. Den rena texten (det som indexeras och citeras)
 härleds ur Markdownen genom att bara ta bort syntax utan eget textinnehåll — rubrikens
 `#`, citatets `>`, `**`/`__` och tabellstreck; punktnummer (`12.`, `2)`) och listtecken
 står kvar ordagrant. Vid 429, 5xx eller nätfel görs upp till fem försök per sida (väntan
@@ -1222,6 +1230,19 @@ som inte är Streamlit ligger i `src/page_review.py` (`load_page_view`,
   kopian. Samma regel gäller Admins dokumentväljare för omskanning, och
   `rescan-page` vägrar sådana dokument: en omskanning hade annars byggt en ny
   textfil av bara den sidan och lagt en ofullständig dubblett i indexet.
+- **Poäng:** kvalitetsstegets sidpoäng ur `quality_pages` (samma som histogrammet och
+  urvalet i `rescan-pages`), även för sidor utan egen `pdf_pages`-rad (`hel-fils-OCR`);
+  bildsidor visas som *bildsida*. OCR-radens egen poäng används bara när sidan saknar
+  kvalitetsrad. `rescan-page` kvalitetsbedömer dokumentet efter varje omskanning och
+  återställning, så den nya läsningens poäng syns direkt.
+- **Skanna om hela dokumentet:** knappen bredvid *Skanna om sidan* startar
+  `rescan-pages --pdf-stem <stam>` med samma motor-, profil- och omindexeringsval.
+  Sidor som redan lästs med vald motor hoppas över, så en andra körning tar bara
+  de sidor som återstår. Kryssrutan *Ersätt alltid* motsvarar `--force`: den nya
+  läsningen blir gällande utan poängjämförelse. Varje sida behåller den bättre läsningen; den andra sparas i historiken och kan
+  återställas sida för sida. Med `llm-vision` måste kryssrutan *Skicka upp till N sidor
+  till profilens endpoint* vara ikryssad. Ett pågående dokumentjobb visas med logg
+  på varje sida i dokumentet.
 - **Sidbild:** renderas bara via `render_page_image` (validerar sidnumret) i
   110 dpi och cachas med `st.cache_data` på `(pdf-sökväg, sida, dpi, PDF:ens
   mtime)`. **Visa layoutblock** ritar blockramarna; blockens bbox skalas från
@@ -1869,10 +1890,11 @@ per-dokumentresultat behålls; ett avbrutet jobb markeras aldrig `succeeded`.
 
 ```bash
 .venv/bin/python scripts/quality.py --top 30      # visa värsta 30 filer
+.venv/bin/python scripts/quality.py --histogram   # poängfördelning, 10 poäng per rad
 .venv/bin/python scripts/quality.py --rebuild     # tvinga om-bedömning av alla filer
 ```
 
-Poäng 0–100 per fil, inkrementellt (bara filer vars `text_mtime` är nyare än `scored_at`). Notera att `text-layer` inte automatiskt innebär god kvalitet — vissa PDF:er har gammalt OCR-skräp inbäddat. Sortera på `score`, inte källa. Dåliga textlager rättas med `.venv/bin/python scripts/ocr.py --redo --mode files`.
+Poäng 0–100 per fil, inkrementellt (bara filer vars `text_mtime` är nyare än `scored_at`). `--top` och `--histogram` läser ur `quality`-tabellen och fungerar även när inget behöver poängsättas om. Histogrammet visar dokument (`quality`) och sidor (`quality_pages`, bildsidor utelämnade eftersom de får 100) med en kumulativ kolumn, så antalet under 50, 70 osv. kan läsas av direkt; sidraderna kräver en tidigare körning med `--per-page`. Därefter kommer två tabeller med antal, median, medel och antal under 10/30/50/70/90: sidor per OCR-motor och dokument per källtyp. Motorerna heter `tesseract` (sidor utan egen `pdf_pages`-rad, som Tesseract läste som hel fil, plus omskannade Tesseract-sidor), `surya-lines` (radbaserad Surya, lagrad som `surya`), `surya-layout`, `vision`, `llm-vision`, `llm` (LLM-rättad OCR-text) och `textlager` (original-PDF:ens egen text, ingen OCR); en motor syns bara när den har sidor. Jämför inte motorerna rakt av: Surya körs bara på sidor som Tesseract läste dåligt, så Surya-gruppen är de svåra sidorna och de dåliga Tesseract-läsningarna finns inte längre kvar, och en omskannad sida räknas bara under motorn som vann. Notera att `text-layer` inte automatiskt innebär god kvalitet — vissa PDF:er har gammalt OCR-skräp inbäddat. Sortera på `score`, inte källa. Dåliga textlager rättas med `.venv/bin/python scripts/ocr.py --redo --mode files`.
 
 Valfritt: installera hunspell + sv_SE-ordlista för att fylla i `pct_swe`-kolumnen (`brew install hunspell` + ordlistfiler från LibreOffice/dictionaries).
 

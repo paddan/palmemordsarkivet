@@ -481,3 +481,103 @@ def test_terminal_status_read_is_thread_safe(miljo, monkeypatch, status):
     assert reruns == ["app"]
     assert len(opened) == 1
     assert result["closed"] == [True]
+
+
+# --- Skanna om hela dokumentet ------------------------------------------------
+
+def test_rescan_document_button_starts_rescan_pages(miljo):
+    at = _kor(STEM, 2)
+    at.selectbox(key="sg_engine").set_value("tesseract").run()
+    at.checkbox(key="sg_reindex").set_value(False).run()
+    at.button(key="sg_rescan_doc").click().run()
+    assert not at.exception, at.exception
+    assert len(miljo["calls"]) == 1
+    op, params = miljo["calls"][0]
+    assert op == "rescan-pages"
+    assert params["pdf_stem"] == STEM
+    assert params["engine"] == "tesseract" and params["reindex"] is False
+    assert "page" not in params and "profile" not in params
+    assert params["force"] is False
+
+
+def test_rescan_document_force_replaces_without_comparison(miljo):
+    at = _kor(STEM, 1)
+    at.checkbox(key="sg_rescan_doc_force").check().run()
+    at.button(key="sg_rescan_doc").click().run()
+    assert not at.exception, at.exception
+    op, params = miljo["calls"][0]
+    assert op == "rescan-pages" and params["force"] is True
+
+
+def test_rescan_document_with_llm_vision_requires_confirmation(miljo, monkeypatch):
+    monkeypatch.setattr("llm_vision.vision_profile_names", lambda: ["Bild"])
+    at = _kor(STEM, 1)
+    at.selectbox(key="sg_engine").set_value("llm-vision").run()
+    assert at.button(key="sg_rescan_doc").disabled is True
+    confirm = next(w for w in at.checkbox if w.key and w.key.startswith("sg_rescan_doc_ok"))
+    assert "2 sidor" in confirm.label
+    confirm.check().run()
+    assert at.button(key="sg_rescan_doc").disabled is False
+    at.button(key="sg_rescan_doc").click().run()
+    assert not at.exception, at.exception
+    op, params = miljo["calls"][0]
+    assert op == "rescan-pages"
+    assert params["engine"] == "llm-vision" and params["profile"] == "Bild"
+
+
+def test_running_document_job_shows_status_on_every_page(miljo):
+    log = miljo["root"] / "j.log"
+    log.write_text("dokumentet skannas\n", encoding="utf-8")
+    miljo["state"]["active"] = {
+        "id": "job-1", "operation": "rescan-pages", "status": "running",
+        "params_json": json.dumps({"pdf_stem": STEM, "engine": "tesseract"}),
+        "log_path": str(log),
+    }
+    for page in (1, 2):
+        at = _kor(STEM, page)
+        assert at.button(key="sg_rescan").disabled is True
+        assert at.button(key="sg_rescan_doc").disabled is True
+        assert any("dokumentet skannas" in c.value for c in at.code)
+        assert any("hela dokumentet" in c.value for c in at.caption)
+    other = _kor(ANNAN, 1)
+    assert not any("dokumentet skannas" in c.value for c in other.code)
+
+
+def test_massrescan_without_document_is_not_this_documents_job(miljo):
+    miljo["state"]["active"] = {
+        "id": "job-1", "operation": "rescan-pages", "status": "running",
+        "params_json": json.dumps({"threshold": 30}), "log_path": "",
+    }
+    at = _kor(STEM, 1)
+    assert any("Ett annat jobb körs" in c.value for c in at.caption)
+
+
+def test_llm_vision_confirmation_does_not_carry_over(miljo, monkeypatch):
+    """Regression (granskning): kryssrutan behöll sitt värde när dokumentet byttes
+    och efter en startad körning, så ett annat (större) dokument kunde skickas
+    till den betalda endpointen utan ny bekräftelse."""
+    monkeypatch.setattr("llm_vision.vision_profile_names", lambda: ["Bild"])
+    at = _kor(STEM, 1)
+    at.selectbox(key="sg_engine").set_value("llm-vision").run()
+    ok = [w for w in at.checkbox if w.key and w.key.startswith("sg_rescan_doc_ok")]
+    ok[0].check().run()
+    assert at.button(key="sg_rescan_doc").disabled is False
+
+    at.selectbox(key="sg_doc").set_value(ANNAN).run()
+    assert not at.exception, at.exception
+    assert at.button(key="sg_rescan_doc").disabled is True
+
+    at.selectbox(key="sg_doc").set_value(STEM).run()
+    ok = [w for w in at.checkbox if w.key and w.key.startswith("sg_rescan_doc_ok")]
+    ok[0].check().run()
+    at.button(key="sg_rescan_doc").click().run()
+    assert len(miljo["calls"]) == 1
+    assert at.button(key="sg_rescan_doc").disabled is True
+
+
+def test_whole_file_page_shows_quality_score(miljo):
+    db.record_quality_page(miljo["conn"], pdf_stem=STEM, page_num=1, score=63.5)
+    db.record_quality_page(miljo["conn"], pdf_stem=STEM, page_num=2, score=100.0,
+                           image_page=True)
+    assert any("Poäng: 63.5" in c.value for c in _kor(STEM, 1).caption)
+    assert any("Poäng: bildsida" in c.value for c in _kor(STEM, 2).caption)

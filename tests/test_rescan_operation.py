@@ -769,3 +769,23 @@ def test_rescan_adapter_passes_profile(monkeypatch, tmp_path) -> None:
     })
 
     assert seen["engine"] == "llm-vision" and seen["profile"] == "Syn"
+
+
+def test_rescan_rescores_the_document(archive) -> None:
+    """Regression: rescan-page räknade aldrig om kvalitetspoängen, så
+    Sidgranskning och rescan-pages såg den gamla poängen för den nya läsningen."""
+    _record(2, "tesseract", OLD_TEXT)
+    conn = state_db.connect()
+    state_db.init_schema(conn)
+    state_db.record_quality_page(conn, pdf_stem=STEM, page_num=2, score=1.0)
+    conn.close()
+
+    rc, sink = _run(archive, _FakeOcr())
+
+    assert rc == 0
+    conn = state_db.connect()
+    score = state_db.get_quality_page(conn, STEM, 2)["score"]
+    conn.close()
+    assert score != 1.0
+    debug = "\n".join(m for lvl, m in sink.lines if lvl == "debug")
+    assert "kvalitetsbedömer" in debug

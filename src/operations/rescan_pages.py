@@ -11,7 +11,7 @@ Urvalet (``select_pages``) är rent läsande. Körningen (``rescan_pages`` /
 3. avgör utfallet per sida ur ``pdf_pages``-radens ögonblicksbild före och efter:
    oförändrad rad = misslyckad sida (historikraden tas bort, gällande läsning
    orörd); annars jämförs den nya läsningen mot den arkiverade med
-   ``comparison_score`` och en sämre ny läsning förkastas (``reject_new_reading``),
+   ``comparison_score``; bara en strikt högre poäng vinner, en sämre eller lika bra ny läsning förkastas (``reject_new_reading``),
 4. slår in sidorna som fick en ny gällande läsning i textfilen
    (``merge_and_normalize(only_pages=…)``).
 
@@ -32,7 +32,6 @@ huvudtråden.
 
 from __future__ import annotations
 
-import tempfile
 import threading
 from collections import Counter
 from collections.abc import Callable
@@ -42,7 +41,7 @@ from pathlib import Path
 
 import db as state_db
 from llm_vision import EXIT_LLM_FATAL
-from page_review import WHOLE_FILE_ENGINE, find_pdf, is_removed_duplicate
+from page_review import WHOLE_FILE_ENGINE, find_pdf, is_removed_duplicate, page_count
 from surya_client import EXIT_SURYA_UNAVAILABLE
 
 from .context import OperationContext, ensure_terminal_context
@@ -58,6 +57,7 @@ from .page_readings import (
     ocr_argv,
     reindex_stems,
     reject_new_reading,
+    rescore_documents,
     row_snapshot,
 )
 from .page_readings import connect as _connect
@@ -69,6 +69,48 @@ _PARTIAL_ATTR = "rescan_partial_result"
 
 # Antal exempel per skäl som visas i debugloggen.
 _EXEMPEL = 3
+
+
+def select_document_pages(
+    root: Path, pdf_stem: str, *, max_pages: int, ctx: OperationContext,
+    engine: str, identity: str | None,
+) -> dict[str, list[int]]:
+    """Dokumentläget: sidorna 1…N i ``pdf_stem`` (N enligt PDF:en).
+
+    Poängtröskel och källa gäller inte — användaren har valt dokumentet. Sidor som
+    redan lästs med ``engine`` (gällande läsning eller historik, även underkända;
+    ``identity`` måste stämma när den anges) hoppas över, så att en upprepad
+    omskanning bara tar de sidor som återstår. ``max_pages`` begränsar som vanligt
+    (0 = alla) och räknas efter bortvalet. En raderad dubblett eller saknad PDF ger
+    ``OperationFailed`` före all skrivning.
+    """
+    with _connect() as conn:
+        row = state_db.get_pdf_file(conn, pdf_stem)
+        if row is not None and is_removed_duplicate(root, pdf_stem,
+                                                    row["tesseract_done_at"]):
+            raise OperationFailed(
+                f"{pdf_stem} är en raderad dubblett (merge_wpu behöll den andra "
+                "kopian) — skanna om den kopia som finns kvar.")
+        pdf = find_pdf(root, pdf_stem)
+        if pdf is None:
+            raise OperationFailed(f"Hittar ingen PDF för {pdf_stem}.")
+        total = page_count(pdf)
+        already = [p for p in range(1, total + 1)
+                   if state_db.page_read_with(conn, pdf_stem, p, engine=engine,
+                                              engine_identity=identity)]
+    pages = [p for p in range(1, total + 1) if p not in set(already)]
+    if max_pages:
+        pages = pages[:max_pages]
+    if already:
+        ctx.log(f"urval (dokumentläge): {len(already)} bortvalda (redan läst med "
+                f"{engine}), t.ex. "
+                f"{', '.join(f'{pdf_stem} s{p}' for p in already[:_EXEMPEL])}",
+                level="debug")
+    ctx.log(f"urval (dokumentläge): {pdf_stem}, {len(pages)} av {total} sidor — "
+            "tröskel och källa gäller inte", level="debug")
+    if not pages and already:
+        ctx.log(f"{pdf_stem}: alla {len(already)} sidor har redan lästs med {engine}.")
+    return {pdf_stem: pages} if pages else {}
 
 
 def select_pages(
@@ -166,7 +208,7 @@ class _DocResult:
 
 def _resolve_page(
     root: Path, stem: str, page: int, before: dict | None, reading_id: int | None,
-    ctx: OperationContext,
+    ctx: OperationContext, *, force: bool = False,
 ) -> str:
     """Avgör sidans utfall efter OCR:en: ``improved``, ``kept_old`` eller ``failed``."""
     after = row_snapshot(stem, page)
@@ -186,10 +228,18 @@ def _resolve_page(
                 level="debug")
         return "improved"
     old_score = comparison_score(old["text"])
-    keep_new = new_score >= old_score
+    # Bara en strikt högre poäng är ett belägg för att den nya läsningen är bättre.
+    # Lika poäng (t.ex. 0 mot 0 för en kodlista som heuristiken inte kan bedöma)
+    # behåller den gällande läsningen; den nya sparas som underkänd i historiken.
+    # ``force``: användaren har valt bort jämförelsen — den nya läsningen blir
+    # gällande ändå, och den gamla finns kvar i historiken för återställning.
+    keep_new = force or new_score > old_score
+    verdict = ("force, behåller ny" if force and new_score <= old_score
+               else "behåller ny" if keep_new
+               else "lika poäng, behåller gammal" if new_score == old_score
+               else "behåller gammal")
     ctx.log(f"rescan-pages {stem} s{page}: ny {after['engine']} poäng {new_score:.1f} "
-            f"mot gammal {old['engine']} poäng {old_score:.1f} → "
-            + ("behåller ny" if keep_new else "behåller gammal"), level="debug")
+            f"mot gammal {old['engine']} poäng {old_score:.1f} → {verdict}", level="debug")
     if keep_new:
         return "improved"
     reject_new_reading(root, stem, page, old, ctx, fallback_score=old_score)
@@ -198,7 +248,7 @@ def _resolve_page(
 
 def _rescan_document(
     root: Path, stem: str, pages: list[int], *, engine: str, profile: str, dpi: int,
-    ctx: OperationContext, stop: threading.Event,
+    ctx: OperationContext, stop: threading.Event, force: bool = False,
 ) -> _DocResult | None:
     """Skanna om dokumentets sidor; ``None`` om körningen redan stoppats.
 
@@ -241,7 +291,7 @@ def _rescan_document(
     try:
         while pending:
             page, before, reading_id = pending[0]
-            outcome = _resolve_page(root, stem, page, before, reading_id, ctx)
+            outcome = _resolve_page(root, stem, page, before, reading_id, ctx, force=force)
             pending.pop(0)
             result.scanned += 1
             if outcome == "improved":
@@ -312,23 +362,7 @@ def _log_dry_run(chosen: dict[str, list[int]], engine: str, ctx: OperationContex
 
 def _rescore(root: Path, stems: list[str], ctx: OperationContext) -> bool:
     """Kvalitetsbedöm ``stems`` (per sida). Sant när kvalitetssteget gav exitkod 0."""
-    import quality
-
-    with tempfile.TemporaryDirectory(prefix="rescan-pages-") as tmp:
-        listing = Path(tmp) / "stammar.txt"
-        listing.write_text("".join(f"{stem}.txt\n" for stem in stems), encoding="utf-8")
-        ctx.log(f"rescan-pages: kvalitetsbedömer {len(stems)} berörda dokument, t.ex. "
-                f"{', '.join(stems[:_EXEMPEL])}", level="debug")
-        rc = quality.run_quality(
-            top=None, limit=None, per_page=True, text_dir=root / "generated" / "text",
-            files_dir=root / "downloaded" / "files", rebuild=False, files_from=listing,
-            context=ctx,
-        )
-    if rc != 0:
-        ctx.log(f"rescan-pages: kvalitetsbedömningen gav exitkod {rc} — poängen för "
-                "de omskannade sidorna kan vara inaktuella", level="error")
-        return False
-    return True
+    return rescore_documents(root, stems, ctx, label="rescan-pages")
 
 
 def _rescore_and_reindex(root: Path, touched: set[str], reindex: bool,
@@ -409,6 +443,7 @@ def _run_documents(
 def rescan_pages(
     *, root: Path, engine: str, profile: str, threshold: float, source: str,
     max_pages: int, dry_run: bool, reindex: bool, jobs: int, dpi: int, context=None,
+    pdf_stem: str | None = None, force: bool = False,
 ) -> RescanSummary:
     """Skanna om sidorna under ``threshold`` och behåll den bättre läsningen per sida."""
     ctx = ensure_terminal_context(context)
@@ -425,11 +460,16 @@ def rescan_pages(
                 level="debug")
 
     ctx.step("Välj sidor")
-    chosen = select_pages(root, engine=engine, identity=identity, threshold=threshold,
-                          source=source, max_pages=max_pages, ctx=ctx)
+    if pdf_stem:
+        chosen = select_document_pages(root, pdf_stem, max_pages=max_pages, ctx=ctx,
+                                       engine=engine, identity=identity)
+    else:
+        chosen = select_pages(root, engine=engine, identity=identity, threshold=threshold,
+                              source=source, max_pages=max_pages, ctx=ctx)
     summary = RescanSummary(selected=sum(len(p) for p in chosen.values()))
     if not chosen:
-        ctx.log(f"Inga sidor under poäng {threshold:g} att skanna om med {engine}.")
+        ctx.log(f"{pdf_stem} har inga sidor att skanna om." if pdf_stem else
+                f"Inga sidor under poäng {threshold:g} att skanna om med {engine}.")
         return summary
     if dry_run:
         _log_dry_run(chosen, engine, ctx)
@@ -439,7 +479,9 @@ def rescan_pages(
         check_vision_profile(vision, ctx)
     parallel = max(1, jobs) if engine == VISION_ENGINE else 1
     ctx.log(f"rescan-pages: {summary.selected} sidor i {len(chosen)} dokument, motor "
-            f"{engine}, dpi {dpi}, {parallel} dokument åt gången", level="debug")
+            f"{engine}, dpi {dpi}, {parallel} dokument åt gången"
+            + (", force: ny läsning ersätter alltid den gamla" if force else ""),
+            level="debug")
 
     touched: set[str] = set()
     failed_in_row = 0
@@ -464,7 +506,7 @@ def rescan_pages(
 
     def worker(stem: str, pages: list[int]) -> _DocResult | None:
         return _rescan_document(root, stem, pages, engine=engine, profile=profile,
-                                dpi=dpi, ctx=ctx, stop=stop)
+                                dpi=dpi, ctx=ctx, stop=stop, force=force)
 
     ctx.step("Skanna om sidor", total=len(chosen))
     try:
@@ -508,9 +550,11 @@ def _log_summary(summary: RescanSummary, ctx: OperationContext, *, prefix: str =
 def run_rescan_pages(
     *, root: Path, engine: str, profile: str, threshold: float, source: str,
     max_pages: int, dry_run: bool, reindex: bool, jobs: int, dpi: int, context=None,
+    pdf_stem: str | None = None, force: bool = False,
 ) -> int:
     """Kör ``rescan_pages``; 0 när ingen sida misslyckades, annars 1."""
     summary = rescan_pages(root=root, engine=engine, profile=profile, threshold=threshold,
                            source=source, max_pages=max_pages, dry_run=dry_run,
-                           reindex=reindex, jobs=jobs, dpi=dpi, context=context)
+                           reindex=reindex, jobs=jobs, dpi=dpi, context=context,
+                           pdf_stem=pdf_stem, force=force)
     return summary.exit_code

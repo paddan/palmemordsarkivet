@@ -8,6 +8,7 @@ att ingenting går förlorat och allt kan återställas.
 from __future__ import annotations
 
 import sys
+import tempfile
 from collections.abc import Iterable, Mapping
 from contextlib import closing
 from pathlib import Path
@@ -246,3 +247,28 @@ def reindex_stems(root: Path, stems: Iterable[str], ctx: OperationContext) -> No
     }
     params.update(root=root, rebuild=False, only_stems=set(wanted))
     ingest_adapter(ctx, params)
+
+
+def rescore_documents(root: Path, stems: list[str], ctx: OperationContext, *, label: str) -> bool:
+    """Kvalitetsbedöm ``stems`` per sida. Sant när kvalitetssteget gav exitkod 0.
+
+    Körs efter varje omskanning och återställning, så att Sidgranskning och
+    urvalet i ``rescan-pages`` ser poängen för den läsning som nu gäller.
+    """
+    import quality
+
+    with tempfile.TemporaryDirectory(prefix=f"{label}-") as tmp:
+        listing = Path(tmp) / "stammar.txt"
+        listing.write_text("".join(f"{stem}.txt\n" for stem in stems), encoding="utf-8")
+        ctx.log(f"{label}: kvalitetsbedömer {len(stems)} berörda dokument, t.ex. "
+                f"{', '.join(stems[:3])}", level="debug")
+        rc = quality.run_quality(
+            top=None, limit=None, per_page=True, text_dir=root / "generated" / "text",
+            files_dir=root / "downloaded" / "files", rebuild=False, files_from=listing,
+            context=ctx,
+        )
+    if rc != 0:
+        ctx.log(f"{label}: kvalitetsbedömningen gav exitkod {rc} — poängen för de "
+                "omskannade sidorna kan vara inaktuella", level="error")
+        return False
+    return True

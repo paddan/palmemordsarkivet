@@ -776,7 +776,12 @@ vars PDF saknas väljs aldrig. `--max-pages` tar de sämsta sidorna först och `
 bara urvalet — det är kostnadsbromsen för `llm-vision`. **Behåll den bättre läsningen:** den gällande
 läsningen arkiveras före OCR (samma `archive_current` som `rescan-page`); därefter jämförs ny och
 gammal text med `page_readings.comparison_score` (normaliserad text, kvalitetspoäng utan hunspell).
-En sämre (eller tom) ny läsning som faktiskt skrevs förkastas: den lagras i historiken med skälet
+En sämre, **lika bra** eller tom ny läsning som faktiskt skrevs förkastas — bara en strikt högre
+poäng vinner. Oavgjort räknades tidigare som förbättring: en provkörning med `vision` "förbättrade"
+20 av 20 sidor, men 15 var 0 mot 0 (kodlistor) och vision-texten var sämre än Suryas. Poängen är en
+heuristik, inte ett facit, och får inte tolkas som att en motor är bättre. `--force` (Sidgranskningens
+*Ersätt alltid*) hoppar över jämförelsen så den nya läsningen alltid blir gällande — den gamla
+arkiveras som vanligt (`rescan`) — men urvalsregeln "redan läst med motorn" gäller ändå. Den förkastade läsningen lagras i historiken med skälet
 **`rejected`** (visas i Sidgranskning som "underkänd vid jämförelse"; schemaversion 13) och den gamla
 läsningen återställs. En kraschad eller avbruten läsning blir **inte** `rejected`: är
 `pdf_pages`-raden oförändrad efter OCR räknas sidan som misslyckad — historikraden tas bort och den
@@ -786,7 +791,10 @@ inte väljer den igen; raden får jämförelsepoängen (`reject_new_reading(fall
 gamla läsningen saknade egen poäng, så Sidgranskning inte visar "–". **`llm-vision` är inte `llm`:** `llm` (`llm_correct.py`) rättar redan OCR:ad text
 utan bild; `llm-vision` läser sidbilden (PNG, högst 2000 px längsta sida) via en OpenAI-kompatibel
 profil (Claude stöds inte) och skickar bilden till profilens endpoint — extern tjänst om den inte är
-localhost. Svarta fält infogas av pixeldetekteringen, inte av modellen. Profilen provas med en
+localhost. Svarta fält märks av modellen med `[MASKAD]` där de står (ägarbeslut 2026-11-15:
+modellen skrev annars egna `[svärtat]` på rätt ställe *och* pixeldetekteringen lade till lika många
+`[MASKAD]` på ungefärliga ställen — dubbla markörer); `llm_vision.normalize_mask_markers` skriver om
+modellens varianter och `apply_masks` infogar pixelblocken bara när modellen inte skrev någon markör. Profilen provas med en
 provbild före körningen (`check_vision_profile`). Exitkod **4** (`EXIT_LLM_FATAL`: 401/402/403/429 efter
 återförsök) avbryter resten av körningen på samma sätt som exitkod 3 för Surya (inga markeringar som
 permanent fel); fem dokument i rad där varje sida misslyckas avbryter också. Dokument körs parallellt
@@ -803,6 +811,21 @@ står kvar, eftersom den rena texten indexeras, citeras och poängsätts. Admin 
 `--profile` (bara för `llm-vision`, ignoreras annars); Sidgranskning visar en profilrullista
 (`llm_vision.vision_profile_names`: Admins profilkatalog avsmalnad till OpenAI-kompatibla profiler)
 när `llm-vision` väljs och spärrar *Skanna om sidan* när ingen sådan profil finns.
+**Sidgranskningens poäng** är `quality_pages` (via `db.get_quality_page`), inte
+`pdf_pages.score` (OCR-tidens poäng, som skilde sig för var tredje sida och saknas för
+`hel-fils-OCR`-sidor, som därför alltid visade "–"). `rescan-page` kör därför
+`page_readings.rescore_documents` (delas med `rescan-pages`) efter varje omskanning och
+återställning — annars visade sidan den gamla läsningens poäng.
+**Dokumentläget (`--pdf-stem`)**: `rescan-pages` med en stam väljer alla sidor 1…N i dokumentet
+(`select_document_pages`) — tröskel och källa gäller inte, men regeln "redan läst med motorn"
+(`db.page_read_with`, även historik och underkända läsningar) gör det, så en upprepad omskanning
+med samma motor bara tar återstående sidor; `--max-pages` (efter bortvalet) och `--dry-run` gäller, och jämförelsen per sida är densamma. En raderad dubblett eller
+saknad PDF ger `OperationFailed` före skrivning. Sidgranskningens *Skanna om hela dokumentet*
+startar det (`DOC_OPERATION`); med `llm-vision` krävs en bekräftelse med sidantalet, och
+`_rescan_target` ger `(stem, None)` för ett dokumentjobb så att statusen visas på alla sidor.
+Bekräftelsens nyckel bär stam, sidantal, motor och profil och rensas när jobbet startar — annars
+följde en ikryssad ruta med till ett annat, större dokument (Streamlit behåller en nycklad
+kryssruta när etiketten ändras).
 
 **Sidgranskningens statusfragment (`src/pages/9_Sidgranskning.py`)**: sidans långlivade `state_conn()` används bara i sidkörningen. `st.fragment(run_every=2)` kan köras på en annan tråd, så slutstatusen läses med en egen `db.connect()` som stängs i `finally` i samma anrop och tråd; `check_same_thread` är kvar på. Lägg aldrig tillbaka den fångade anslutningen i fragmentet — det ger `sqlite3.ProgrammingError` när jobbet avslutas.
 

@@ -463,10 +463,13 @@ def test_rescan_pages_operation_defaults() -> None:
         "surya-layout", "surya", "tesseract", "vision", "llm-vision")
     assert by_name["source"].choices == ("any", "files", "wpu")
     assert _defaults("rescan-pages") | {"root": None} == {
-        "root": None, "engine": "surya-layout", "profile": "", "threshold": 70.0,
-        "source": "any", "max_pages": 0, "dry_run": False, "reindex": True,
+        "root": None, "pdf_stem": None, "engine": "surya-layout", "profile": "",
+        "threshold": 70.0,
+        "source": "any", "max_pages": 0, "dry_run": False, "force": False, "reindex": True,
         "jobs": 4, "dpi": 300,
     }
+    assert parse_operation_args(definition, ["--pdf-stem", "doc"])["pdf_stem"] == "doc"
+    assert parse_operation_args(definition, ["--force"])["force"] is True
     params = parse_operation_args(definition, ["--max-pages", "2", "--dry-run", "--no-reindex"])
     assert params["max_pages"] == 2 and params["dry_run"] is True
     assert params["reindex"] is False

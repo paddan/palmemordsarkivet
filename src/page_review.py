@@ -64,6 +64,8 @@ class PageView:
     pdf_available: bool = False
     # dpi som layoutblockens bbox är i (sidan kan ha renderats under den begärda)
     ocr_dpi: int = LEGACY_LAYOUT_DPI
+    # kvalitetssteget räknade sidan som bildsida (för lite text att bedöma)
+    image_page: bool = False
 
 
 def find_pdf(root: Path, pdf_stem: str) -> Path | None:
@@ -165,6 +167,13 @@ def load_page_view(
         count = text_page_count(root, pdf_stem) or 0
         log.debug("PDF saknas/oläsbar för %s, sidantal ur textfilen: %s", pdf_stem, count)
     row = state_db.get_page_row(conn, pdf_stem, page_num)
+    # Poängen är kvalitetsstegets (quality_pages) — samma som histogrammet och
+    # rescan-pages väljer på; OCR-radens egen poäng bara när sidan saknar kvalitetsrad.
+    quality_row = state_db.get_quality_page(conn, pdf_stem, page_num)
+    quality_score = quality_row["score"] if quality_row is not None else None
+    image_page = bool(quality_row is not None and quality_row["image_page"])
+    if quality_row is None:
+        log.debug("%s s.%s saknar kvalitetsrad — kör quality --per-page", pdf_stem, page_num)
     readings = [dict(r) for r in state_db.list_page_readings(conn, pdf_stem, page_num)]
     if row is not None and row["text"] is None:
         # Äldre rad med text NULL (markör från tidiga körningar): läsningen finns
@@ -175,9 +184,10 @@ def load_page_view(
     if row is None:
         return PageView(
             pdf_stem=pdf_stem, page_num=page_num, page_count=count,
-            current_text=current, engine=WHOLE_FILE_ENGINE, score=None,
+            current_text=current, engine=WHOLE_FILE_ENGINE, score=quality_score,
             processed_at=None, engine_identity=None, markdown=None,
             blocks=[], stale=False, readings=readings, pdf_available=available,
+            image_page=image_page,
         )
     blocks: list[LayoutBlock] = []
     ocr_dpi = LEGACY_LAYOUT_DPI
@@ -191,10 +201,11 @@ def load_page_view(
     stale = current is not None and not markdown_is_fresh(row["text"], current)
     return PageView(
         pdf_stem=pdf_stem, page_num=page_num, page_count=count,
-        current_text=current, engine=row["engine"], score=row["score"],
+        current_text=current, engine=row["engine"],
+        score=quality_score if quality_score is not None else row["score"],
         processed_at=row["processed_at"], engine_identity=row["engine_identity"],
         markdown=row["markdown"], blocks=blocks, stale=stale, readings=readings,
-        pdf_available=available, ocr_dpi=ocr_dpi,
+        pdf_available=available, ocr_dpi=ocr_dpi, image_page=image_page,
     )
 
 

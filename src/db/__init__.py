@@ -369,6 +369,9 @@ from .pipeline import (
     delete_wpu_decisions as delete_wpu_decisions,
 )
 from .pipeline import (
+    document_scores_by_source as document_scores_by_source,
+)
+from .pipeline import (
     files_needing_ingest as files_needing_ingest,
 )
 from .pipeline import (
@@ -400,6 +403,9 @@ from .pipeline import (
 )
 from .pipeline import (
     get_pdf_file as get_pdf_file,
+)
+from .pipeline import (
+    get_quality_page as get_quality_page,
 )
 from .pipeline import (
     is_downloaded as is_downloaded,
@@ -508,6 +514,12 @@ from .pipeline import (
 )
 from .pipeline import (
     page_read_with as page_read_with,
+)
+from .pipeline import (
+    page_scores_by_engine as page_scores_by_engine,
+)
+from .pipeline import (
+    quality_histogram as quality_histogram,
 )
 from .pipeline import (
     record_download as record_download,
@@ -638,6 +650,10 @@ __all__ = [
     "list_tesseract_failed_stems",
     "list_tesseract_skip_stems",
     "list_worst_quality",
+    "quality_histogram",
+    "get_quality_page",
+    "document_scores_by_source",
+    "page_scores_by_engine",
     "list_wpu_decisions_with_ocr",
     "llm_corrected",
     "LLM_USAGE_SCHEMA_SQL",

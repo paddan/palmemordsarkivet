@@ -193,3 +193,23 @@ def test_ocr_pages_llm_vision_requires_known_profile(setup, monkeypatch) -> None
 
     rc, rows, _ = run(profile=None)
     assert rc == ocr_pages.EXIT_LLM_FATAL and rows == {}
+
+
+def test_ocr_pages_llm_vision_model_markers_are_not_doubled(setup, monkeypatch) -> None:
+    images, run, *_ = setup
+    images[1] = _masked_page()
+    monkeypatch.setattr(
+        llm_vision, "transcribe",
+        lambda image, profile, *, client=None: VisionResult(
+            "Rad ett\nRad två bodde på [svärtat] där\nRad tre", None, None),
+    )
+
+    rc, rows, sink = run()
+
+    assert rc == 0
+    row = rows[1]
+    assert "svärtat" not in row["markdown"] and "svärtat" not in row["text"]
+    assert row["markdown"].count("[MASKAD]") == 1
+    assert "bodde på [MASKAD] där" in row["text"]
+    debug = "\n".join(m for lvl, m in sink.lines if lvl == "debug")
+    assert "modellens maskeringsmarkörer" in debug

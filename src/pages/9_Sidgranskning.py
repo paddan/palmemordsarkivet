@@ -35,6 +35,9 @@ from surya_layout import LayoutBlock  # noqa: E402
 log = web_log.get_logger("sidgranskning")
 
 OPERATION = "rescan-page"
+# Hela dokumentet: rescan-pages med pdf_stem (alla sidor, bästa läsningen per sida).
+DOC_OPERATION = "rescan-pages"
+CONFIRM_KEY = "sg_rescan_doc_ok"
 VIEW_DPI = 110
 EXCERPT = 80
 TERMINAL_JOB_STATUSES = {"succeeded", "failed", "cancelled", "interrupted"}
@@ -67,12 +70,15 @@ def _page_png(pdf_path: str, page: int, dpi: int, mtime: float) -> bytes:
     return buf.getvalue()
 
 
-def _rescan_target(job: dict | None) -> tuple[str, int] | None:
-    """(stem, sida) för ett ``rescan-page``-jobb, annars ``None``."""
-    if not job or job.get("operation") != OPERATION:
+def _rescan_target(job: dict | None) -> tuple[str, int | None] | None:
+    """(stem, sida) för ett ``rescan-page``-jobb, (stem, None) för ett
+    ``rescan-pages``-jobb på ett helt dokument, annars ``None``."""
+    if not job or job.get("operation") not in (OPERATION, DOC_OPERATION):
         return None
     try:
         params = json.loads(job.get("params_json") or "{}")
+        if job.get("operation") == DOC_OPERATION:
+            return (str(params["pdf_stem"]), None) if params.get("pdf_stem") else None
         return str(params["pdf_stem"]), int(params["page"])
     except (ValueError, KeyError, TypeError):
         return None
@@ -237,7 +243,8 @@ with hoger:
         with tabs["Formulärfält"]:
             st.dataframe(field_rows, hide_index=True, width="stretch")
 
-    meta = [f"Motor: {view.engine}", f"Poäng: {_fmt_score(view.score)}"]
+    score_text = "bildsida" if view.image_page else _fmt_score(view.score)
+    meta = [f"Motor: {view.engine}", f"Poäng: {score_text}"]
     if view.processed_at:
         meta.append(f"Tidpunkt: {view.processed_at}")
     if view.engine_identity:
@@ -249,39 +256,50 @@ with hoger:
 # --- Omskanning ---------------------------------------------------------------
 job = _job_service.reconcile_active_job()
 busy = _active(job)
-this_page_running = busy and _rescan_target(job) == (stem, page)
+target = _rescan_target(job) if busy else None
+# Ett dokumentjobb gäller varje sida i dokumentet.
+doc_running = target == (stem, None)
+this_page_running = target == (stem, page) or doc_running
 
 
-def _start(params: dict[str, object], what: str) -> None:
-    """Starta ``rescan-page`` med registrets parameternamn."""
-    full = {"root": str(root), "pdf_stem": stem, "page": page, "dpi": ocr_dpi, **params}
+def _start(params: dict[str, object], what: str, operation: str = OPERATION) -> None:
+    """Starta ``rescan-page`` (eller ``rescan-pages`` för hela dokumentet) med
+    registrets parameternamn."""
+    full: dict[str, object] = {"root": str(root), "pdf_stem": stem, "dpi": ocr_dpi, **params}
+    if operation == OPERATION:
+        full["page"] = page
     if "restore_reading" in full:
         log.debug("startar %s för %s s.%s (%s): reindex=%s restore=%s",
-                  OPERATION, stem, page, what, full.get("reindex"), full["restore_reading"])
+                  operation, stem, page, what, full.get("reindex"), full["restore_reading"])
     else:
         log.debug("startar %s för %s s.%s (%s): motor=%s profil=%s reindex=%s",
-                  OPERATION, stem, page, what, full.get("engine"), full.get("profile", ""),
+                  operation, stem, page, what, full.get("engine"), full.get("profile", ""),
                   full.get("reindex"))
     try:
-        started = _job_service.start_job(OPERATION, full)
+        started = _job_service.start_job(operation, full)
     except db.ActiveAdminJobError as exc:
-        log.debug("rescan-page startades inte, annat jobb aktivt: %s", exc)
+        log.debug("%s startades inte, annat jobb aktivt: %s", operation, exc)
         st.error("Ett annat jobb körs redan — vänta tills det är klart och försök igen.")
         return
     except (OperationFailed, ValueError, RuntimeError, OSError) as exc:
-        log.debug("rescan-page kunde inte startas för %s s.%s: %s", stem, page, exc)
+        log.debug("%s kunde inte startas för %s s.%s: %s", operation, stem, page, exc)
         st.error(f"Jobbet kunde inte startas: {exc}")
         return
-    log.debug("rescan-page startat som jobb %s", started.get("id"))
+    log.debug("%s startat som jobb %s", operation, started.get("id"))
+    if operation == DOC_OPERATION:
+        # En ny betald körning kräver en ny bekräftelse.
+        for key in [k for k in st.session_state if str(k).startswith(CONFIRM_KEY)]:
+            del st.session_state[key]
     st.rerun()
 
 
 done = st.session_state.pop("sg_job_done", None)
 if done:
+    what = "hela dokumentet" if done.get("page") is None else f"sidan {done['page']}"
     if done["status"] == "succeeded":
-        st.success(f"Jobbet för sidan {done['page']} är klart — den nya läsningen visas.")
+        st.success(f"Jobbet för {what} är klart — den nya läsningen visas.")
     else:
-        st.error(f"Jobbet för sidan {done['page']} slutade med status {done['status']}.")
+        st.error(f"Jobbet för {what} slutade med status {done['status']}.")
 
 with st.container(border=True):
     st.markdown("**Skanna om sidan**")
@@ -312,6 +330,37 @@ with st.container(border=True):
             if vision:
                 params["profile"] = profile
             _start(params, "omskanning")
+    # Hela dokumentet: varje sida behåller den bättre läsningen (rescan-pages).
+    c_confirm, c_doc_button = st.columns([6, 2], vertical_alignment="bottom")
+    confirmed = True
+    with c_confirm:
+        if vision and profile:
+            # Nyckeln bär dokument, sidantal, motor och profil: en bekräftelse gäller
+            # bara det den visade, och följer inte med till ett annat (större) dokument.
+            confirmed = st.checkbox(
+                f"Skicka upp till {total} sidor till profilens endpoint (kostnad per sida; redan lästa hoppas över)",
+                key=f"{CONFIRM_KEY}:{stem}:{total}:{engine}:{profile}")
+        else:
+            st.caption("Hela dokumentet: varje sida som inte redan lästs med motorn "
+                       "skannas om och behåller den bättre läsningen; den andra sparas "
+                       "i historiken.")
+        force = st.checkbox(
+            "Ersätt alltid (ingen poängjämförelse)", key="sg_rescan_doc_force",
+            help="Den nya läsningen blir gällande även om den får lägre poäng. Den "
+                 "gamla sparas i historiken och kan återställas. Sidor som redan "
+                 "lästs med motorn hoppas ändå över.")
+    with c_doc_button:
+        if st.button("Skanna om hela dokumentet", key="sg_rescan_doc",
+                     disabled=(busy or pdf_path is None or (vision and not profile)
+                               or not confirmed),
+                     width="stretch"):
+            doc_params: dict[str, object] = {"engine": engine, "reindex": reindex,
+                                             "force": force}
+            if vision:
+                doc_params["profile"] = profile
+            log.debug("hela dokumentet %s (%s sidor) skannas om med %s (force=%s)",
+                      stem, total, engine, force)
+            _start(doc_params, "hela dokumentet", DOC_OPERATION)
     if vision and not vision_names:
         log.debug("llm-vision vald men ingen OpenAI-kompatibel LLM-profil finns")
         st.caption("Motorn llm-vision kräver en OpenAI-kompatibel LLM-profil med "
@@ -347,15 +396,18 @@ with st.container(border=True):
                 finally:
                     status_conn.close()
                 status = row["status"] if row is not None else "okänd"
-                log.debug("rescan-jobb %s för %s s.%s avslutat: %s", job_id, stem, page, status)
+                log.debug("rescan-jobb %s för %s %s avslutat: %s", job_id, stem,
+                          "hela dokumentet" if doc_running else f"s.{page}", status)
                 if pdf_path is not None:
                     try:
                         _page_png.clear(str(pdf_path), page, VIEW_DPI, pdf_path.stat().st_mtime)
                     except OSError as exc:
                         log.debug("sidbildens cache rensades inte för %s: %s", pdf_path, exc)
-                st.session_state["sg_job_done"] = {"status": status, "page": page}
+                st.session_state["sg_job_done"] = {
+                    "status": status, "page": None if doc_running else page}
                 st.rerun(scope="app")
-            st.caption(f"Jobbet för den här sidan körs ({(current or {}).get('status')}).")
+            what = "hela dokumentet" if doc_running else "den här sidan"
+            st.caption(f"Jobbet för {what} körs ({(current or {}).get('status')}).")
             tail = _job_service.read_log_tail(log_path, lines=20) if log_path.name else ""
             st.code(tail or "(ingen loggrad ännu)", language=None)
 

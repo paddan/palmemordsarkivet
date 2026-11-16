@@ -191,6 +191,7 @@ def run_quality(
     *,
     top: int | None,
     limit: int | None,
+    histogram: bool = False,
     per_page: bool,
     text_dir: Path,
     files_dir: Path,
@@ -242,10 +243,11 @@ def run_quality(
                 files_to_score.append(f)
 
     if not files_to_score:
-        ctx.log(
-            f"Alla {len(files_all)} filer aktuella i quality-tabellen — inget att göra.",
-            level="error",
-        )
+        ctx.log(f"Alla {len(files_all)} filer aktuella i quality-tabellen — inget att göra.")
+        if top:
+            _log_worst_from_db(ctx, conn, top)
+        if histogram:
+            _log_histogram(ctx, conn)
         return 0
 
     prefix = f"Bedömer {len(files_to_score)} filer"
@@ -343,20 +345,98 @@ def run_quality(
                 swe = f"swe={float(pct):.0%}" if pct not in (None, "") else "swe=?"
                 ctx.log(f"  {float(r['score']):5.1f}  [{r.get('source', '?'):10}] {swe:10}  {r['file'][:90]}")
         else:
-            ctx.log(f"\nVärsta {top} (från quality-tabellen):")
-            for r in state_db.list_worst_quality(conn, top):
-                pct = r["pct_swe"]
-                swe = f"swe={float(pct):.0%}" if pct is not None else "swe=?"
-                src = r["source_type"] or "?"
-                ctx.log(f"  {float(r['score']):5.1f}  [{src:10}] {swe:10}  {r['pdf_stem']}.txt"[:120])
+            _log_worst_from_db(ctx, conn, top)
+
+    if histogram:
+        _log_histogram(ctx, conn)
 
     return 0
+
+
+def _log_histogram(ctx, conn) -> None:
+    """Skriv poängfördelningen i 10-poängsintervall för dokument och sidor,
+    med kumulativ kolumn ("under övre gräns") så trösklar kan läsas av direkt."""
+    for pages in (False, True):
+        buckets, images = state_db.quality_histogram(conn, pages=pages)
+        counts = dict(buckets)
+        total = sum(counts.values())
+        kind = "sidor" if pages else "dokument"
+        extra = f", {images} bildsidor utelämnade" if pages else ""
+        ctx.log(f"\nKvalitetsfördelning — {kind} ({total} st{extra}):")
+        if not total:
+            ctx.log("  (inga poängsatta rader — kör med --per-page för sidpoäng)" if pages
+                    else "  (inga poängsatta rader)")
+            continue
+        ctx.log(f"  {'poäng':<8}{'antal':>8}{'andel':>9}   {'under':<6}{'kumulativt':>12}")
+        cumulative = 0
+        for b in range(10):
+            n = counts.get(b, 0)
+            cumulative += n
+            label = "90–100" if b == 9 else f"{b * 10}–{b * 10 + 9}"
+            under = "≤ 100" if b == 9 else f"< {(b + 1) * 10}"
+            ctx.log(f"  {label:<8}{n:>8}{100 * n / total:>8.1f}%   {under:<6}"
+                    f"{cumulative:>7} {100 * cumulative / total:>5.1f}%")
+        ctx.log(f"histogram {kind}: {buckets}", level="debug")
+
+    _log_grouped(ctx, "Poäng per OCR-motor — sidor (bildsidor utelämnade)", "motor",
+                 [(ENGINE_LABELS.get(r["engine"], r["engine"]), r["score"])
+                  for r in state_db.page_scores_by_engine(conn) if not r["image_page"]])
+    ctx.log("  tesseract = hel fil eller omskannad sida, textlager = PDF:ens egen text "
+            "(ingen OCR), llm = LLM-rättad OCR-text.")
+    ctx.log("  Jämför inte motorerna rakt av: Surya körs bara på sidor Tesseract läste "
+            "dåligt, och en omskannad sida räknas bara under motorn som vann.")
+    _log_grouped(ctx, "Poäng per källtyp — dokument", "källtyp",
+                 [(r["source_type"], r["score"])
+                  for r in state_db.document_scores_by_source(conn)])
+
+
+# Visningsnamn för ``pdf_pages.engine``: radbaserad Surya lagras som ``surya``.
+ENGINE_LABELS = {"surya": "surya-lines"}
+
+# Gränserna i tabellerna per motor/källtyp: antal med poäng under varje gräns.
+_GROUP_LIMITS = (10, 30, 50, 70, 90)
+
+
+def _log_grouped(ctx, title: str, key_label: str, rows: list[tuple[str, float]]) -> None:
+    """Skriv antal, median, medel och antal under varje gräns per grupp."""
+    groups: dict[str, list[float]] = {}
+    for key, score in rows:
+        groups.setdefault(key, []).append(float(score))
+    ctx.log(f"\n{title}:")
+    if not groups:
+        ctx.log("  (inga poängsatta rader)")
+        return
+    width = max(len(key_label), *(len(k) for k in groups)) + 2
+    head = "".join(f"{'< ' + str(g):>13}" for g in _GROUP_LIMITS)  # 7 + 5 + "%"
+    ctx.log(f"  {key_label:<{width}}{'antal':>8}{'median':>8}{'medel':>8}{head}")
+    for key, scores in sorted(groups.items(), key=lambda kv: -len(kv[1])):
+        scores.sort()
+        n = len(scores)
+        mid = n // 2
+        median = scores[mid] if n % 2 else (scores[mid - 1] + scores[mid]) / 2
+        cells = ""
+        for g in _GROUP_LIMITS:
+            under = sum(1 for s in scores if s < g)
+            cells += f"{under:>7}{100 * under / n:>5.1f}%"
+        ctx.log(f"  {key:<{width}}{n:>8}{median:>8.1f}{sum(scores) / n:>8.1f}{cells}")
+
+
+def _log_worst_from_db(ctx, conn, top: int) -> None:
+    """Skriv de ``top`` sämsta raderna ur quality-tabellen till loggen."""
+    ctx.log(f"\nVärsta {top} (från quality-tabellen):")
+    for r in state_db.list_worst_quality(conn, top):
+        pct = r["pct_swe"]
+        swe = f"swe={float(pct):.0%}" if pct is not None else "swe=?"
+        src = r["source_type"] or "?"
+        ctx.log(f"  {float(r['score']):5.1f}  [{src:10}] {swe:10}  {r['pdf_stem']}.txt"[:120])
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--top", type=int, help="visa även värsta N i terminalen")
+    ap.add_argument("--histogram", action="store_true",
+                    help="visa poängfördelningen (dokument och sidor) i 10-poängsintervall")
     ap.add_argument("--limit", type=int, help="bara N första filerna (för testkörning)")
     ap.add_argument("--per-page", action="store_true",
                     help="bedöm även per sida och skriv till quality_pages-tabellen")
@@ -373,6 +453,7 @@ def main() -> int:
     return run_quality(
         top=args.top,
         limit=args.limit,
+        histogram=args.histogram,
         per_page=args.per_page,
         text_dir=Path(args.text_dir),
         files_dir=Path(args.files_dir),

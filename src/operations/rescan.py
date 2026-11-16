@@ -47,6 +47,7 @@ from .page_readings import (
     load_vision_profile,
     ocr_argv,
     reindex_stems,
+    rescore_documents,
     row_snapshot,
 )
 from .page_readings import (
@@ -235,6 +236,7 @@ def run_rescan_page(
                 "pdf_pages-raden borttagen — textfilen är den gällande läsningen",
                 level="debug")
 
+    rescore_documents(root, [pdf_stem], ctx, label="rescan-page")
     if reindex:
         ctx.check_cancelled()
         reindex_stems(root, {pdf_stem}, ctx)

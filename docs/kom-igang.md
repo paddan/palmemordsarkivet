@@ -215,12 +215,18 @@ och klicka **Skanna om sidan** — det startar ett bakgrundsjobb (samma som
 Admin → OCR → *Skanna om sida*) och sidan visar jobbets logg tills det är klart.
 Den tidigare läsningen sparas under **Historik**, där **Återställ** lägger
 tillbaka den om omskanningen blev sämre. Saknas PDF:en går sidan inte att
-skanna om, men en sparad läsning kan fortfarande återställas. Länken
+skanna om, men en sparad läsning kan fortfarande återställas. **Skanna om hela
+dokumentet** skannar om dokumentets alla sidor med vald motor; sidor som redan lästs
+med motorn hoppas över, så en andra körning tar bara de som återstår. Varje sida
+behåller den bättre läsningen, utom när **Ersätt alltid** är ikryssad — då blir den
+nya läsningen gällande och den gamla ligger kvar i historiken. Länken
 `?doc=<filstam>&page=<n>` öppnar en sida direkt.
 
 Vill du skanna om många dåliga sidor på en gång: Admin → OCR → *Skanna om sidor*
 (eller `./rescan_pages.sh --dry-run` för att först se urvalet). Den bättre läsningen
-behålls, och en sämre sparas i historiken som underkänd. Admin ber dig bekräfta innan
+behålls, och en sämre sparas i historiken som underkänd (`--force` hoppar över
+jämförelsen). Sidor som redan lästs med samma motor väljs inte igen. Hur poängen
+fördelar sig, även per motor, visar `./quality.sh --histogram`. Admin ber dig bekräfta innan
 jobbet startar. Med motorn `llm-vision` väljer du en LLM-profil med bildmodell (även i
 Sidgranskning); en extern profil får sidbilderna och kostar per sida.
 

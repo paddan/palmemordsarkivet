@@ -80,6 +80,7 @@ def quality_adapter(context, params: Mapping) -> None:
     rc = quality.run_quality(
         top=params.get("top"),
         limit=params.get("limit"),
+        histogram=params["histogram"],
         per_page=params["per_page"],
         text_dir=params["text_dir"],
         files_dir=params["files_dir"],
@@ -280,6 +281,8 @@ def rescan_pages_adapter(context, params: Mapping) -> None:
         jobs=params["jobs"],
         dpi=params["dpi"],
         context=context,
+        pdf_stem=params.get("pdf_stem") or None,
+        force=bool(params.get("force")),
     )
     _raise_on_failure("rescan-pages", rc)
 

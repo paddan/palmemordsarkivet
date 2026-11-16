@@ -12,6 +12,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 import db as state_db  # noqa: E402
 from operations.context import OperationContext  # noqa: E402
+from operations.exceptions import OperationFailed  # noqa: E402
 
 
 class _Sink:
@@ -289,6 +290,52 @@ def test_worse_reading_is_rejected_and_restored(root, quality_calls) -> None:
     assert "poäng 0.0 mot gammal tesseract poäng 91.8" in debug
 
 
+def test_tie_keeps_old_reading(root, quality_calls) -> None:
+    """Regression: lika jämförelsepoäng (t.ex. 0 mot 0 för en kodlista) räknades
+    som förbättring och den nya läsningen ersatte den gamla utan belägg."""
+    other_bad = "q@%§"
+    from operations.page_readings import comparison_score
+
+    assert comparison_score(other_bad) == comparison_score(BAD)
+    _pdf_doc(root, "doc", {1: BAD}, rows={1: BAD})
+    fake = _FakeOcr({"doc": {1: other_bad}})
+
+    summary, sink = _scan(root, fake)
+
+    assert summary.kept_old == 1 and summary.improved == 0
+    assert _row("doc", 1)["text"] == BAD
+    assert _file_page(root, "doc", 1) == BAD
+    assert sorted((r["reason"], r["text"]) for r in _readings()) == [
+        ("rejected", other_bad), ("rescan", BAD)]
+    debug = "\n".join(m for lvl, m in sink.lines if lvl == "debug")
+    assert "lika poäng" in debug
+
+
+def test_force_keeps_worse_new_reading(root, quality_calls) -> None:
+    _pdf_doc(root, "doc", {1: GOOD}, rows={1: GOOD})
+    fake = _FakeOcr({"doc": {1: BAD}})
+
+    summary, sink = _scan(root, fake, force=True)
+
+    assert summary.improved == 1 and summary.kept_old == 0
+    assert _row("doc", 1)["text"] == BAD
+    assert _file_page(root, "doc", 1) == BAD
+    # den gamla läsningen finns kvar i historiken och kan återställas
+    assert [(r["reason"], r["text"]) for r in _readings()] == [("rescan", GOOD)]
+    debug = "\n".join(m for lvl, m in sink.lines if lvl == "debug")
+    assert "force" in debug and "behåller ny" in debug
+
+
+def test_force_still_skips_pages_read_with_the_engine(root, quality_calls) -> None:
+    _pdf_doc(root, "doc", {1: BAD, 2: BAD}, rows={1: BAD, 2: BAD})
+    _read("doc", 1, "surya-layout")
+    fake = _FakeOcr({"doc": {2: GOOD}})
+
+    _scan(root, fake, force=True)
+
+    assert _pages_scanned(fake) == [2]
+
+
 def test_failed_page_keeps_old_and_continues(root, quality_calls) -> None:
     from operations.rescan_pages import run_rescan_pages
 
@@ -512,3 +559,105 @@ def test_cancel_rescores_touched_documents_but_does_not_reindex(
     # det riktiga kvalitetssteget kontrollerar avbrott per fil: det får inte stoppa här
     quality_calls.calls[0]["context"].check_cancelled()
     assert ingest_calls.calls == []
+
+
+# --- Dokumentläget (--pdf-stem) ----------------------------------------------
+
+def _pages_scanned(fake: _FakeOcr) -> list[int]:
+    return [int(p) for argv in fake.calls for p in argv[argv.index("--pages") + 1].split(",")]
+
+
+def test_document_mode_selects_every_page_regardless_of_score(
+        root, quality_calls) -> None:
+    _pdf_doc(root, "doc", {1: BAD, 2: BAD, 3: BAD}, score=90)
+    _read("doc", 1, "tesseract")
+    _pdf_doc(root, "annat", {1: BAD}, score=5)
+    fake = _FakeOcr({"doc": {1: GOOD, 2: GOOD, 3: GOOD}})
+
+    summary, sink = _scan(root, fake, pdf_stem="doc", threshold=10)
+
+    assert _pages_scanned(fake) == [1, 2, 3]
+    assert all(Path(a[a.index("--in") + 1]).stem == "doc" for a in fake.calls)
+    assert summary.selected == 3 and summary.improved == 3
+    debug = "\n".join(m for lvl, m in sink.lines if lvl == "debug")
+    assert "dokumentläge" in debug
+
+
+def test_document_mode_skips_pages_already_read_with_the_engine(
+        root, quality_calls) -> None:
+    _pdf_doc(root, "doc", {1: BAD, 2: BAD, 3: BAD})
+    _read("doc", 1, "surya-layout")
+    fake = _FakeOcr({"doc": {2: GOOD, 3: GOOD}})
+
+    summary, sink = _scan(root, fake, pdf_stem="doc", max_pages=1)
+
+    assert _pages_scanned(fake) == [2]
+    assert summary.selected == 1
+    debug = "\n".join(m for lvl, m in sink.lines if lvl == "debug")
+    assert "redan läst" in debug and "doc s1" in debug
+
+
+def test_document_mode_skips_rejected_readings_too(root, quality_calls) -> None:
+    _pdf_doc(root, "doc", {1: BAD})
+    fake = _FakeOcr({"doc": {1: BAD}})
+    _scan(root, fake, pdf_stem="doc")      # lika poäng → underkänd, i historiken
+    assert len(fake.calls) == 1
+
+    summary, sink = _scan(root, fake, pdf_stem="doc")
+
+    assert len(fake.calls) == 1 and summary.selected == 0
+    assert any("redan lästs med surya-layout" in m for _lvl, m in sink.lines)
+
+
+def test_document_mode_rereads_llm_vision_with_another_model(
+        root, quality_calls) -> None:
+    _pdf_doc(root, "doc", {1: BAD, 2: BAD})
+    _read("doc", 1, "llm-vision", "llm-vision:Bild:gammal-modell")
+    _read("doc", 2, "llm-vision", "llm-vision:Bild:ny-modell")
+    from operations import rescan_pages as rp
+
+    ctx = OperationContext(sink=_Sink(), cancel_requested=lambda: False, debug=True)
+    chosen = rp.select_document_pages(root, "doc", max_pages=0, ctx=ctx,
+                                      engine="llm-vision",
+                                      identity="llm-vision:Bild:ny-modell")
+
+    assert chosen == {"doc": [1]}
+
+
+def test_document_mode_respects_max_pages(root, quality_calls) -> None:
+    _pdf_doc(root, "doc", {1: BAD, 2: BAD, 3: BAD})
+    fake = _FakeOcr({"doc": {1: GOOD, 2: GOOD, 3: GOOD}})
+
+    _scan(root, fake, pdf_stem="doc", max_pages=2)
+
+    assert _pages_scanned(fake) == [1, 2]
+
+
+def test_document_mode_rejects_removed_duplicate(root, quality_calls) -> None:
+    _pdf_doc(root, "doc", {1: BAD})
+    (root / "generated" / "text" / "doc.txt").unlink()
+    fake = _FakeOcr({"doc": {1: GOOD}})
+
+    with pytest.raises(OperationFailed, match="dubblett"):
+        _scan(root, fake, pdf_stem="doc")
+
+    assert fake.calls == [] and _readings() == []
+
+
+def test_document_mode_rejects_missing_pdf(root, quality_calls) -> None:
+    fake = _FakeOcr({})
+
+    with pytest.raises(OperationFailed, match="PDF"):
+        _scan(root, fake, pdf_stem="finns-inte")
+
+    assert fake.calls == []
+
+
+def test_document_mode_dry_run_writes_nothing(root, quality_calls) -> None:
+    _pdf_doc(root, "doc", {1: BAD, 2: BAD, 3: BAD})
+    fake = _FakeOcr({"doc": {1: GOOD, 2: GOOD, 3: GOOD}})
+
+    summary, sink = _scan(root, fake, pdf_stem="doc", dry_run=True)
+
+    assert summary.selected == 3 and fake.calls == [] and _readings() == []
+    assert any("3 sidor i 1 dokument" in m for _lvl, m in sink.lines)

@@ -145,7 +145,8 @@ def ocr_tesseract(png_path: Path, langs: str = "swe") -> str:
 
 def ocr_vision(png_path: Path) -> str:
     if not shutil.which("ocrit"):
-        raise RuntimeError("ocrit saknas — installera: brew install insidegui/tap/ocrit")
+        raise RuntimeError("ocrit saknas — installera ocrit.pkg från "
+            "https://github.com/insidegui/ocrit/releases (det finns ingen Homebrew-tap)")
     with tempfile.TemporaryDirectory() as tmp:
         tmpdir = Path(tmp)
         cmd = ["ocrit", str(png_path), "-o", str(tmpdir)]
@@ -743,9 +744,16 @@ def run_ocr_pages(
                             f"tecken Markdown, token ↑{result.input_tokens} "
                             f"↓{result.output_tokens}, {len(redaction_blocks)} maskeringar",
                             level="debug")
-                    markdown = llm_vision.insert_mask_markers(
+                    markdown = llm_vision.apply_masks(
                         result.markdown, redaction_blocks, image.height
                     )
+                    model_masks = llm_vision.normalize_mask_markers(
+                        result.markdown).count(llm_vision.MASK)
+                    if model_masks:
+                        ctx.log(f"  [{pdf.stem} p{page_num}] llm-vision: använder "
+                                f"modellens maskeringsmarkörer ({model_masks} st, "
+                                f"pixeldetekteringen fann {len(redaction_blocks)})",
+                                level="debug")
                     text = llm_vision.markdown_to_text(markdown)
                 elif engine == "surya":
                     if want_pdf_patch:

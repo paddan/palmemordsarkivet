@@ -353,10 +353,15 @@ def _register_page_ocr_operations() -> None:
                choices=("surya-layout", "surya", "tesseract", "vision", "llm-vision")),
             _p("profile", "--profile", "str", "",
                "LLM-profil som läser sidbilderna (krävs för llm-vision)"),
+            _p("pdf_stem", "--pdf-stem", "str", None,
+               "Bara detta dokument: alla sidor som inte redan lästs med motorn, oavsett tröskel"),
             _p("threshold", "--threshold", "float", 70.0, "Poängtröskel"),
             _p("source", "--source", "choice", "any", "Källa", choices=("any", "files", "wpu")),
             _p("max_pages", "--max-pages", "int", 0, "Högst antal sidor (0 = alla)"),
             _p("dry_run", "--dry-run", "bool", False, "Visa urvalet utan att skanna"),
+            _p("force", "--force", "bool", False,
+               "Den nya läsningen ersätter alltid den gamla (ingen poängjämförelse); "
+               "sidor som redan lästs med motorn hoppas ändå över"),
             _p("reindex", "--no-reindex", "bool", True,
                "Hoppa över omindexeringen av dokumenten efteråt"),
             _p("jobs", "--jobs", "int", _LLM_JOBS, "Parallella dokument (llm-vision)"),
@@ -436,6 +441,7 @@ def _register_quality_operations() -> None:
         parameters=(
             _p("root", "--root", "path", ROOT, "Projektrot"),
             _p("top", "--top", "int", None, "Visa värsta N"),
+            _p("histogram", "--histogram", "bool", False, "Visa poängfördelningen"),
             _p("limit", "--limit", "int", None, "Bara N första filerna"),
             _p("per_page", "--per-page", "bool", False, "Bedöm per sida"),
             _p("text_dir", "--text-dir", "path", ROOT / "generated" / "text", "Text-katalog"),

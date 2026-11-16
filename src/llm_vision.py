@@ -5,9 +5,12 @@ med ``config.resolve_runtime_profile`` och måste vara OpenAI-kompatibel (OpenAI
 OpenRouter, Ollama, custom); Claude-profiler stöds inte i första versionen.
 
 Sidbilden skickas som PNG (base64) i ett ``image_url``-innehåll. Svarta
-maskeringsfält infogas inte av modellen utan av pixeldetekteringen
-(``insert_mask_markers``), och ren text härleds ur Markdownen
-(``markdown_to_text``) så att text och Markdown bär samma ``[MASKAD]``-markörer.
+maskeringsfält märks av modellen med ``[MASKAD]`` där de står i texten; egna
+varianter (``[svärtat]``, ``[redacted]``, ``███`` …) skrivs om av
+``normalize_mask_markers``. Pixeldetekteringen (``insert_mask_markers``) är
+reserv och används bara när modellen inte skrev någon markör (``apply_masks``).
+Ren text härleds ur Markdownen (``markdown_to_text``) så att text och Markdown
+bär samma ``[MASKAD]``-markörer.
 
 Modulen loggar ingenting själv — anroparen loggar med kontext. Nyckeln står
 aldrig i ett felmeddelande eller i ``repr``.
@@ -57,6 +60,8 @@ PROMPT = (
     "tabeller blir Markdown-tabeller och ifyllda blankettfält skrivs som "
     "**Etikett:** värde.\n"
     "- Gissa aldrig. Skriv [oläsligt] för ord eller partier som inte går att läsa.\n"
+    "- Svärtade eller maskerade fält skrivs som [MASKAD] på det ställe där de står, "
+    "ett [MASKAD] per fält. Försök aldrig återge vad som döljs.\n"
     "- Svara bara med avskriften: inga kommentarer, förklaringar eller kodblock."
 )
 
@@ -337,6 +342,35 @@ def insert_mask_markers(markdown: str, blocks: list[tuple[int, int]], image_heig
     out = "\n".join(lines)
     out = re.sub(r"\n{3,}", "\n\n", out)
     return out.strip("\n")
+
+
+# Modellens egna maskeringsmarkörer: ord inom hakparentes som betyder att texten
+# är svärtad, och rader av fyllda block. Ett ensamt blocktecken räknas inte.
+_MODEL_MASK_RE = re.compile(
+    r"\[\s*(?:svärta\w*|maskera\w*|maskad\w*|överstr\w*|censur\w*|redact\w*"
+    r"|blacked(?:\s+out)?|svart\s+fält|svärtad\s+text|maskerad\s+text)"
+    r"(?:\s+\w+)?\s*\]"
+    r"|[\u2588\u25A0]{2,}",
+    re.IGNORECASE,
+)
+
+
+def normalize_mask_markers(markdown: str) -> str:
+    """Skriv om modellens egna maskeringsmarkörer till ``[MASKAD]``."""
+    return _MODEL_MASK_RE.sub(MASK, markdown)
+
+
+def apply_masks(markdown: str, blocks: list[tuple[int, int]], image_height: int) -> str:
+    """Maskeringsmarkörer för en llm-vision-läsning.
+
+    Modellens markörer (omskrivna till ``[MASKAD]``) står där fältet står i texten
+    och går före; pixelblocken infogas bara när modellen inte skrev någon, så att
+    markörerna aldrig dubbleras.
+    """
+    normalized = normalize_mask_markers(markdown)
+    if MASK in normalized:
+        return normalized
+    return insert_mask_markers(normalized, blocks, image_height)
 
 
 _TABLE_SEPARATOR_RE = re.compile(r"^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$")

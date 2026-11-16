@@ -211,3 +211,34 @@ def test_reviewable_documents_hides_removed_duplicates(conn, tmp_path):
     stems = page_review.reviewable_documents(list_documents_for_review(conn), tmp_path)
 
     assert stems == ["kvar", "ny"]
+
+
+def test_whole_file_page_shows_quality_score(conn, tmp_path):
+    """Regression: sidor utan pdf_pages-rad visade alltid Poäng: – trots att
+    kvalitetssteget poängsatt dem i quality_pages."""
+    from db import record_quality_page
+
+    _write_text(tmp_path, "d", ["Hej", "Då"])
+    record_quality_page(conn, pdf_stem="d", page_num=2, score=63.5)
+    view = page_review.load_page_view(conn, tmp_path, "d", 2)
+    assert view.engine == page_review.WHOLE_FILE_ENGINE
+    assert view.score == 63.5 and view.image_page is False
+
+
+def test_quality_score_wins_over_ocr_time_score(conn, tmp_path):
+    from db import record_quality_page
+
+    _write_text(tmp_path, "d", ["Hej"])
+    record_page(conn, pdf_stem="d", page_num=1, engine="surya", text="Hej", score=91.0)
+    record_quality_page(conn, pdf_stem="d", page_num=1, score=70.0)
+    view = page_review.load_page_view(conn, tmp_path, "d", 1)
+    assert view.engine == "surya" and view.score == 70.0
+
+
+def test_image_page_is_flagged(conn, tmp_path):
+    from db import record_quality_page
+
+    _write_text(tmp_path, "d", [""])
+    record_quality_page(conn, pdf_stem="d", page_num=1, score=100.0, image_page=True)
+    view = page_review.load_page_view(conn, tmp_path, "d", 1)
+    assert view.image_page is True
