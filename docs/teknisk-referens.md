@@ -800,7 +800,7 @@ flowchart TD
     end
     subgraph MCP["MCP: LLM:en söker i flera steg"]
         M1["LLM:en planerar nästa steg"] --> M2{"Behövs mer underlag?"}
-        M2 -->|Ja| M3["search_archive: sök i arkivet<br/>get_page: läs en hel sida<br/>web_search: sök utanför arkivet"]
+        M2 -->|Ja| M3["search_archive: sök i arkivet<br/>get_page: läs en hel sida<br/>web_search: sök utanför arkivet<br/>propose_leads: föreslå spår att gräva vidare i"]
         M3 --> M4["Källtext tillbaka till LLM:en"]
         M4 --> M1
     end
@@ -856,11 +856,13 @@ och låter Claude anropa dessa verktyg hur många gånger det vill:
 | `search_archive` | Vektor- eller hybridsökning med valfri reranking; returnerar utdrag med källinfo |
 | `get_page` | Läser råtexten från en specifik sida för att få mer kontext kring en träff |
 | `web_search` | Söker utanför arkivet hos OpenRouter och returnerar webbsidor med titel, adress och utdrag — bara när operatören slagit på **Tillåt webbsök** |
+| `propose_leads` | Föreslår belagda spår att gräva vidare i och en eventuell motfråga, som visas under svaret (se [Spår att gräva vidare i](#spår-att-gräva-vidare-i)) |
 
 Claude väljer själv söktermer, kan söka flera gånger med olika fraser, och kan
 följa upp intressanta träffar med `get_page`. Det ger markant bättre täckning på
-komplexa flerstegs-frågor — till priset av längre svarstid (upp till 10 anrop,
-~1–3 min beroende på fråga).
+komplexa flerstegs-frågor — till priset av längre svarstid (upp till 15
+verktygsomgångar som standard, plus de två spårturerna, och ~1–3 min beroende på
+fråga; CLI:t `--mcp` har 10).
 
 ```text
 Enkla faktafrågor  → RAG-läge (snabbt, deterministiskt)
@@ -977,7 +979,9 @@ men att nämna andra verktyg i prompten gör dem inte tillgängliga.
 
 Standardpromptarna kräver källhänvisningar nära sakuppgifterna, skiljer
 vittnesuppgifter från tolkningar och hanterar motsägelser, OCR-fel och maskeringar.
-RAG-svaret begränsas till de bifogade utdragen. MCP-prompten beskriver ett
+RAG-svaret begränsas till de bifogade utdragen. MCP-prompten inleds med en persona
+— en erfaren, källkritisk mordutredare som driver utredningen framåt och efter
+svaret pekar ut vad som inte är utrett — och beskriver ett
 fokuserat sökflöde och dessa verktyg:
 
 | Verktyg | Parametrar och användning |
@@ -985,9 +989,11 @@ fokuserat sökflöde och dessa verktyg:
 | `search_archive` | `query` på svenska; `top_k=50` (5–50), `top_n=6` (1–15), `hybrid=true`, `rerank=true`. Returnerar ett urval av textutdrag med dokument-ID, sida, titel och exakt `source`-filnamn. När verktyget körs från Utredning-sidan går operatörens sökinställningar före parametrarna (se [Sökinställningar i utredningsläget](#sökinställningar-i-utredningsläget)). |
 | `get_page` | `source`: exakt textfilnamn eller filstam, med valfri `.txt`; `page`: sidnummer från 1. Läser sidtext, inte PDF-bilden. |
 | `web_search` | `query` på svenska; `max_results=5` (3–10). Söker på nätet och returnerar webbsidor med titel, adress och ett utdrag på högst 700 tecken. Finns bara när **Tillåt webbsök** är påslagen i sökinställningarna; annars är verktyget inte med i listan modellen ser. |
+| `propose_leads` | `leads`: högst 4 spår med `title`, `why`, `question` och `sources`; `counter_question`: en motfråga eller tom. Anropas högst en gång per svar, sist efter att svaret skrivits. `sources` ska vara `source` exakt ur en sökträffs `source`-rad plus sida. Finns alltid i utredningsläget, oberoende av webbsök. |
 
 Claude använder namnen `mcp__arkiv__search_archive`,
-`mcp__arkiv__get_page` och `mcp__arkiv__web_search`; OpenAI-kompatibla modeller
+`mcp__arkiv__get_page`, `mcp__arkiv__web_search` och
+`mcp__arkiv__propose_leads`; OpenAI-kompatibla modeller
 använder kortnamnen.
 Varje MCP-sökträff innehåller en `source:`-rad med det exakta filnamnet som
 JSON-sträng. Modellen använder strängens värde som `source` till `get_page`,
@@ -1158,6 +1164,86 @@ råmaterialet och måste citera det.
   OpenAI-vägen filtrerar `Utredning.OPENAI_TOOLS`, så verktyget syns inte alls
   för modellen när valet är av. Är valet av och modellen ändå begär verktyget
   (t.ex. efter injicerad text i ett dokument) avvisas anropet.
+
+#### Spår att gräva vidare i
+
+Modellen får ett fjärde verktyg, `propose_leads`, som låter den avsluta svaret med
+belagda förslag på vad som bör undersökas härnäst. Verktyget finns **alltid** i
+utredningsläget, oberoende av webbsök, och har inget eget reglage. Modellen
+anropar det högst en gång per svar och som sista åtgärd, efter att svaret är
+skrivet; verktyget svarar bara med en kort kvittens, så texten i svaret och
+spåren inte upprepas.
+
+Ett spår är `title`, `why`, `question` och `sources`; `counter_question` är en
+motfråga eller tom. `mcp_server.normalize_leads` validerar och klampar båda
+vägarna lika: högst fyra spår, tomma fält trimmas, ett spår utan `title` eller
+`question` släpps och `sources` måste vara `source` + `sida`. Ogiltiga poster
+loggas på debugnivå. Claude-vägen fångar `ToolUseBlock` med namnet
+`mcp__arkiv__propose_leads` i `allowed_tools`; OpenAI-vägen fångar
+`propose_leads` i verktygsloopen före `_run_tool` och ger modellen kvittensen i
+stället för spåren (spåren är data till sidan). Anropas verktyget flera gånger i
+samma svar gäller det sista, med en debugrad.
+
+**Spårlistan** ligger i `session_state["leads"]`: `id` (löpnummer), `turn` (index
+i `chat_history`), fälten ovan och `status` (`föreslagen` / `grävd`). **Ny
+konversation** nollställer den. Varje assistenttur i `chat_history` sparar bara
+`lead_ids` och `counter_question` — status bor enbart i spårlistan, så en knapp
+aldrig visar inaktuell status. Ett spår vars normaliserade rubrik redan finns
+räknas som samma spår och får samma `id`.
+
+**Beläggsfiltret** hindrar påhittade källor: sidan håller en mängd `source`-värden
+som faktiskt setts i verktygssvaren under konversationen (samma
+`sources_from_tool_output` som citatlänkarna använder). Belägg som inte finns där
+tas bort ur spåret, och ett spår som då saknar belägg visas inte alls — orsaken
+skrivs på debugnivå med rubriken. Filtreringen sker efter `normalize_leads`, som
+förblir ren.
+
+Under svaret ritas rubriken **Spår att gräva vidare i** med ett kort per spår
+(rubrik, varför, belägg som PDF-länkar med sida — eller som escapad text när
+PDF:en inte kan lösas, aldrig en gissad länk) och knappen **Gräv**, som blir
+inaktiv och märkt **Grävt** när spåret är grävt. Motfrågan visas i en egen ruta
+med en rad om att svara i chattrutan. **Gräv** är en `on_click`-callback som
+sätter `session_state["pending_question"]` till spårets `question` och
+`pending_lead_id` till spårets id; Streamlit kör sedan om sidan. Sidan poppar
+båda **före** modellanropet och behandlar frågan exakt som en skriven fråga, så
+den aldrig skickas två gånger; under anropet visas knappen som **Gräver…**.
+Spåret markeras grävt först när svaret kommit utan fel — faller anropet förblir
+det föreslaget och går att gräva igen. En skriven fråga i samma körning går före
+en köad Gräv-fråga, som då släpps. `chat_history`
+innehåller bara operatörens egen text. En egen listvy över konversationens alla
+spår är planerad men inte byggd.
+
+Vid varje ny fråga skickas en kort sammanfattning med till modellen — men visas
+inte i chatten:
+
+```text
+[Spår hittills i konversationen]
+1. (grävd) Vittnet vid Tunnelgatan 23.20 förhördes bara en gång
+2. (föreslagen) Bilen som nämns i tre tips 1987–1989
+```
+
+Claude får den före frågetexten i `prompt`; OpenAI-vägen lägger den i
+user-meddelandets `content`. Sammanfattningen innehåller bara rubrik och status
+och utelämnas när listan är tom — det räcker för att modellen inte ska föreslå
+ett spår som redan grävts; spåret som grävs i just den frågan står där redan som
+grävt. `LEADS_EXTRA_TURNS` (2) höjer tursgränsen internt på sidan, så att spåren
+inte tränger ut en sökning. I OpenAI-vägen är de två turerna **reserverade**:
+efter operatörens tak får modellen bara `propose_leads`, och en sökning som ändå
+begärs körs inte, så **Verktygsomgångar (max)** gäller för sökarbetet. Claude
+Agent SDK kan inte byta verktyg per tur, så i Claude-vägen är taket i praktiken
+`max_turns + 2` även för sökningar. Nås taket ändå skiljer sig vägarna:
+OpenAI-vägen gör en sista tur utan verktyg (`_answer_without_tools`) som tvingar
+fram ett svar på det hämtade underlaget, medan Claude-vägen stannar vid
+`max_turns` och får en avklippt-notis ur `ResultMessage` (`error_max_turns`). Det
+svaret får normalt inga spår. Svarets textdelar (text före spåren, slutturen,
+notiser) fogas med en blankrad.
+
+I det fristående CLI:t (`src/rag/ask.py --mcp`) läggs verktyget i
+`allowed_tools`, och spåren samt motfrågan skrivs ut som text efter svaret —
+rubrik, varför, belägg med källa och sida, följdfråga. Beläggen filtreras mot
+källorna i verktygssvaren på samma sätt som på sidan, och ett spår utan
+kvarvarande belägg skrivs inte ut. CLI:t håller ingen
+spårlista mellan frågor, så där finns ingen **Gräv**-knapp.
 
 #### Utredningspärm och bokmärken
 
@@ -1854,8 +1940,9 @@ per-dokumentresultat behålls; ett avbrutet jobb markeras aldrig `succeeded`.
 | `scripts/llm_correct.py` → `src/llm_correct.py` | LLM-korrektion av dåliga OCR-sidor via Claude Haiku |
 | `scripts/detect_redactions.py` → `src/operations/detect_redactions.py` | Kör redaktionsdetektering på befintliga text/OCR-par, parallellt i separata processer (`--jobs`) — aldrig trådar, eftersom PDFium inte är trådsäkert; dör en arbetsprocess körs de drabbade filerna om en i taget så att bara den skyldiga filen blir ett fel |
 | `scripts/ingest.py` → `src/rag/ingest.py` | Bygg vektorindex (LanceDB + BM25 FTS) |
-| `src/rag/ask.py` | Frågefunktioner — RAG-läge och MCP-läge (importeras av Utredning-sidan och mcp_server) samt `stop_notice` som flaggar avklippta modellsvar |
-| `src/rag/mcp_server.py` | MCP-server med `search_archive` och `get_page` (startas av ask.py/Utredning.py) |
+| `src/rag/ask.py` | Frågefunktioner — RAG-läge och MCP-läge (importeras av Utredning-sidan och mcp_server), `format_leads` för CLI:ts spårutskrift samt `stop_notice` som flaggar avklippta modellsvar |
+| `src/rag/mcp_server.py` | MCP-server med `search_archive`, `get_page`, `web_search` och `propose_leads` (startas av ask.py/Utredning.py) |
+| `src/utredningsspar.py` | Konversationens spårlista för utredningsläget (Streamlit-fri): registrera spår, status, beläggsfilter mot sedda källor och sammanfattningen som skickas till modellen |
 | `src/prompts.py` | Redigerbara systempromptar (RAG/MCP): default-texter samt läsning/skrivning av overrides |
 | `generated/llm_config.json` | Sparad LLM-konfiguration (backend, modell, URL) — se ovan |
 | `generated/prompts.json` | Sparade prompt-overrides (nycklarna `rag` och `mcp`) — se *Redigerbara promptar* ovan |

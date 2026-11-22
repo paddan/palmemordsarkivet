@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """MCP-server för Palmemordsarkivet.
 
-Exponerar tre verktyg som Claude kan anropa autonomt:
+Exponerar fyra verktyg som Claude kan anropa autonomt:
   - search_archive  — vektor- eller hybridsökning, valfri reranking
   - get_page        — hämta råtext från en specifik sida
   - web_search      — söka utanför arkivet (OpenRouters web-plugin)
+  - propose_leads   — föreslå belagda utredningsspår och en eventuell motfråga
 
 Körs som subprocess av ask.py (--mcp) och Utredning.py (utredningsläge).
 Startas normalt inte manuellt.
@@ -12,6 +13,8 @@ Startas normalt inte manuellt.
 
 from __future__ import annotations
 
+import logging
+import math
 import os
 import sys
 from contextlib import suppress
@@ -20,6 +23,8 @@ from typing import Annotated
 from urllib.parse import urlsplit
 
 import requests
+
+logger = logging.getLogger(__name__)
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
@@ -106,6 +111,7 @@ MASKAD_MARKER = "[MASKAD]"
 MAX_RESULTS_MIN = 3
 MAX_RESULTS_MAX = 10
 MAX_RESULTS_DEFAULT = 5
+LEADS_MAX = 4
 # Utdraget är sidans egen text; arkivsvaret behöver igenkänning, inte hela sidan.
 WEB_EXCERPT_CHARS = 700
 
@@ -383,6 +389,133 @@ def _log_jev_metrics(metrics: dict) -> None:
     if metrics.get("input_tokens") is not None:
         delar.append(f"{metrics['input_tokens']} indatatoken")
     print("rerank: " + ", ".join(delar), file=sys.stderr)
+
+
+def _trimmed(value: object) -> str:
+    if not isinstance(value, str):
+        return ""
+    return value.strip()
+
+
+def _lead_page(value: object) -> int | None:
+    """Tolka ett sidnummer: bara heltal ≥ 1 duger.
+
+    Skild från :func:`_int_or_default` eftersom ett sidnummer inte får avrundas
+    (1.9), tolkas ur en icke-heltalssträng ("1.5") eller komma från bool, NaN
+    eller inf. Den delade hjälparen behåller sitt eget, tillåtande beteende för
+    sökgränserna.
+    """
+    if isinstance(value, bool):
+        logger.debug("Sidnummer är en bool, inte ett heltal: %r", value)
+        return None
+    if isinstance(value, int):
+        if value >= 1:
+            return value
+        logger.debug("Sidnummer under 1: %r", value)
+        return None
+    if isinstance(value, float):
+        if not math.isfinite(value) or not value.is_integer():
+            logger.debug("Sidnummer är inte ett ändligt heltal: %r", value)
+            return None
+        if value >= 1:
+            return int(value)
+        logger.debug("Sidnummer under 1: %r", value)
+        return None
+    if isinstance(value, str):
+        try:
+            tal = int(value.strip())
+        except ValueError:
+            logger.debug("Sidnummer är inte ett heltal i textform: %r", value)
+            return None
+        if tal >= 1:
+            return tal
+        logger.debug("Sidnummer under 1: %r", value)
+        return None
+    logger.debug("Sidnummer har okänd typ: %r", value)
+    return None
+
+
+def _normalize_source(raw: object) -> dict | None:
+    if not isinstance(raw, dict):
+        logger.debug("Släpper källa som inte är ett objekt: %r", raw)
+        return None
+    namn = _trimmed(raw.get("source"))
+    sida = _lead_page(raw.get("page"))
+    if not namn:
+        logger.debug("Släpper källa utan källnamn: %r", raw)
+        return None
+    if sida is None:
+        logger.debug("Släpper källa med ogiltigt sidnummer: %r", raw)
+        return None
+    return {"source": namn, "page": sida}
+
+
+def _counter_question(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    trimmed = value.strip()
+    return trimmed or None
+
+
+def normalize_leads(leads: object, counter_question: object = None) -> dict:
+    """Normalisera spår och motfråga till verktygets kontrakt."""
+    counter = _counter_question(counter_question)
+    normalized: list[dict[str, object]] = []
+    if not isinstance(leads, list):
+        if leads is not None:
+            logger.debug("Släpper spårlistan eftersom den inte är en lista: %r", leads)
+        return {"leads": normalized, "counter_question": counter}
+    for lead in leads:
+        if len(normalized) >= LEADS_MAX:
+            logger.debug("Klipper ytterligare spår vid max %d", LEADS_MAX)
+            break
+        if not isinstance(lead, dict):
+            logger.debug("Släpper ogiltigt spår (inte ett objekt): %r", lead)
+            continue
+        titel = _trimmed(lead.get("title"))
+        fråga = _trimmed(lead.get("question"))
+        if not titel:
+            logger.debug("Släpper spår utan titel: %r", lead)
+            continue
+        if not fråga:
+            logger.debug("Släpper spår utan fråga: %r", lead)
+            continue
+        skäl = _trimmed(lead.get("why"))
+        rå_källor = lead.get("sources")
+        källor: list[dict[str, object]] = []
+        if isinstance(rå_källor, list):
+            for källa in rå_källor:
+                normalized_source = _normalize_source(källa)
+                if normalized_source is not None:
+                    källor.append(normalized_source)
+        else:
+            logger.debug(
+                "Spåret saknar belägg eftersom sources inte är en lista: %r", rå_källor
+            )
+        normalized.append(
+            {
+                "title": titel,
+                "why": skäl,
+                "question": fråga,
+                "sources": källor,
+            }
+        )
+    return {"leads": normalized, "counter_question": counter}
+
+
+def leads_receipt(proposal: dict) -> str:
+    """Skriv en kvittens till operatören."""
+    leads = proposal.get("leads") or []
+    counter = proposal.get("counter_question")
+    antal = len(leads)
+    if antal == 0 and not counter:
+        return "Inga spår registrerades."
+    delar: list[str] = []
+    if antal:
+        delar.append(f"{antal} spår" if antal != 1 else "1 spår")
+    if counter:
+        delar.append("en motfråga")
+    return f"{' och '.join(delar)} visas för operatören. Svaret är klart — skriv inget mer."
 
 
 def search_with_settings(
@@ -877,6 +1010,24 @@ def web_search(
     """
     text, _kostnad = search_web(query, max_results)
     return text
+
+
+@mcp.tool()
+def propose_leads(
+    leads: Annotated[list[dict[str, object]], "Lista spår med titel, skäl, fråga och belägg"],
+    counter_question: Annotated[str | None, "Operatörens avsikt eller hypotes"] = None,
+) -> str:
+    """Föreslå belagda utredningsspår och en eventuell motfråga.
+
+    Anropa högst en gång per svar och alltid som sista åtgärd efter att svaret
+    är skrivet. Spår är luckor, motsägelser eller obesvarade trådar i hämtat
+    material, med belägg som `source` exakt ur en sökträffs source-rad och
+    sidnummer. Upprepa inte spår som redan står som grävda i "Spår hittills".
+    Motfrågan används bara när svaret beror på operatörens avsikt (hypotes,
+    uteslutet, tidsperiod) och gissa aldrig innehållet bakom [MASKAD].
+    """
+    förslag = normalize_leads(leads, counter_question)
+    return leads_receipt(förslag)
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────

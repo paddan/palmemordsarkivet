@@ -41,6 +41,9 @@ from claude_agent_sdk import (  # noqa: E402
     ResultMessage,
     TextBlock,
     ThinkingConfigAdaptive,
+    ToolResultBlock,
+    ToolUseBlock,
+    UserMessage,
     query,
 )
 from ingest import _table_exists  # noqa: E402
@@ -49,6 +52,9 @@ from sentence_transformers import SentenceTransformer
 from prompts import mcp_prompt, rag_prompt  # noqa: E402
 
 MCP_SERVER = Path(__file__).resolve().parent / "mcp_server.py"
+
+# Spårverktyget heter så i Claudes MCP-namnrymd; samma värde som sidan använder.
+LEADS_TOOL_FULL = "mcp__arkiv__propose_leads"
 
 DB_DIR = Path(__file__).resolve().parents[2] / "generated" / "lancedb"
 TABLE = "chunks"
@@ -370,8 +376,42 @@ async def run_query(table, embed_model, q: str, top_k: int, top_n: int,
     await ask_claude(q, format_context(hits))
 
 
+def format_leads(proposal: dict) -> str:
+    """Spår och motfråga som text efter svaret i CLI:ts utredningsläge.
+
+    Samma innehåll som spårkorten i Utredning-sidan — rubrik, varför, belägg och
+    följdfråga — men som text, eftersom kommandoraden inte har någon chatt att
+    rita kort i. Tom sträng när modellen inte föreslog något.
+    """
+    rader: list[str] = []
+    leads = proposal.get("leads") or []
+    if leads:
+        rader.append("— Spår att gräva vidare i —")
+        for i, lead in enumerate(leads, start=1):
+            rader.append(f"{i}. {lead.get('title', '')}")
+            if lead.get("why"):
+                rader.append(f"   Varför: {lead['why']}")
+            for källa in lead.get("sources") or []:
+                rader.append(f"   Belägg: {källa.get('source', '')}, sida {källa.get('page', '')}")
+            if lead.get("question"):
+                rader.append(f"   Följdfråga: {lead['question']}")
+    motfraga = proposal.get("counter_question")
+    if motfraga:
+        if rader:
+            rader.append("")
+        rader.append(f"Motfråga till operatören: {motfraga}")
+    return "\n".join(rader)
+
+
 async def run_mcp(q: str, db_dir: Path, model_name: str) -> None:
-    """Kör frågan i MCP-läge — Claude söker själv med search_archive/get_page."""
+    """Kör frågan i MCP-läge — Claude söker själv med arkivverktygen."""
+    # Importeras på anrop: Utredning-sidan importerar ask vid sidladdning, och
+    # mcp_server drar in FastMCP — den behövs först när MCP-läget faktiskt körs.
+    import mcp_server
+
+    import utredningsspar
+    from citations import sources_from_tool_output
+
     python = sys.executable
     env = {
         "DB_DIR": str(db_dir),
@@ -384,22 +424,63 @@ async def run_mcp(q: str, db_dir: Path, model_name: str) -> None:
         system_prompt=mcp_prompt(),
         model=CLAUDE_MODEL,
         mcp_servers={"arkiv": {"command": python, "args": [str(MCP_SERVER)], "env": env}},
-        allowed_tools=["mcp__arkiv__search_archive", "mcp__arkiv__get_page"],
+        allowed_tools=[
+            "mcp__arkiv__search_archive",
+            "mcp__arkiv__get_page",
+            LEADS_TOOL_FULL,
+        ],
         thinking=ThinkingConfigAdaptive(type="adaptive"),
         effort="high",
         max_turns=10,
         setting_sources=[],
     )
     print("\n— Utredningsläge (MCP) — Claude söker autonomt —\n")
+    # Modellen kan anropa spårverktyget flera gånger; det sista anropet gäller.
+    leads: dict | None = None
+    # Källorna i verktygssvaren: belägg som inte finns här är påhittade och
+    # filtreras bort, samma regel som spårkorten på Utredning-sidan.
+    sedda_kallor: set[str] = set()
     async for message in query(prompt=q, options=options):
-        if isinstance(message, AssistantMessage):
+        if isinstance(message, UserMessage) and isinstance(message.content, list):
+            for block in message.content:
+                if isinstance(block, ToolResultBlock):
+                    sedda_kallor |= sources_from_tool_output(_tool_result_text(block.content))
+        elif isinstance(message, AssistantMessage):
             for block in message.content:
                 if isinstance(block, TextBlock):
                     print(block.text, end="", flush=True)
+                elif isinstance(block, ToolUseBlock) and block.name == LEADS_TOOL_FULL:
+                    inp = block.input or {}
+                    leads = mcp_server.normalize_leads(
+                        inp.get("leads"), inp.get("counter_question")
+                    )
         elif isinstance(message, ResultMessage):
             print()
             if getattr(message, "is_error", False):
                 print(f"\n(fel: {message})", file=sys.stderr)
+    if leads:
+        belagda: list[dict] = []
+        utredningsspar.register_leads(
+            belagda, leads.get("leads") or [], turn=0, known_sources=sedda_kallor
+        )
+        if len(belagda) < len(leads.get("leads") or []):
+            print(
+                f"(debug) {len(leads.get('leads') or []) - len(belagda)} spår utan "
+                "belägg i verktygssvaren visas inte",
+                file=sys.stderr,
+            )
+        text = format_leads({**leads, "leads": belagda})
+        if text:
+            print(f"\n{text}")
+
+
+def _tool_result_text(content: Any) -> str:
+    """Texten i ett ToolResultBlock (sträng eller lista av text-delar)."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(str(c.get("text", "")) for c in content if isinstance(c, dict))
+    return ""
 
 
 async def main_async(args) -> int:

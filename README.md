@@ -91,6 +91,9 @@ fast pipeline får AI:n tillgång till verktyg (`search_archive`, `get_page`)
 som den anropar hur många gånger den vill — provar olika söktermer, följer
 upp intressanta träffar och läser hela sidor för mer kontext. Bättre täckning
 på komplexa flerstegs-frågor, men långsammare (~1–3 min).
+Modellen kan också avsluta svaret med **spår att gräva vidare i**: belagda luckor
+och motsägelser i materialet, med en **Gräv**-knapp som ställer nästa fråga, och
+en motfråga när svaret beror på vilken hypotes eller tidsperiod du avser.
 Räcker inte arkivet, eller är modellen osäker — ett namn, en plats, en förkortning,
 en firma, en adress, eller frågan "hur är det i dag" — kan du slå på **Tillåt
 webbsök** under *Sökinställningar*. Sökningar görs också för att kontrollera

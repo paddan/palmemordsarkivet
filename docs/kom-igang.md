@@ -181,6 +181,13 @@ Modellen ska då märka
 varje uppgift från nätet som `[webbkälla: domän, titel](url)` och säga att den
 kommer från internet i stället för ur arkivet.
 
+Modellen avslutar svaret med **spår att gräva vidare i** — belagda luckor,
+motsägelser eller obesvarade trådar i materialet — och en eventuell motfråga när
+svaret beror på vilken hypotes eller tidsperiod du avser. **Gräv** på ett spår
+ställer dess följdfråga som nästa fråga, och knappen blir **Grävt** när svaret
+har kommit. Misslyckas anropet går spåret att gräva igen. Spåren ingår i konversationen och
+nollställs av **Ny konversation**.
+
 När du hittar något intressant kan du spara svaret i fliken **Utredningspärm**.
 Sparade spår visas som kollapsade poster med kort rubrik; öppna posten för att
 se frågan, svaret, källkort med PDF/text-knappar, modellvalet och eventuella

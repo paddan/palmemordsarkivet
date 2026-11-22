@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+from pathlib import Path
+
 import numpy as np
 import pytest
 import requests
@@ -372,3 +375,139 @@ def test_rerank_metric_formatter_covers_bge_and_no_reranker() -> None:
     assert "BGE" in text
     assert "2.07 s" in text
     assert "ingen API-avgift" in text
+
+
+# ---------------------------------------------------------------------------
+# run_mcp — CLI:ts utredningsläge ger modellen spårverktyget
+# ---------------------------------------------------------------------------
+
+def test_run_mcp_ger_modellen_propose_leads_och_skriver_ut_sparen(monkeypatch, capsys) -> None:
+    """CLI:t ska ha spårverktyget i allowed_tools och visa spåren efter svaret —
+    annars föreslår modellen spår som ingen ser."""
+    import ask
+    from claude_agent_sdk import (
+        AssistantMessage,
+        TextBlock,
+        ToolResultBlock,
+        ToolUseBlock,
+        UserMessage,
+    )
+
+    fangade: dict[str, object] = {}
+
+    async def fake_query(*, prompt: str, options):
+        fangade["options"] = options
+        # Källan måste ha setts i ett verktygssvar för att belägget ska visas.
+        yield UserMessage(
+            content=[
+                ToolResultBlock(
+                    tool_use_id="sok-1",
+                    content='Utdrag\nsource: "281 — x.txt"\n',
+                )
+            ]
+        )
+        yield AssistantMessage(
+            content=[
+                TextBlock(text="Svaret."),
+                ToolUseBlock(
+                    id="tool-1",
+                    name=ask.LEADS_TOOL_FULL,
+                    input={
+                        "leads": [
+                            {
+                                "title": "Bilen i tre tips",
+                                "why": "tipsen pekar åt olika håll",
+                                "question": "Vem ägde bilen 1987?",
+                                "sources": [{"source": "281 — x.txt", "page": 3}],
+                            }
+                        ],
+                        "counter_question": "Vilken tidsperiod avser du?",
+                    },
+                ),
+            ],
+            model="test-modell",
+        )
+
+    monkeypatch.setattr(ask, "query", fake_query)
+    asyncio.run(ask.run_mcp("fråga", Path("."), "modell"))
+
+    options = fangade["options"]
+    assert "mcp__arkiv__propose_leads" in options.allowed_tools
+    utskrift = capsys.readouterr().out
+    assert "Spår att gräva vidare i" in utskrift
+    assert "Bilen i tre tips" in utskrift
+    assert "tipsen pekar åt olika håll" in utskrift
+    assert "281 — x.txt" in utskrift and "sida 3" in utskrift
+    assert "Vem ägde bilen 1987?" in utskrift
+    assert "Vilken tidsperiod avser du?" in utskrift
+
+
+def test_run_mcp_visar_inte_belagg_som_aldrig_lasts(monkeypatch, capsys) -> None:
+    """CLI:t ska filtrera beläggen som sidan gör: en källa som inget verktygssvar
+    innehållit är påhittad, och ett spår utan kvarvarande belägg visas inte."""
+    import ask
+    from claude_agent_sdk import (
+        AssistantMessage,
+        ToolResultBlock,
+        ToolUseBlock,
+        UserMessage,
+    )
+
+    async def fake_query(*, prompt: str, options):
+        yield UserMessage(
+            content=[ToolResultBlock(tool_use_id="s", content='source: "a.txt"\n')]
+        )
+        yield AssistantMessage(
+            content=[
+                ToolUseBlock(
+                    id="tool-1",
+                    name=ask.LEADS_TOOL_FULL,
+                    input={
+                        "leads": [
+                            {
+                                "title": "Belagt spår",
+                                "question": "Q1?",
+                                "sources": [
+                                    {"source": "a.txt", "page": 1},
+                                    {"source": "påhittad.txt", "page": 2},
+                                ],
+                            },
+                            {
+                                "title": "Påhittat spår",
+                                "question": "Q2?",
+                                "sources": [{"source": "påhittad.txt", "page": 2}],
+                            },
+                        ]
+                    },
+                )
+            ],
+            model="test-modell",
+        )
+
+    monkeypatch.setattr(ask, "query", fake_query)
+    asyncio.run(ask.run_mcp("fråga", Path("."), "modell"))
+
+    utskrift = capsys.readouterr().out
+    assert "Belagt spår" in utskrift and "a.txt, sida 1" in utskrift
+    assert "påhittad.txt" not in utskrift
+    assert "Påhittat spår" not in utskrift
+
+
+def test_import_av_ask_drar_inte_in_mcp_servern() -> None:
+    """Utredning-sidan importerar ask vid sidladdning, så mcp_server (FastMCP) får
+    inte följa med — den importeras först när MCP-läget faktiskt körs."""
+    import os
+    import subprocess
+    import sys
+
+    rot = Path(__file__).resolve().parents[1]
+    kod = "import sys, ask\nprint('IMPORTERAD' if 'mcp_server' in sys.modules else 'INTE_IMPORTERAD')"
+    resultat = subprocess.run(
+        [sys.executable, "-c", kod],
+        capture_output=True,
+        text=True,
+        check=True,
+        cwd=str(rot / "src" / "rag"),
+        env={**os.environ, "PYTHONPATH": str(rot / "src")},
+    )
+    assert "INTE_IMPORTERAD" in resultat.stdout

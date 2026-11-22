@@ -707,6 +707,11 @@ en sak i taget: exempelvis svarslängd, disposition eller hur jämförelser gör
   motsägelser, markera OCR-osäkerhet och aldrig fylla i maskeringar.
 - Beskriv hur modellen ska arbeta, inte vilken slutsats den ska komma fram till.
   Skriv hellre ”Pröva uppgifter både för och emot hypotesen” än ”Visa att X är skyldig”.
+- I MCP-läget bör en egen prompt beskriva `propose_leads`, som föreslår spår att
+  gräva vidare i och en eventuell motfråga. Verktygets egen beskrivning räcker för
+  att det ska fungera, men spåren blir bättre om prompten säger vad ett bra spår
+  är: en lucka eller motsägelse i hämtat material, med belägg som exakt `source`
+  och sida, och aldrig en gissning om maskerat innehåll.
 - En egen sparad prompt **ersätter hela standardprompten**; den läggs inte till
   efteråt. Behåll därför de grundregler du vill använda. Prompttext kan inte
   lägga till verktyg eller ge åtkomst till nya datakällor.
@@ -736,7 +741,7 @@ sidofältet.
 """,
     "mcp": """**MCP: sök och läs med verktyg**
 
-Du kan hänvisa till följande tre verktyg i instruktionerna. Du behöver inte
+Du kan hänvisa till följande fyra verktyg i instruktionerna. Du behöver inte
 skriva programkod eller ange alla parametrar; modellen får verktygens schema.
 
 - `search_archive`: söker textutdrag i arkivet. `query` är sökfrågan på svenska.
@@ -760,11 +765,19 @@ skriva programkod eller ange alla parametrar; modellen får verktygens schema.
   `[Nr X, sida Y]` för dem. Osäkerhet är alltid ett skäl att söka: tvekar
   modellen, eller ger materialet inget entydigt svar, ska den söka innan den
   svarar.
+- `propose_leads`: föreslår spår att gräva vidare i och en eventuell motfråga
+  (`leads`, `counter_question`). Modellen anropar det högst en gång per svar, som
+  sista åtgärd efter att svaret är skrivet. Ett spår har `title`, `why`,
+  `question` och `sources`; högst fyra per svar. Belägget i `sources` ska vara
+  `source` exakt ur en sökträffs `source`-rad plus sida, aldrig en källa modellen
+  inte läst. Motfrågan ställs bara när svaret beror på operatörens avsikt.
+  Verktyget finns alltid i utredningsläget och kräver inget reglage.
 
-Claude kan visa namnen `mcp__arkiv__search_archive`, `mcp__arkiv__get_page` och
-`mcp__arkiv__web_search`. Det är samma tre verktyg. De läser arkivtext, inte
-PDF-bilder, och ger inte grafslagningar eller möjlighet att ändra arkivet. Att
-nämna ett annat verktyg i prompten gör det inte tillgängligt.
+Claude kan visa namnen `mcp__arkiv__search_archive`, `mcp__arkiv__get_page`,
+`mcp__arkiv__web_search` och `mcp__arkiv__propose_leads`. Det är samma fyra
+verktyg. De läser arkivtext, inte PDF-bilder, och ger inte grafslagningar eller
+möjlighet att ändra arkivet. Att nämna ett annat verktyg i prompten gör det inte
+tillgängligt.
 
 **Exempel på en regel att lägga till i standardtexten:**
 

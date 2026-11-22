@@ -10,9 +10,13 @@ kontrollerar beteendet i stället för källkoden.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import json
 import logging
 import os
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 import pytest
@@ -364,6 +368,354 @@ def test_tursgransen_tvingar_fram_ett_svar(sida: AppTest, monkeypatch) -> None:
     assert fejk.utan_verktyg == 1
     # Loopen ska ha gått tills taket nåddes, inte stannat efter en eller två turer.
     assert fejk.med_verktyg > 10
+
+
+# Sökvalen som sidan skickar in till strömfunktionerna (samma nycklar som
+# _mcp_limits och _run_tool läser). Anropas direkt i testerna nedan, utan sidan.
+SOKVAL = {
+    "reranker_mode": "bge",
+    "top_k": 50,
+    "top_n": 6,
+    "web_search": False,
+    "max_turns": 15,
+    "web_search_budget": 3,
+}
+
+
+class _Box:
+    """Atrapp för st.status/st.empty som minns etiketter och markdown."""
+
+    def __init__(self) -> None:
+        self.etiketter: list[str] = []
+        self.markdowns: list[str] = []
+
+    def write(self, *args, **kwargs) -> None:
+        return None
+
+    def update(self, *args, **kwargs) -> None:
+        label = kwargs.get("label")
+        if label is not None:
+            self.etiketter.append(str(label))
+
+    def markdown(self, text, *args, **kwargs) -> None:
+        self.markdowns.append(str(text))
+
+
+def _importera_sidan():
+    """Importera Utredning direkt, för att anropa strömfunktionerna utan sidan.
+
+    Importen kör sidans modulkod i bare mode. Där lämnar ``with st.form("ask")``
+    kvar en form-DeltaGenerator på Streamlits dg-stack (Streamlit poppar den bara
+    inne i en riktig körning), och nästa AppTest-körning ser då sidofältets
+    on_change-widgetar som "inuti ett formulär" och kastar
+    StreamlitInvalidFormCallbackError. Formuläret byts därför mot en tom kontext
+    under importen; spår-testerna ritar ändå inget på sidan."""
+    import streamlit as st
+
+    with mock.patch.object(st, "form", lambda *a, **k: contextlib.nullcontext()):
+        import Utredning
+
+    return Utredning
+
+
+class _FakeSvar:
+    """OpenAI-klient som svarar i tur och ordning ur en förbestämd lista."""
+
+    def __init__(self, svar: list[tuple[str | None, list | None, str]]) -> None:
+        self.svar = svar
+        self.anrop = 0
+
+    async def create(self, **kwargs):
+        content, tool_calls, finish = self.svar[self.anrop]
+        self.anrop += 1
+        return _FakeResponse(_FakeChoice(_FakeMessage(content, tool_calls), finish))
+
+
+def _fake_openai(fejk):
+    class _FakeOpenAI:
+        def __init__(self, *a, **k) -> None:
+            self.chat = type("Chat", (), {"completions": fejk})()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a) -> None:
+            return None
+
+    return _FakeOpenAI
+
+
+class _LoggAttrapp:
+    """Samlar debugrader i stället för att skriva till webbloggen."""
+
+    def __init__(self) -> None:
+        self.rader: list[str] = []
+
+    def debug(self, fmt: str, *args) -> None:
+        self.rader.append(fmt % args if args else fmt)
+
+
+def _spar(titel: str) -> dict:
+    """Ett spår i verktygets form (belägg från a.txt sida 2)."""
+    return {
+        "title": titel,
+        "why": "Lucka i det hämtade materialet.",
+        "question": "Vad hände med bilen?",
+        "sources": [{"source": "a.txt", "page": 2}],
+    }
+
+
+def _kor_openai(monkeypatch, fejk) -> tuple[dict, list[str], _Box, _Box]:
+    """Kör OpenAI-vägen direkt mot en fejkklient.
+
+    Ger (proposal, parts, statusruta, textplatshållare) så testerna kan se både
+    det som returneras och det som ritades."""
+    Utredning = _importera_sidan()
+    monkeypatch.setattr("openai.AsyncOpenAI", _fake_openai(fejk))
+    cfg = {"model": "m", "base_url": "http://x", "api_key": "k"}
+    messages = [
+        {"role": "system", "content": "s"},
+        {"role": "user", "content": "Vem såg mördaren?"},
+    ]
+    proposal: dict = {}
+    parts: list[str] = []
+    status = _Box()
+    text = _Box()
+    asyncio.run(
+        Utredning.stream_openai_mcp(
+            status, text, parts, cfg, messages, SOKVAL, proposal=proposal
+        )
+    )
+    return proposal, parts, status, text
+
+
+def test_spar_fangas_i_openai_vagen(sida: AppTest, monkeypatch) -> None:
+    """Ett propose_leads-anrop följt av ett tomt slutsvar ska ändå ge spåren.
+
+    Modellen kan anropa verktyget som sista åtgärd och sedan svara tomt; spåren
+    ska då finnas kvar för sidan att rita, och anropet får inte ge något fel."""
+    import mcp_server
+
+    Utredning = _importera_sidan()
+
+    # Verktygssvaret får inte ladda arkivindex eller cross-encoder.
+    monkeypatch.setattr(
+        mcp_server, "search_with_settings",
+        lambda *a, **k: 'Utdrag\nsource: "a.txt"\n',
+    )
+    leads = {
+        "leads": [
+            {
+                "title": "Bilen som nämns i tre tips",
+                "why": "Samma bil återkommer i tipsen 1987–1989.",
+                "question": "Vem ägde bilen som nämns i tipsen?",
+                "sources": [{"source": "a.txt", "page": 2}],
+            }
+        ],
+        "counter_question": "Vilken hypotes prövar du?",
+    }
+    fejk = _FakeSvar(
+        [
+            (None, [_tool_call("search_archive", '{"query": "bilen"}')], "tool_calls"),
+            (None, [_tool_call("propose_leads", json.dumps(leads))], "tool_calls"),
+            # Tomt slutsvar: spåren kom före texten (Review Focus 2).
+            ("", None, "stop"),
+        ]
+    )
+    monkeypatch.setattr("openai.AsyncOpenAI", _fake_openai(fejk))
+
+    cfg = {"model": "m", "base_url": "http://x", "api_key": "k"}
+    messages = [
+        {"role": "system", "content": "s"},
+        {"role": "user", "content": "Vem såg mördaren?"},
+    ]
+    proposal: dict = {}
+    parts: list[str] = []
+    asyncio.run(
+        Utredning.stream_openai_mcp(
+            _Box(), _Box(), parts, cfg, messages, SOKVAL, proposal=proposal
+        )
+    )
+
+    assert proposal["counter_question"] == "Vilken hypotes prövar du?"
+    assert proposal["leads"][0]["sources"] == [{"source": "a.txt", "page": 2}]
+    assert fejk.anrop == 3
+    # Kvittensen (inte en tom verktygssvarstext) går tillbaka till modellen.
+    assert messages[-2]["role"] == "tool"
+    assert "spår" in messages[-2]["content"]
+
+
+def test_spar_fangas_i_claude_vagen(sida: AppTest, monkeypatch) -> None:
+    """Claude-vägen fångar ToolUseBlock för propose_leads och har verktyget
+    tillåtet; tursgränsen höjs internt med LEADS_EXTRA_TURNS så att
+    operatörens tak fortfarande gäller för sökarbetet."""
+    from claude_agent_sdk import AssistantMessage, ResultMessage, ToolUseBlock
+
+    Utredning = _importera_sidan()
+
+    fangade: dict = {}
+
+    async def _fejk_query(prompt, options):
+        fangade["options"] = options
+        yield AssistantMessage(
+            [
+                ToolUseBlock(
+                    id="toolu_1",
+                    name="mcp__arkiv__propose_leads",
+                    input={
+                        "leads": [
+                            {
+                                "title": "Bilen som nämns i tre tips",
+                                "why": "Samma bil återkommer i tipsen.",
+                                "question": "Vem ägde bilen?",
+                                "sources": [{"source": "a.txt", "page": 2}],
+                            }
+                        ],
+                        "counter_question": "Vilken hypotes prövar du?",
+                    },
+                )
+            ],
+            model="m",
+        )
+        yield ResultMessage(
+            subtype="success",
+            duration_ms=1,
+            duration_api_ms=1,
+            is_error=False,
+            num_turns=1,
+            session_id="ses_1",
+            stop_reason="end_turn",
+        )
+
+    monkeypatch.setattr(Utredning, "query", _fejk_query)
+    cfg = {"kind": "claude", "model": "m", "prices": {}}
+    proposal: dict = {}
+    parts: list[str] = []
+    asyncio.run(
+        Utredning.stream_mcp(
+            "Vem såg mördaren?", _Box(), _Box(), parts, None, cfg, SOKVAL,
+            proposal=proposal,
+        )
+    )
+
+    assert proposal["leads"][0]["title"] == "Bilen som nämns i tre tips"
+    assert proposal["counter_question"] == "Vilken hypotes prövar du?"
+    assert "mcp__arkiv__propose_leads" in fangade["options"].allowed_tools
+    assert fangade["options"].max_turns == 15 + Utredning.LEADS_EXTRA_TURNS
+
+
+def test_text_fore_propose_leads_visas_aven_med_tomt_slutsvar(
+    sida: AppTest, monkeypatch
+) -> None:
+    """Text som skrivits före spåren får inte försvinna när slutsvaret är tomt.
+
+    Modellen skriver ofta hela svaret och anropar propose_leads sist; turen bär
+    då både text och verktygsanrop. Utan den här vägen kastades texten."""
+    fejk = _FakeSvar(
+        [
+            (
+                "Svar före spåren.",
+                [_tool_call("propose_leads", json.dumps({"leads": [_spar("Spår A")]}))],
+                "tool_calls",
+            ),
+            ("", None, "stop"),
+        ]
+    )
+    proposal, parts, _status, text = _kor_openai(monkeypatch, fejk)
+
+    svar = "".join(parts)
+    assert "Svar före spåren." in svar
+    # Det som ritas sist ska vara samma svar som returneras.
+    assert text.markdowns[-1] == svar
+    assert proposal["leads"][0]["title"] == "Spår A"
+    assert not any("Fel" in stycke for stycke in parts)
+    assert fejk.anrop == 2
+
+
+def test_sokraknaren_raknar_inte_propose_leads(sida: AppTest, monkeypatch) -> None:
+    """Etiketten räknar arkivsökningar; spåren är inget sökarbete."""
+    import mcp_server
+
+    # Sökningen får inte ladda arkivindex eller cross-encoder.
+    monkeypatch.setattr(
+        mcp_server, "search_with_settings",
+        lambda *a, **k: 'Utdrag\nsource: "a.txt"\n',
+    )
+    fejk = _FakeSvar(
+        [
+            (
+                None,
+                [
+                    _tool_call("search_archive", '{"query": "bilen"}'),
+                    _tool_call("propose_leads", json.dumps({"leads": [_spar("Spår A")]})),
+                ],
+                "tool_calls",
+            ),
+            ("", None, "stop"),
+        ]
+    )
+    proposal, _parts, status, _text = _kor_openai(monkeypatch, fejk)
+
+    assert proposal["leads"][0]["title"] == "Spår A"
+    assert status.etiketter[-1] == "1 sökning gjord"
+
+
+def test_sista_propose_leads_anropet_vinner(sida: AppTest, monkeypatch) -> None:
+    """Flera anrop i samma svar: det sista gäller, utan att listor blandas."""
+    fejk = _FakeSvar(
+        [
+            (
+                None,
+                [_tool_call("propose_leads", json.dumps({"leads": [_spar("Spår A")]}))],
+                "tool_calls",
+            ),
+            (
+                None,
+                [_tool_call("propose_leads", json.dumps({"leads": [_spar("Spår B")]}))],
+                "tool_calls",
+            ),
+            ("", None, "stop"),
+        ]
+    )
+    proposal, _parts, _status, _text = _kor_openai(monkeypatch, fejk)
+
+    assert [spår["title"] for spår in proposal["leads"]] == ["Spår B"]
+
+
+def test_andra_propose_leads_anropet_loggas_aven_nar_forsta_gav_noll_spar(
+    sida: AppTest, monkeypatch
+) -> None:
+    """Debugraden ska styras av att ett anrop skett, inte av vad det gav.
+
+    Ett första anrop kan normaliseras till noll spår; nästa anrop ska ändå
+    loggas som ett över- skrivande anrop."""
+    Utredning = _importera_sidan()
+    logg = _LoggAttrapp()
+    monkeypatch.setattr(Utredning, "_log", logg)
+    fejk = _FakeSvar(
+        [
+            (None, [_tool_call("propose_leads", '{"leads": []}')], "tool_calls"),
+            (
+                None,
+                [_tool_call("propose_leads", json.dumps({"leads": [_spar("Spår B")]}))],
+                "tool_calls",
+            ),
+            ("", None, "stop"),
+        ]
+    )
+    proposal, _parts, _status, _text = _kor_openai(monkeypatch, fejk)
+
+    assert proposal["leads"][0]["title"] == "Spår B"
+    assert any("flera propose_leads-anrop" in rad for rad in logg.rader)
+
+
+def test_propose_leads_ar_med_utan_webbsok(sida: AppTest) -> None:
+    """Verktyget finns alltid i utredningsläget, oberoende av webbsök."""
+    Utredning = _importera_sidan()
+    navn = [verktyg["function"]["name"] for verktyg in Utredning.active_tools(False)]
+
+    assert "propose_leads" in navn
+    assert "web_search" not in navn
 
 
 TURER = "Verktygsomgångar (max)"
@@ -787,3 +1139,377 @@ def test_tomt_index_startar_sidan_med_hjalptext(monkeypatch, tmp_path) -> None:
 
 def test_fyllt_index_visar_ingen_hjalptext(sida: AppTest) -> None:
     assert not any("Sökindexet" in i.value for i in sida.info)
+
+
+# Spårlistan i utredningsläget: session_state["leads"] ägs av sidan och
+# "a.txt" är en källa som aldrig setts i ett verktygssvar, så belägget ritas som
+# text (ingen gissad PDF-länk).
+SPÅR = {
+    "id": 1,
+    "turn": 1,
+    "status": "föreslagen",
+    "title": "Bilen i tre tips",
+    "why": "Nämns 1987–1989",
+    "question": "Vad vet vi om bilen?",
+    "sources": [{"source": "a.txt", "page": 2}],
+}
+
+
+def _med_spar(sida: AppTest, *, status: str = "föreslagen") -> None:
+    """Förifyll en konversation där assistenten föreslagit ett spår."""
+    sida.session_state["leads"] = [{**SPÅR, "status": status}]
+    sida.session_state["chat_history"] = [
+        {"role": "user", "text": "Fråga", "sources": []},
+        {
+            "role": "assistant",
+            "text": "Svar",
+            "sources": [],
+            "lead_ids": [1],
+            "counter_question": None,
+        },
+    ]
+
+
+class _FakeSvarLoggande(_FakeSvar):
+    """Svarar ur en lista och minns meddelandena modellen fick se."""
+
+    def __init__(self, svar: list[tuple[str | None, list | None, str]]) -> None:
+        super().__init__(svar)
+        self.senaste_messages: list[dict] = []
+
+    async def create(self, **kwargs):
+        self.senaste_messages = kwargs["messages"]
+        return await super().create(**kwargs)
+
+
+def test_spar_och_motfraga_ritas_ur_historiken(sida: AppTest) -> None:
+    """Spårkorten och motfrågan ritas ur chat_history vid varje rerun — inte
+    bara under strömningen, som hade tappat dem så fort sidan ritades om."""
+    _run(sida, MCP)
+    sida.session_state["leads"] = [dict(SPÅR)]
+    sida.session_state["chat_history"] = [
+        {"role": "user", "text": "Fråga", "sources": []},
+        {"role": "assistant", "text": "Svar", "sources": [], "lead_ids": [1],
+         "counter_question": "Vilken hypotes prövar du?"}]
+    sida.run()
+    assert not sida.exception, sida.exception
+
+    text = " ".join(m.value for m in sida.markdown if isinstance(m.value, str))
+    assert "Bilen i tre tips" in text and "Nämns 1987–1989" in text
+    assert any("Vilken hypotes prövar du?" in i.value for i in sida.info)
+    assert [b for b in sida.button if b.label == "Gräv"]
+
+
+def test_grav_skickar_fragan_och_markerar_spaaret(sida: AppTest, monkeypatch) -> None:
+    """Gräv skickar spårets fråga exakt en gång och visar spåret som grävt.
+
+    Fyra identiska svar i listan så en dubbelsändning syns som två anrop i
+    stället för att krascha fejkklienten."""
+    fejk = _FakeSvar([("Svar om bilen.", None, "stop")] * 4)
+    monkeypatch.setattr("openai.AsyncOpenAI", _fake_openai(fejk))
+    _run(sida, MCP)
+    _med_spar(sida)
+    sida.run()
+    assert [b for b in sida.button if b.label == "Gräv"]
+
+    next(b for b in sida.button if b.label == "Gräv").click().run()
+    assert not sida.exception, sida.exception
+
+    assert sida.session_state["leads"][0]["status"] == "grävd"
+    anvandare = [t["text"] for t in sida.session_state["chat_history"] if t["role"] == "user"]
+    assert anvandare[-1] == "Vad vet vi om bilen?"
+    assert anvandare.count("Vad vet vi om bilen?") == 1          # ingen dubbelsändning
+    assert not [b for b in sida.button if b.label == "Gräv"]       # knappen nu "Grävt"
+    assert fejk.anrop == 1
+
+    sida.run()                                                     # en extra rerun
+    anvandare = [t["text"] for t in sida.session_state["chat_history"] if t["role"] == "user"]
+    assert anvandare.count("Vad vet vi om bilen?") == 1
+    assert fejk.anrop == 1
+
+
+def test_sammanfattningen_skickas_men_visas_inte(sida: AppTest, monkeypatch) -> None:
+    """Spårlistan går med till modellen (så spår inte upprepas) men syns aldrig
+    i chatten: chat_history bär bara operatörens egen text."""
+    fejk = _FakeSvarLoggande([("Svar på nästa fråga.", None, "stop")] * 4)
+    monkeypatch.setattr("openai.AsyncOpenAI", _fake_openai(fejk))
+    _run(sida, MCP)
+    _med_spar(sida)
+    sida.run()
+
+    sida.chat_input[0].set_value("Nästa fråga").run()
+    assert not sida.exception, sida.exception
+
+    senaste_user = next(
+        m["content"]
+        for m in reversed(fejk.senaste_messages)
+        if m.get("role") == "user"
+    )
+    assert senaste_user.startswith("[Spår hittills i konversationen]")
+    assert senaste_user.endswith("Nästa fråga")
+    assert sida.session_state["chat_history"][-2]["text"] == "Nästa fråga"
+    text = " ".join(m.value for m in sida.markdown if isinstance(m.value, str))
+    assert "[Spår hittills i konversationen]" not in text
+
+
+def test_ny_konversation_tommer_spaaren(sida: AppTest) -> None:
+    """En ny konversation ska inte ärva den gamlas spår eller kända källor —
+    annars kan gamla spår föreslås igen och sammanfattningen beskriva fel sak."""
+    _run(sida, MCP)
+    sida.session_state["leads"] = [dict(SPÅR)]
+    sida.session_state["lead_sources"] = {"a.txt"}
+    sida.run()
+    next(b for b in sida.button if b.label == "Ny konversation").click().run()
+    assert sida.session_state["leads"] == [] and sida.session_state["lead_sources"] == set()
+    assert sida.session_state["pending_question"] is None
+
+
+# Claude-profil: sidan väljer gren på backendens ``kind`` (config.resolve_runtime_profile),
+# och grenen kräver en Claude-nyckel i miljön redan vid sidladdningen.
+CLAUDE_PROFIL = {
+    "kind": "claude",
+    "backend_name": "Claude",
+    "model": "test-modell",
+    "base_url": "",
+    "prices": {},
+}
+
+
+def _claude_svar(anrop: list[str]):
+    """Async-generator som spelar Claudes meddelandeström.
+
+    Verktygssvaret bär en ``source``-rad så sidan känner igen spårets belägg,
+    och ``ResultMessage`` bär session_id som sidan ska spara för resume.
+    Varje anrop registreras med sin prompt (frågan modellen får se)."""
+    from claude_agent_sdk import (
+        AssistantMessage,
+        ResultMessage,
+        TextBlock,
+        ToolResultBlock,
+        ToolUseBlock,
+        UserMessage,
+    )
+
+    async def _query(prompt, options):
+        anrop.append(prompt)
+        yield UserMessage(
+            [ToolResultBlock(tool_use_id="toolu_0", content='Utdrag\nsource: "a.txt"\n')]
+        )
+        yield AssistantMessage([TextBlock("Svar från Claude.")], model="test-modell")
+        yield AssistantMessage(
+            [
+                ToolUseBlock(
+                    id="toolu_1",
+                    name="mcp__arkiv__propose_leads",
+                    input={
+                        "leads": [
+                            {
+                                "title": "Bilen i tre tips",
+                                "why": "Nämns 1987–1989",
+                                "question": "Vad vet vi om bilen?",
+                                "sources": [{"source": "a.txt", "page": 2}],
+                            }
+                        ],
+                        "counter_question": None,
+                    },
+                )
+            ],
+            model="test-modell",
+        )
+        yield ResultMessage(
+            subtype="success",
+            duration_ms=1,
+            duration_api_ms=1,
+            is_error=False,
+            num_turns=1,
+            session_id="ses-ny",
+            stop_reason="end_turn",
+        )
+
+    return _query
+
+
+def test_claude_grenen_registrerar_spar_och_skickar_sammanfattning(
+    sida: AppTest, monkeypatch
+) -> None:
+    """Claude-grenen i den sammanslagna _render_mcp_tab.
+
+    Grenen packar upp fem värden ur stream_mcp_to_string, sparar session_id
+    för resume, registrerar spåret ur proposal och skickar spårsammanfattningen
+    som prefix på nästa fråga — chatten ska bara visa operatörens text."""
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "test")
+    monkeypatch.setattr(
+        "config.resolve_runtime_profile",
+        lambda profil, katalog, **kw: dict(CLAUDE_PROFIL),
+    )
+    anrop: list[str] = []
+    # Sidan körs av AppTest i en färsk modul, så patchen måste träffa SDK:ts
+    # ``query`` (som sidan importerar om vid varje körning) — inte den separat
+    # importerade Utredning-modulens kopia av stream_mcp_to_string.
+    monkeypatch.setattr("claude_agent_sdk.query", _claude_svar(anrop))
+    _run(sida, MCP)
+
+    sida.chat_input[0].set_value("Vem ägde bilen?").run()
+    assert not sida.exception, sida.exception
+
+    assert sida.session_state["mcp_session_id"] == "ses-ny"
+    spar = sida.session_state["leads"]
+    assert [s["title"] for s in spar] == ["Bilen i tre tips"]
+    assert spar[0]["status"] == "föreslagen"
+    assert spar[0]["sources"] == [{"source": "a.txt", "page": 2}]
+    text = " ".join(m.value for m in sida.markdown if isinstance(m.value, str))
+    assert "Bilen i tre tips" in text and "Nämns 1987–1989" in text
+    assert [b for b in sida.button if b.label == "Gräv"]
+
+    next(b for b in sida.button if b.label == "Gräv").click().run()
+    assert not sida.exception, sida.exception
+
+    assert sida.session_state["leads"][0]["status"] == "grävd"
+    # Två anrop totalt: den skrivna frågan och Gräv-frågan — ingen dubbelsändning.
+    assert len(anrop) == 2
+    assert anrop[1].startswith("[Spår hittills i konversationen]")
+    assert anrop[1].endswith("Vad vet vi om bilen?")
+    skrivna = [
+        t["text"] for t in sida.session_state["chat_history"] if t["role"] == "user"
+    ]
+    assert skrivna == ["Vem ägde bilen?", "Vad vet vi om bilen?"]
+    assert not any("[Spår hittills" in t for t in skrivna)
+
+    sida.run()
+    assert len(anrop) == 2
+
+
+class _FakeSvarSomFaller(_FakeSvarLoggande):
+    """Klient vars anrop alltid faller (nätverk, 401) men som minns meddelandena."""
+
+    async def create(self, **kwargs):
+        self.senaste_messages = kwargs["messages"]
+        self.anrop += 1
+        raise RuntimeError("401 Unauthorized")
+
+
+def test_misslyckat_grav_lamnar_sparet_foreslaget(sida: AppTest, monkeypatch) -> None:
+    """Ett Gräv vars anrop faller får inte låsa spåret som grävt: knappen ska gå
+    att klicka igen. Sammanfattningen till modellen visar ändå spåret som grävt
+    under anropet, så modellen inte föreslår det igen i samma svar."""
+    fejk = _FakeSvarSomFaller([])
+    monkeypatch.setattr("openai.AsyncOpenAI", _fake_openai(fejk))
+    _run(sida, MCP)
+    _med_spar(sida)
+    sida.run()
+
+    next(b for b in sida.button if b.label == "Gräv").click().run()
+    assert not sida.exception, sida.exception
+
+    assert fejk.anrop == 1
+    assert sida.session_state["leads"][0]["status"] == "föreslagen"
+    assert sida.session_state["pending_lead_id"] is None
+    assert [b for b in sida.button if b.label == "Gräv"]
+    senaste_user = next(
+        m["content"] for m in reversed(fejk.senaste_messages) if m.get("role") == "user"
+    )
+    assert "1. (grävd) Bilen i tre tips" in senaste_user
+
+
+def test_skriven_fraga_slapper_koad_grav(sida: AppTest, monkeypatch) -> None:
+    """En skriven fråga i samma körning som en köad Gräv-fråga går före, och
+    spåret markeras då inte som grävt."""
+    fejk = _FakeSvar([("Svar.", None, "stop")] * 2)
+    monkeypatch.setattr("openai.AsyncOpenAI", _fake_openai(fejk))
+    _run(sida, MCP)
+    _med_spar(sida)
+    sida.session_state["pending_question"] = "Vad vet vi om bilen?"
+    sida.session_state["pending_lead_id"] = 1
+    sida.chat_input[0].set_value("Egen fråga").run()
+    assert not sida.exception, sida.exception
+
+    skrivna = [t["text"] for t in sida.session_state["chat_history"] if t["role"] == "user"]
+    assert skrivna[-1] == "Egen fråga" and "Vad vet vi om bilen?" not in skrivna
+    assert sida.session_state["leads"][0]["status"] == "föreslagen"
+    assert fejk.anrop == 1
+
+
+def test_textdelar_fogas_med_blankrad(sida: AppTest, monkeypatch) -> None:
+    """Text före spåren och ett icke-tomt slutsvar får en blankrad emellan —
+    annars blev skarven "…Nr 12.Spåren visas…"."""
+    fejk = _FakeSvar(
+        [
+            (
+                "Svar före spåren.",
+                [_tool_call("propose_leads", json.dumps({"leads": [_spar("Spår A")]}))],
+                "tool_calls",
+            ),
+            ("Klart.", None, "stop"),
+        ]
+    )
+    _proposal, parts, _status, text = _kor_openai(monkeypatch, fejk)
+    assert "".join(parts) == "Svar före spåren.\n\nKlart."
+    assert text.markdowns[-1] == "Svar före spåren.\n\nKlart."
+
+
+def test_reserverade_turer_bara_for_sparen(sida: AppTest, monkeypatch) -> None:
+    """Efter operatörens tak får modellen bara propose_leads, så taket gäller för
+    sökarbetet; en sökning som ändå begärs körs inte."""
+    import mcp_server
+
+    sokningar: list[str] = []
+    monkeypatch.setattr(
+        mcp_server,
+        "search_with_settings",
+        lambda q, **k: sokningar.append(q) or 'Utdrag\nsource: "a.txt"\n',
+    )
+
+    class _AlltidSok(_FakeSvar):
+        def __init__(self) -> None:
+            super().__init__([])
+            self.verktyg_per_anrop: list[list[str]] = []
+
+        async def create(self, **kwargs):
+            self.anrop += 1
+            if kwargs.get("tool_choice") == "none":
+                return _FakeResponse(_FakeChoice(_FakeMessage("Sammanfattning.", None), "stop"))
+            self.verktyg_per_anrop.append(
+                [t["function"]["name"] for t in kwargs.get("tools") or []]
+            )
+            return _FakeResponse(
+                _FakeChoice(
+                    _FakeMessage(None, [_tool_call("search_archive", '{"query": "x"}')]),
+                    "tool_calls",
+                )
+            )
+
+    fejk = _AlltidSok()
+    Utredning = _importera_sidan()
+    monkeypatch.setattr("openai.AsyncOpenAI", _fake_openai(fejk))
+    messages = [{"role": "system", "content": "s"}, {"role": "user", "content": "q"}]
+    sokval = {**SOKVAL, "max_turns": 3}
+    asyncio.run(
+        Utredning.stream_openai_mcp(
+            _Box(), _Box(), [], {"model": "m", "base_url": "http://x", "api_key": "k"},
+            messages, sokval, proposal={},
+        )
+    )
+    assert len(sokningar) == 3
+    assert len(fejk.verktyg_per_anrop) == 3 + Utredning.LEADS_EXTRA_TURNS
+    assert all("search_archive" in v for v in fejk.verktyg_per_anrop[:3])
+    assert all(v == ["propose_leads"] for v in fejk.verktyg_per_anrop[3:])
+
+
+def test_spårbelagg_lankas_eller_visas_som_escapad_text(monkeypatch, tmp_path) -> None:
+    """Ett belägg med PDF blir en länk med sida; utan PDF blir det escapad text —
+    aldrig en gissad länk, och källnamnet får aldrig tolkas som HTML."""
+    Utredning = _importera_sidan()
+    pdf = tmp_path / "a.pdf"
+    pdf.write_bytes(b"%PDF-1.4")
+    monkeypatch.setattr(
+        Utredning._casebook_ui,
+        "find_pdf",
+        lambda root, source: pdf if source == "a.txt" else None,
+    )
+
+    lank = Utredning._lead_source_markdown({"source": "a.txt", "page": 2})
+    assert lank.startswith("<a ") and "&page=2" in lank and "[a.txt, sida 2]" in lank
+
+    text = Utredning._lead_source_markdown({"source": "<b>x</b>.txt", "page": 1})
+    assert "<a " not in text and "<b>" not in text
+    assert "&lt;b&gt;x&lt;/b&gt;.txt" in text

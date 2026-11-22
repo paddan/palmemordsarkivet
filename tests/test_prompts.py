@@ -184,6 +184,53 @@ def test_mcp_prompten_soker_nulaget_och_daterar_webbkällan():
     assert "datera" in text
 
 
+def test_mcp_prompten_beskriver_propose_leads() -> None:
+    """Personan ska driva utredningen framåt, och verktygsreferensen ska beskriva
+    spårverktyget med båda namnen — annars föreslår modellen inga spår."""
+    import mcp_server
+
+    from prompts import MCP_SYSTEM_PROMPT
+
+    assert "propose_leads" in MCP_SYSTEM_PROMPT
+    assert "mcp__arkiv__propose_leads" in MCP_SYSTEM_PROMPT
+    assert "mordutredare" in MCP_SYSTEM_PROMPT
+
+    # Kontraktet i verktygsreferensen, med promptens egen ordalydelse. Radbrytningen
+    # ska inte avgöra testet. Spårtaket jämförs mot serverns LEADS_MAX, så prompt och
+    # verktyg inte kan glida isär.
+    siffror = {1: "ett", 2: "två", 3: "tre", 4: "fyra"}
+    text = " ".join(MCP_SYSTEM_PROMPT.split())
+    assert f"högst {siffror[mcp_server.LEADS_MAX]} spår" in text
+    assert "högst en gång per svar" in text
+    assert "sista åtgärd när svaret redan är skrivet" in text
+    assert "en enda motfråga till operatören" in text
+    assert "lämna den tom annars" in text
+    assert (
+        "exakt ur sökträffens source-rad, samma värde som get_page tar, plus sidnummer"
+        in text
+    )
+
+
+def test_mcp_promptens_persona_lagger_nasta_steg_som_spar() -> None:
+    """Personan sa bara att modellen "föreslår vad nästa steg bör vara", vilket
+    bjöd in till spår i löpande text utan belägg. Nästa steg ska läggas fram som
+    spår med propose_leads i stället."""
+    inledning = prompts.MCP_SYSTEM_PROMPT.split("Tillgängliga arkivverktyg")[0]
+    assert "propose_leads" in inledning
+    assert "löpande text" in inledning
+
+
+
+def test_prompthjalpen_namner_propose_leads() -> None:
+    """Skrivhjälpen ska nämna spårverktyget, så en egen prompt kan beskriva det."""
+    import admin_ui
+
+    assert (
+        "propose_leads" in admin_ui.PROMPT_WRITING_HELP
+        or "propose_leads" in admin_ui.PROMPT_MODE_HELP["mcp"]
+    )
+
+
 def test_mcp_prompten_tillater_offentligt_publicerade_privatlivsuppgifter():
     """Ägarens beslut: privatlivsuppgifter får tas med om de finns offentligt på
     nätet. Kravet är att källan och datumet står i svaret — inte att uppgiften

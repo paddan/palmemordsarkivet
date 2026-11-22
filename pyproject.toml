@@ -111,6 +111,7 @@ py-modules = [
     "surya_layout",
     "form_layout",
     "surya_worker",
+    "utredningsspar",
     "web_log",
 ]
 

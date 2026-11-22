@@ -7,6 +7,7 @@ Kör med:
 from __future__ import annotations
 
 import asyncio
+import html as _html
 import os
 import sys
 import time
@@ -197,6 +198,7 @@ import db as _state_db  # noqa: E402
 import facets as _facets  # noqa: E402
 import llm_usage as _llm_usage  # noqa: E402
 import search_fuzzy as _search_fuzzy  # noqa: E402
+import utredningsspar as _utredningsspar  # noqa: E402
 import web_log  # noqa: E402
 from errors_log import log_error  # noqa: E402
 from graph import answer_entities as _answer_entities  # noqa: E402
@@ -798,12 +800,64 @@ OPENAI_TOOLS: list[Any] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "propose_leads",
+            "description": (
+                "Föreslå belagda utredningsspår och en eventuell motfråga baserat på "
+                "hämtat material. Anropa högst en gång per svar, som sista åtgärd efter "
+                "att svaret är skrivet. Föreslå 0–4 spår; ställ en motfråga bara när "
+                "svaret beror på operatörens avsikt."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "leads": {
+                        "type": "array",
+                        "description": "Spår med titel, skäl, fråga och belägg",
+                        "maxItems": 4,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "title": {"type": "string", "description": "Spårets rubrik"},
+                                "why": {"type": "string", "description": "Kort motivering"},
+                                "question": {"type": "string", "description": "Frågan som spåret ska svara på"},
+                                "sources": {
+                                    "type": "array",
+                                    "description": "Belägg från sökträffens source-rad och sidnummer",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "source": {"type": "string", "description": "Filnamnet från sökträffens source"},
+                                            "page": {"type": "integer", "description": "Sidnummer (1-baserat)"},
+                                        },
+                                        "required": ["source", "page"],
+                                    },
+                                },
+                            },
+                            "required": ["title", "question"],
+                        },
+                    },
+                    "counter_question": {
+                        "type": "string",
+                        "description": "Operatörens hypotes, tidsram eller uteslutna alternativ",
+                    },
+                },
+                "required": ["leads"],
+            },
+        },
+    },
 ]
 
 # Verktyget får bara annonseras när operatören slagit på webbsök: modellen ska
 # inte kunna be om ett verktyg som är avstängt, och listan modellen ser ska vara
 # densamma som den faktiskt får använda.
 WEB_SEARCH_TOOL = "web_search"
+LEADS_TOOL = "propose_leads"
+# Claude-vägen ser verktygsnamnet med serverns prefix (MCP-subprocessen heter
+# "arkiv"); OpenAI-vägen använder det korta namnet.
+LEADS_TOOL_FULL = f"mcp__arkiv__{LEADS_TOOL}"
 
 
 def active_tools(web_search: bool) -> list[Any]:
@@ -962,6 +1016,17 @@ ss.setdefault("mcp_session_id", None)
 ss.setdefault("openai_chat_messages", [])
 ss.setdefault("openai_turn_starts", [])
 ss.setdefault("answer_centers", [])
+# Konversationens spårlista. ``leads`` ägs av sessionen och muteras av
+# utredningsspar.register_leads/mark_dug; ``lead_sources`` är alla källnamn som
+# setts i verktygssvar (beläggskontrollen), och ``pending_question`` bär
+# Gräv-frågan mellan klicket och nästa körning — st.chat_input kan inte
+# förifyllas, så knappen måste gå via session_state och en rerun.
+ss.setdefault("leads", [])
+ss.setdefault("lead_sources", set())
+ss.setdefault("pending_question", None)
+# Spåret vars fråga ligger i pending_question. Det markeras grävt först när
+# svaret kommit utan fel — annars låste ett misslyckat anrop spåret för gott.
+ss.setdefault("pending_lead_id", None)
 
 def _mcp_tool_label(name: str, inp: dict) -> str:
     """Människoläsbar etikett för ett MCP-verktygsanrop (namnet är prefixat
@@ -973,6 +1038,8 @@ def _mcp_tool_label(name: str, inp: dict) -> str:
         return f'📄 Läser: {inp.get("source", "")}, sida {inp.get("page", "")}'
     if short == "web_search":
         return f'🌐 Söker på nätet: "{inp.get("query", "")}"'
+    if short == LEADS_TOOL:
+        return "🧭 Föreslår utredningsspår"
     return f"🔧 {short}"
 
 
@@ -980,6 +1047,38 @@ def _mcp_tool_label(name: str, inp: dict) -> str:
 # påslaget går tio turer lätt åt till att söka, och modellen hann aldrig svara.
 # Nås taket tvingas ändå ett svar fram (se _answer_without_tools).
 MAX_MCP_TURNS = 15
+
+# propose_leads tar en verktygstur plus en avslutande texttur. Tursgränsen höjs
+# därför med två internt, så att operatörens tak (mcp_max_turns) fortfarande
+# gäller för sökarbetet och spåren inte stjäl en sökomgång.
+LEADS_EXTRA_TURNS = 2
+
+
+def _append_part(parts: list[str], text: str) -> None:
+    """Lägg en textdel till svaret, med blankrad mot föregående del.
+
+    Svaret byggs av flera delar (text före spåren, slutturen, notiser), och utan
+    avgränsare blev skarven "…Nr 12.Spåren visas…"."""
+    if text and any(parts):
+        parts.append(f"\n\n{text}")
+    else:
+        parts.append(text)
+
+
+def _leads_only_tools() -> list[Any]:
+    """Verktygsscheman för de reserverade spårturerna: bara ``propose_leads``."""
+    return [t for t in OPENAI_TOOLS if t["function"]["name"] == LEADS_TOOL]
+
+
+def _tool_status_label(count: int) -> str:
+    """Etikett för statusraden i utredningsläget: "N sökningar gjorda".
+
+    Räknaren är antalet arkivsökningar — ``propose_leads`` räknas inte, för
+    spåren är inget sökarbete (tursgränsnotisen räknar däremot alla anrop)."""
+    suffix = "ar" if count != 1 else ""
+    done = "a" if count != 1 else ""
+    return f"{count} sökning{suffix} gjord{done}"
+
 
 
 def _truncated_notice(reason: str | None, component: str, model: str) -> str | None:
@@ -997,6 +1096,7 @@ def _truncated_notice(reason: str | None, component: str, model: str) -> str | N
 async def stream_mcp(
     q: str, status_box, text_placeholder, parts: list[str], resume_id: str | None,
     cfg: dict, search: dict, tool_sources: set[str] | None = None,
+    proposal: dict | None = None,
 ) -> tuple[str | None, int]:
     """Utredningsläge: Claude anropar search_archive/get_page autonomt.
 
@@ -1005,8 +1105,11 @@ async def stream_mcp(
     OPENROUTER_API_KEY följer med — annars faller rerankningen på saknad nyckel.
 
     Skriver varje verktygsanrop till ``status_box`` så användaren ser att
-    sökningarna faktiskt körs (kan ta 1–3 min). Returnerar Claudes session_id
-    (så nästa fråga kan resume:a samma konversation) och antalet verktygsanrop."""
+    sökningarna faktiskt körs (kan ta 1–3 min). Ett ``propose_leads``-anrop som
+    når hit är redan kört i servern (det är ett riktigt MCP-verktyg); här fångas
+    bara argumenten i ``proposal``, som anroparen äger och ritar ur. Returnerar
+    Claudes session_id (så nästa fråga kan resume:a samma konversation) och
+    antalet sökningar — spåren räknas inte som sökningar i statusraden."""
     import mcp_server  # noqa: PLC0415
 
     db_dir = ROOT / "generated" / "lancedb"
@@ -1060,25 +1163,49 @@ async def stream_mcp(
         allowed_tools=[
             "mcp__arkiv__search_archive",
             "mcp__arkiv__get_page",
+            LEADS_TOOL_FULL,
             *(["mcp__arkiv__web_search"] if web_search_on else []),
         ],
         thinking=ThinkingConfigAdaptive(type="adaptive"),
         effort="high",
-        max_turns=max_turns,
+        # + LEADS_EXTRA_TURNS: spåren får inte tränga ut en sökomgång.
+        max_turns=max_turns + LEADS_EXTRA_TURNS,
         setting_sources=[],
         resume=resume_id,
     )
     new_session_id: str | None = None
-    tool_count = 0
+    # Statusraden räknar arkivsökningar; spåren (propose_leads) är inget
+    # sökarbete och räknas inte.
+    search_count = 0
+    leads_sett = False
     async for message in query(prompt=q, options=options):
         if isinstance(message, AssistantMessage):
             for block in message.content:
                 if isinstance(block, TextBlock):
-                    parts.append(block.text)
+                    _append_part(parts, block.text)
                     text_placeholder.markdown("".join(parts))
                 elif isinstance(block, ToolUseBlock):
-                    tool_count += 1
-                    status_box.write(_mcp_tool_label(block.name, block.input or {}))
+                    inp = block.input or {}
+                    if block.name == LEADS_TOOL_FULL:
+                        # Flaggan (inte innehållet) avgör om detta är ett
+                        # över-skrivande anrop: ett första anrop kan ha
+                        # normaliserats till noll spår.
+                        if leads_sett:
+                            _log.debug(
+                                "utredningsläget: flera propose_leads-anrop i "
+                                "samma svar — det sista gäller"
+                            )
+                        leads_sett = True
+                        if proposal is not None:
+                            proposal.clear()
+                            proposal.update(
+                                mcp_server.normalize_leads(
+                                    inp.get("leads"), inp.get("counter_question")
+                                )
+                            )
+                    else:
+                        search_count += 1
+                    status_box.write(_mcp_tool_label(block.name, inp))
         elif isinstance(message, UserMessage) and tool_sources is not None:
             # Verktygssvarens source-rader särskiljer avkortade id i svaret.
             for block in message.content if isinstance(message.content, list) else []:
@@ -1096,7 +1223,15 @@ async def stream_mcp(
             if notice:
                 parts.append(f"\n\n{notice}")
                 text_placeholder.markdown("".join(parts))
-    return new_session_id, tool_count
+    if proposal is not None:
+        _log.debug(
+            "utredningsläget: %d spår föreslagna, motfråga=%s",
+            len(proposal.get("leads") or []),
+            proposal.get("counter_question"),
+        )
+    # Antalet sökningar (inte alla verktygsanrop): statusraden ska inte räkna
+    # spåren som sökarbete.
+    return new_session_id, search_count
 
 
 async def stream_claude(user_msg: str, placeholder, parts: list[str], cfg: dict) -> None:
@@ -1197,15 +1332,22 @@ async def stream_to_string(hits, q, cfg, placeholder=None) -> str:
 
 async def stream_mcp_to_string(
     q: str, resume_id: str | None, cfg: dict, search: dict,
-) -> tuple[str, str | None]:
+) -> tuple[str, str | None, dict, set[str], bool]:
+    """Svar, session_id, föreslagna spår, källorna i verktygssvaren och om anropet
+    lyckades.
+
+    ``proposal`` har alltid spårformen (även när verktyget inte anropades eller
+    anropet föll), så anroparen slipper skilja på tomt och saknat. ``ok`` är
+    falskt när anropet föll — då markeras ett Gräv-spår inte som grävt."""
     status_box = st.status("Söker i arkivet…", expanded=True)
     text_placeholder = st.empty()
     parts: list[str] = []
     tool_sources: set[str] = set()
+    proposal: dict = {"leads": [], "counter_question": None}
     try:
-        new_id, tool_count = await stream_mcp(
+        new_id, search_count = await stream_mcp(
             q, status_box, text_placeholder, parts, resume_id, cfg, search,
-            tool_sources=tool_sources,
+            tool_sources=tool_sources, proposal=proposal,
         )
     except Exception as exc:
         err_str = str(exc)
@@ -1218,19 +1360,16 @@ async def stream_mcp_to_string(
             msg = f"*Fel i utredningsläget: {exc}*"
         status_box.update(label="Fel i utredningsläget", state="error", expanded=False)
         text_placeholder.markdown(msg)
-        return msg, None
+        return msg, None, {"leads": [], "counter_question": None}, tool_sources, False
     _log.debug("utredningsläget (Claude): %d källor i verktygssvaren", len(tool_sources))
     final = linkify_citations("".join(parts), known_sources=tool_sources or None)
     text_placeholder.markdown(final, unsafe_allow_html=True)
-    n = tool_count
-    suffix = "ar" if n != 1 else ""
-    done = "a" if n != 1 else ""
     status_box.update(
-        label=f"{n} sökning{suffix} gjord{done}",
+        label=_tool_status_label(search_count),
         state="complete",
         expanded=False,
     )
-    return final, new_id
+    return final, new_id, proposal, tool_sources, True
 
 
 def _run_tool(name: str, arguments: dict, search: dict) -> tuple[str, float | None]:
@@ -1306,12 +1445,21 @@ async def stream_openai_mcp(
     cfg: dict,
     messages: list[Any],
     search: dict,
-) -> None:
-    """Utredningsläge för OpenAI-kompatibla backends.
+    proposal: dict | None = None,
+) -> bool:
+    """Utredningsläge för OpenAI-kompatibla backends. Returnerar om anropet
+    lyckades (falskt när ett undantag fångades och felet visades som text).
 
     messages innehåller redan user-meddelandet. Assistentens svar och
     tool-resultat appendas direkt till messages (konversationshistorik).
-    """
+
+    ``propose_leads`` körs in-process före ``_run_tool``: argumenten normaliseras
+    och skrivs in i ``proposal`` (som anroparen äger och ritar ur), och modellen
+    får kvittensen som verktygssvar så loopen kan avsluta som vanligt.
+
+    De sista ``LEADS_EXTRA_TURNS`` turerna är reserverade för spåren: där får
+    modellen bara ``propose_leads``, så operatörens tak för verktygsomgångar
+    gäller för sökarbetet."""
     import json  # noqa: PLC0415
 
     import mcp_server  # noqa: PLC0415
@@ -1319,7 +1467,11 @@ async def stream_openai_mcp(
     from openai.types.chat import ChatCompletionMessageFunctionToolCall  # noqa: PLC0415
 
     api_key = cfg.get("api_key") or "ollama"
+    # tool_count räknar alla verktygsanrop (tursgränsnotisen); search_count bara
+    # arkivsökningar (statusraden) — spåren är inget sökarbete.
     tool_count = 0
+    search_count = 0
+    leads_sett = False
     turns_usage: dict = {}
     # Taket för betalda sökningar ligger i serverns räknare (samma modul, den här
     # processen), och nollställs här så budgeten gäller per fråga. Modellen ser
@@ -1332,13 +1484,26 @@ async def stream_openai_mcp(
     # Leverantörens rapporterade kostnad (OpenRouter) summeras för sig: den
     # innehåller webbsökningens avgift, som inte syns i några token.
     verktygs_och_provider_kostnad: float | None = None
+    ok = True
     try:
         async with AsyncOpenAI(api_key=api_key or "ollama", base_url=cfg["base_url"]) as client:
-            for _turn in range(max_turns):
+            # + LEADS_EXTRA_TURNS: spåren får inte tränga ut en sökomgång, och
+            # turerna efter operatörens tak bär bara spårverktyget.
+            for _turn in range(max_turns + LEADS_EXTRA_TURNS):
+                reserverad = _turn >= max_turns
+                if reserverad and _turn == max_turns:
+                    _log.debug(
+                        "utredningsläget: taket %d verktygsomgångar nått — bara "
+                        "propose_leads i de %d reserverade turerna",
+                        max_turns,
+                        LEADS_EXTRA_TURNS,
+                    )
                 response = await client.chat.completions.create(
                     model=cfg["model"],
                     messages=messages,
-                    tools=active_tools(web_search_on and web_searches < web_search_budget),
+                    tools=_leads_only_tools()
+                    if reserverad
+                    else active_tools(web_search_on and web_searches < web_search_budget),
                 )
                 # Icke-strömmande svar: usage per tur, summeras över turerna.
                 _llm_usage.add_usage(
@@ -1360,17 +1525,77 @@ async def stream_openai_mcp(
                             "tool_calls": [tc.model_dump() for tc in msg.tool_calls],
                         }
                     )
+                    # Text modellen skrev före spåren ska synas (Task 4 ritar
+                    # spårkorten efter svaret). Den försvinner annars när turen
+                    # bara bär verktygsanrop — men bara spårturen får visa text,
+                    # andra verktygsturer lämnas som förut.
+                    if msg.content and any(
+                        isinstance(tc, ChatCompletionMessageFunctionToolCall)
+                        and tc.function.name == LEADS_TOOL
+                        for tc in msg.tool_calls
+                    ):
+                        _append_part(parts, msg.content)
+                        text_placeholder.markdown("".join(parts))
                     for tc in msg.tool_calls:
                         # Vi definierar bara function-verktyg; custom tool calls
                         # (serverdefinierade) har inget .function-attribut.
                         if not isinstance(tc, ChatCompletionMessageFunctionToolCall):
                             continue
                         args = json.loads(tc.function.arguments)
+                        if reserverad and tc.function.name != LEADS_TOOL:
+                            # Schemat erbjöd bara spårverktyget; en modell som ändå
+                            # ber om en sökning får ett svar i stället för en körning.
+                            _log.debug(
+                                "utredningsläget: %s avvisat i reserverad spårtur",
+                                tc.function.name,
+                            )
+                            messages.append(
+                                {
+                                    "role": "tool",
+                                    "content": (
+                                        "Taket för verktygsomgångar är nått; bara "
+                                        "propose_leads är tillgängligt. Svara med det "
+                                        "underlag du har."
+                                    ),
+                                    "tool_call_id": tc.id,
+                                }
+                            )
+                            continue
                         tool_count += 1
                         if tc.function.name == WEB_SEARCH_TOOL:
                             web_searches += 1
+                        if tc.function.name != LEADS_TOOL:
+                            search_count += 1
                         status_box.write(_mcp_tool_label(tc.function.name, args))
-                        result, verktygskostnad = _run_tool(tc.function.name, args, search)
+                        if tc.function.name == LEADS_TOOL:
+                            # Spåren är data till sidan, inte ett verktygssvar:
+                            # modellen får bara kvittensen tillbaka.
+                            normaliserade = mcp_server.normalize_leads(
+                                args.get("leads"), args.get("counter_question")
+                            )
+                            # Flaggan (inte innehållet) avgör om detta är ett
+                            # överskrivande anrop: det första kan ha normaliserats
+                            # till noll spår.
+                            if leads_sett:
+                                _log.debug(
+                                    "utredningsläget: flera propose_leads-anrop "
+                                    "i samma svar — det sista gäller"
+                                )
+                            leads_sett = True
+                            if proposal is None:
+                                _log.debug(
+                                    "utredningsläget: propose_leads utan mottagare "
+                                    "— spåren kastas"
+                                )
+                            else:
+                                proposal.clear()
+                                proposal.update(normaliserade)
+                            result = mcp_server.leads_receipt(normaliserade)
+                            verktygskostnad = None
+                        else:
+                            result, verktygskostnad = _run_tool(
+                                tc.function.name, args, search
+                            )
                         if verktygskostnad is not None:
                             verktygs_och_provider_kostnad = (
                                 verktygs_och_provider_kostnad or 0.0
@@ -1392,8 +1617,10 @@ async def stream_openai_mcp(
                     )
                     if notice:
                         final = f"{final}\n\n{notice}" if final else notice
-                    parts.append(final)
-                    text_placeholder.markdown(final)
+                    _append_part(parts, final)
+                    # Hela svaret ritas (inte bara slutturen), så text som
+                    # skrevs före spåren inte skrivs över.
+                    text_placeholder.markdown("".join(parts))
                     messages.append({"role": "assistant", "content": final})
                     break
             else:
@@ -1407,22 +1634,26 @@ async def stream_openai_mcp(
                     "antal verktygsomgångar nåddes, så fler sökningar gjordes inte.]*"
                 )
                 final = f"{final}\n\n{notice}" if final else notice
-                parts.append(final)
-                text_placeholder.markdown(final)
+                _append_part(parts, final)
+                text_placeholder.markdown("".join(parts))
                 messages.append({"role": "assistant", "content": final})
     except Exception as exc:
+        ok = False
         error_msg = f"*Fel vid anrop till {cfg['model']}: {exc}*"
-        parts.append(error_msg)
-        text_placeholder.markdown(error_msg)
+        _append_part(parts, error_msg)
+        text_placeholder.markdown("".join(parts))
 
-    n = tool_count
-    suffix = "ar" if n != 1 else ""
-    done = "a" if n != 1 else ""
     status_box.update(
-        label=f"{n} sökning{suffix} gjord{done}",
+        label=_tool_status_label(search_count),
         state="complete",
         expanded=False,
     )
+    if proposal is not None:
+        _log.debug(
+            "utredningsläget: %d spår föreslagna, motfråga=%s",
+            len(proposal.get("leads") or []),
+            proposal.get("counter_question"),
+        )
     # Kostnaden kommer från leverantören när den finns (OpenRouter rapporterar
     # hela anropets kostnad inklusive verktygsavgifter), annars ur profilens priser.
     _record_usage(
@@ -1432,20 +1663,26 @@ async def stream_openai_mcp(
         if verktygs_och_provider_kostnad is not None
         else (_llm_usage.cost_usd(turns_usage, cfg.get("prices") or {}) if turns_usage else None),
     )
+    return ok
 
 
 async def stream_openai_mcp_to_string(
     cfg: dict, messages: list[Any], search: dict
-) -> str:
+) -> tuple[str, dict, set[str], bool]:
+    """Svar, föreslagna spår, källorna i samtalets verktygssvar och om anropet
+    lyckades."""
     status_box = st.status("Söker i arkivet…", expanded=True)
     text_placeholder = st.empty()
     parts: list[str] = []
-    await stream_openai_mcp(status_box, text_placeholder, parts, cfg, messages, search)
+    proposal: dict = {"leads": [], "counter_question": None}
+    ok = await stream_openai_mcp(
+        status_box, text_placeholder, parts, cfg, messages, search, proposal=proposal
+    )
     known = _tool_sources_from_messages(messages)
     _log.debug("utredningsläget (OpenAI): %d källor i verktygssvaren", len(known))
     final = linkify_citations("".join(parts), known_sources=known or None)
     text_placeholder.markdown(final, unsafe_allow_html=True)
-    return final
+    return final, proposal, known, ok
 
 
 # CSS-animerad "tänker"-indikator: pulsande stjärna + roterande ord.
@@ -1734,6 +1971,104 @@ def _render_chat_sources(srcs: list, key_prefix: str) -> None:
         )
 
 
+def _escape_markdown(text: str) -> str:
+    """Escapa ``$`` i modellskriven text.
+
+    Två dollartecken i samma markdown-block blir annars LaTeX-matte hos
+    Streamlit — samma gotcha som sidofältets kostnadsräknare."""
+    return text.replace("$", "\\$")
+
+
+def _lead_source_markdown(belagg: dict) -> str:
+    """Ett belägg som PDF-länk när filen kan lösas, annars som text.
+
+    Källnamnet kommer från modellen och escapas innan det går in i HTML:en
+    (``pdf_anchor`` kräver en HTML-säker etikett). En källa som inte kan lösas
+    förblir text — aldrig en gissad länk, samma regel som citaten."""
+    source = str(belagg.get("source") or "")
+    sida = belagg.get("page")
+    etikett = f"[{source}, sida {sida}]" if sida else f"[{source}]"
+    pdf = _casebook_ui.find_pdf(ROOT, source)
+    if pdf is None:
+        _log.debug("spårbelägg utan PDF: %s — visas som text", source)
+        return _html.escape(etikett)
+    lank: str = _citations.pdf_anchor(
+        pdf,
+        _html.escape(etikett, quote=False),
+        title=f"Öppna {source}",
+        page=int(sida) if sida else None,
+    )
+    return lank
+
+
+def _grav_spar(lead_id: int) -> None:
+    """``on_click`` för Gräv: köa spårets fråga.
+
+    Frågan läggs i ``session_state["pending_question"]`` eftersom
+    ``st.chat_input`` inte kan förifyllas; nästa körning skickar den som en
+    vanlig fråga. Spåret markeras grävt först när svaret kommit utan fel
+    (``pending_lead_id``), så ett misslyckat anrop inte låser spåret."""
+    spar = _utredningsspar.get_lead(ss.leads, lead_id)
+    if spar is None:
+        _log.debug("gräv: spåret %s finns inte i spårlistan", lead_id)
+        return
+    fraga = str(spar.get("question") or "").strip()
+    if not fraga:
+        _log.debug("gräv: spåret %s saknar fråga — inget skickas", lead_id)
+        return
+    ss.pending_question = fraga
+    ss.pending_lead_id = lead_id
+
+
+def _render_lead_card(spar: dict, turn_idx: int) -> None:
+    """Ett spårkort: rubrik, varför, belägg och Gräv-knappen."""
+    lead_id = int(spar.get("id") or 0)
+    with st.container(border=True):
+        st.markdown(f"**{_escape_markdown(str(spar.get('title') or ''))}**")
+        skal = str(spar.get("why") or "").strip()
+        if skal:
+            st.markdown(_escape_markdown(skal))
+        belagg = spar.get("sources") or []
+        if belagg:
+            st.markdown(
+                " · ".join(_lead_source_markdown(b) for b in belagg),
+                unsafe_allow_html=True,
+            )
+        knapp_nyckel = f"lead_{lead_id}_{turn_idx}"
+        if spar.get("status") == _utredningsspar.STATUS_GRAVD:
+            st.button("Grävt", key=knapp_nyckel, disabled=True)
+        elif lead_id == ss.get("pending_lead_id"):
+            # Frågan körs i den här körningen; en andra klickning skulle avbryta den.
+            st.button("Gräver…", key=knapp_nyckel, disabled=True)
+        else:
+            st.button("Gräv", key=knapp_nyckel, on_click=_grav_spar, args=(lead_id,))
+
+
+def _render_leads(turn: dict, turn_idx: int) -> None:
+    """Rita turens spårkort och motfråga.
+
+    Spåren slås upp med turnens ``lead_ids`` men statusen läses ur
+    ``session_state["leads"]`` — status bor bara där, så en knapp aldrig visar
+    inaktuell status."""
+    spar_lista: list[dict] = []
+    for lead_id in turn.get("lead_ids") or []:
+        spar = _utredningsspar.get_lead(ss.leads, int(lead_id))
+        if spar is not None:
+            spar_lista.append(spar)
+    motfraga = turn.get("counter_question")
+    if not spar_lista and not motfraga:
+        return
+    if spar_lista:
+        st.markdown("**Spår att gräva vidare i**")
+        for spar in spar_lista:
+            _render_lead_card(spar, turn_idx)
+    if motfraga:
+        st.info(
+            f"**Motfråga:** {_escape_markdown(str(motfraga))}  \n"
+            "Svara i chattrutan nedan."
+        )
+
+
 def _render_chat_turn(turn: dict, turn_idx: int) -> None:
     """Rendera en historiktur; assistentturer med centers får grafexpander
     mellan svaret och källorna."""
@@ -1744,6 +2079,10 @@ def _render_chat_turn(turn: dict, turn_idx: int) -> None:
             # Lat: grafen (och entitetsextraktionen) byggs först vid öppning.
             centers = _render_answer_graph(turn["text"], f"turn_{turn_idx}")
         if turn["role"] == "assistant":
+            # Spåren hör till svaret och ritas före pärm/källor. Statusen läses
+            # ur session_state, så ett Gräv-klick syns i alla turer där spåret
+            # förekommer.
+            _render_leads(turn, turn_idx)
             prev_q = ""
             if turn_idx > 0 and ss.chat_history[turn_idx - 1]["role"] == "user":
                 prev_q = ss.chat_history[turn_idx - 1]["text"]
@@ -1788,10 +2127,40 @@ def _trim_openai_chat_history(ss) -> None:
     ss.openai_turn_starts = [s - removed for s in starts[-MAX_OPENAI_HISTORY_TURNS:]]
 
 
+def _log_registrerade_spar(proposal: dict, lead_ids: list[int]) -> None:
+    """Debugrad: föreslagna mot registrerade spår och vad som filtrerades bort.
+
+    ``register_leads`` tar bort spår vars belägg aldrig setts i ett verktygssvar;
+    orsaken skrivs ut så en tom spårlista går att förklara i efterhand."""
+    foreslagna = proposal.get("leads") or []
+    registrerade: set[str] = set()
+    for lead_id in lead_ids:
+        spar = _utredningsspar.get_lead(ss.leads, lead_id)
+        registrerade.add(
+            _utredningsspar.title_key(str((spar or {}).get("title") or ""))
+        )
+    bortfiltrerade = [
+        str(spar.get("title") or "")
+        for spar in foreslagna
+        if _utredningsspar.title_key(str(spar.get("title") or "")) not in registrerade
+    ]
+    _log.debug(
+        "utredningsläget: %d spår föreslagna, %d registrerade; bortfiltrerade "
+        "(belägg som inte setts i verktygssvaren): %s",
+        len(foreslagna),
+        len(lead_ids),
+        ", ".join(bortfiltrerade) or "inga",
+    )
+
+
 def _render_mcp_tab(settings: dict[str, Any]) -> None:
     """Utredningsläget: modellen söker autonomt med MCP-verktygen och minns
     tidigare frågor i konversationen (Claude via ``resume``, OpenAI-kompatibla
-    via meddelandehistoriken). Sökvalen kommer från sidofältet."""
+    via meddelandehistoriken). Sökvalen kommer från sidofältet.
+
+    Historiken, frågerutan och turens appendning är gemensamma för båda
+    backendvägarna; bara själva anropet skiljer sig. Det håller Gräv-frågan
+    (``pending_question``) och spårregistreringen på ett enda ställe."""
     _info, _new = st.columns([4, 1])
     with _info:
         st.caption(
@@ -1804,83 +2173,118 @@ def _render_mcp_tab(settings: dict[str, Any]) -> None:
             st.session_state.mcp_session_id = None
             st.session_state.openai_chat_messages = []
             st.session_state.openai_turn_starts = []
+            # Spåren och de kända källorna hör till konversationen: annars läcker
+            # gamla spår in i nästa utredning, och en väntande Gräv-fråga skickas
+            # som första fråga i den nya.
+            st.session_state.leads = []
+            st.session_state.lead_sources = set()
+            st.session_state.pending_question = None
+            st.session_state.pending_lead_id = None
             # Rensa graf-state per tur så en ny konversations tur N inte ärver
             # utfällda noder från den gamla.
             for k in [k for k in st.session_state if k.startswith("turn_")]:
                 del st.session_state[k]
             st.rerun()
 
-    if backend["kind"] == "claude":
-        # Chatt-läge: rendera historiken först, sedan st.chat_input nederst.
-        for turn_idx, turn in enumerate(ss.chat_history):
-            _render_chat_turn(turn, turn_idx)
+    # Chatt-läge: rendera historiken först, sedan st.chat_input nederst.
+    for turn_idx, turn in enumerate(ss.chat_history):
+        _render_chat_turn(turn, turn_idx)
 
-        chat_q = st.chat_input("Ställ en fråga till utredningsassistenten…")
-        if chat_q and chat_q.strip():
-            ss.chat_history.append({"role": "user", "text": chat_q, "sources": []})
-            with st.chat_message("user"):
-                st.markdown(chat_q)
-            with st.chat_message("assistant"):
-                answer, new_id = asyncio.run(
-                    stream_mcp_to_string(chat_q, ss.mcp_session_id, backend, settings)
-                )
-                centers: list[dict] | None = []
-                if show_graph:
-                    # Lat: grafen byggs först när toggeln öppnas. Samma state_key
-                    # som turen får i historiken efter append.
-                    centers = _render_answer_graph(
-                        answer, f"turn_{len(ss.chat_history)}"
-                    )
-            ss.mcp_session_id = new_id
-            ss.chat_history.append(
-                {
-                    "role": "assistant",
-                    "text": answer,
-                    "sources": extract_cited_sources(answer),
-                    "centers": centers,
-                    "backend_name": backend_name,
-                    "model": backend["model"],
-                }
-            )
-            st.rerun()
+    chat_q = st.chat_input("Ställ en fråga till utredningsassistenten…")
+    grav_id: int | None = None
+    if chat_q and chat_q.strip():
+        # En skriven fråga går före en köad Gräv-fråga, som då släpps.
+        ss.pending_question = None
+        ss.pending_lead_id = None
     else:
-        for turn_idx, turn in enumerate(ss.chat_history):
-            _render_chat_turn(turn, turn_idx)
+        # Gräv-klicket: st.chat_input kan inte förifyllas, så frågan köades i
+        # session_state. Den tas bort *före* anropet — annars skickar nästa
+        # rerun samma fråga en gång till. Nyckeln läggs tillbaka som None så
+        # session_state alltid har en tydlig "inget väntar"-markör.
+        chat_q = ss.pop("pending_question", None)
+        ss.pending_question = None
+        grav_id = ss.pop("pending_lead_id", None)
+        ss.pending_lead_id = None
+    if not (chat_q and chat_q.strip()):
+        return
+    chat_q = chat_q.strip()
 
-        chat_q = st.chat_input("Ställ en fråga till utredningsassistenten…")
-        if chat_q and chat_q.strip():
+    ss.chat_history.append({"role": "user", "text": chat_q, "sources": []})
+    with st.chat_message("user"):
+        st.markdown(chat_q)
+    # Spårsammanfattningen går med till modellen (så grävda spår inte föreslås
+    # igen och öppna spår kan återknytas) men visas aldrig i chatten:
+    # chat_history bär bara operatörens egen text.
+    # Spåret som grävs nu står som grävt i sammanfattningen, annars föreslår
+    # modellen det igen i samma svar.
+    sammanfattning = _utredningsspar.summary(
+        [
+            dict(spar, status=_utredningsspar.STATUS_GRAVD)
+            if grav_id is not None and spar.get("id") == grav_id
+            else spar
+            for spar in ss.leads
+        ]
+    )
+    modellfraga = f"{sammanfattning}\n\n{chat_q}" if sammanfattning else chat_q
+    with st.chat_message("assistant"):
+        centers: list[dict] | None = []
+        if backend["kind"] == "claude":
+            answer, new_id, proposal, tool_sources, ok = asyncio.run(
+                stream_mcp_to_string(modellfraga, ss.mcp_session_id, backend, settings)
+            )
+            ss.mcp_session_id = new_id
+        else:
             if not ss.openai_chat_messages:
                 ss.openai_chat_messages.append(
                     {"role": "system", "content": mcp_prompt()}
                 )
             ss.openai_turn_starts.append(len(ss.openai_chat_messages))
-            ss.openai_chat_messages.append({"role": "user", "content": chat_q})
-            ss.chat_history.append({"role": "user", "text": chat_q, "sources": []})
-            with st.chat_message("user"):
-                st.markdown(chat_q)
-            with st.chat_message("assistant"):
-                answer = asyncio.run(
-                    stream_openai_mcp_to_string(backend, ss.openai_chat_messages, settings)
-                )
-                centers = []
-                if show_graph:
-                    # Lat: grafen byggs först när toggeln öppnas. Samma state_key
-                    # som turen får i historiken efter append.
-                    centers = _render_answer_graph(
-                        answer, f"turn_{len(ss.chat_history)}"
-                    )
-            ss.chat_history.append(
-                {
-                    "role": "assistant",
-                    "text": answer,
-                    "sources": extract_cited_sources(answer),
-                    "centers": centers,
-                    "backend_name": backend_name,
-                    "model": backend["model"],
-                }
+            ss.openai_chat_messages.append(
+                {"role": "user", "content": modellfraga}
             )
-            _trim_openai_chat_history(ss)
-            st.rerun()
+            answer, proposal, tool_sources, ok = asyncio.run(
+                stream_openai_mcp_to_string(backend, ss.openai_chat_messages, settings)
+            )
+        if show_graph:
+            # Lat: grafen byggs först när toggeln öppnas. Samma state_key som
+            # turen får i historiken efter append.
+            centers = _render_answer_graph(answer, f"turn_{len(ss.chat_history)}")
+
+    # Beläggen kontrolleras mot alla källor som setts i verktygssvar under
+    # konversationen. Ett återanvänt spår behåller sina första belägg — de slås
+    # inte ihop med senare förekomsters.
+    ss.lead_sources |= tool_sources
+    if grav_id is not None:
+        if ok:
+            _utredningsspar.mark_dug(ss.leads, grav_id)
+        else:
+            _log.debug(
+                "gräv: anropet för spåret %s misslyckades — spåret lämnas föreslaget",
+                grav_id,
+            )
+    turn_index = len(ss.chat_history)
+    lead_ids = _utredningsspar.register_leads(
+        ss.leads,
+        proposal.get("leads") or [],
+        turn=turn_index,
+        known_sources=ss.lead_sources,
+    )
+    _log_registrerade_spar(proposal, lead_ids)
+    ss.chat_history.append(
+        {
+            "role": "assistant",
+            "text": answer,
+            "sources": extract_cited_sources(answer),
+            "centers": centers,
+            "backend_name": backend_name,
+            "model": backend["model"],
+            "lead_ids": lead_ids,
+            "counter_question": proposal.get("counter_question"),
+        }
+    )
+    if backend["kind"] != "claude":
+        _trim_openai_chat_history(ss)
+    st.rerun()
 
 
 def _render_rag_tab(settings: dict[str, Any]) -> None:

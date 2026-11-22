@@ -234,6 +234,31 @@ och skicka tillbaka det som `ClaudeAgentOptions(resume=...)` på nästa fråga.
 "Ny konversation" (överst i MCP-läget) nollställer `chat_history` +
 `mcp_session_id`.
 
+**Spår i utredningsläget (`src/utredningsspar.py` + `propose_leads`)**: modellen
+avslutar svaret med verktyget `propose_leads` (Claude-namnet
+`mcp__arkiv__propose_leads` finns i `allowed_tools`), och sidan ritar spårkort
+med **Gräv** under svaret. Spårlistan bor **bara** i `session_state["leads"]`
+(`id`, `turn`, `status` `föreslagen`/`grävd`); turen i `chat_history` sparar bara
+`lead_ids` och `counter_question`, så en knapp aldrig visar inaktuell status.
+Belägg filtreras mot de `source`-värden som faktiskt setts i verktygssvaren
+(`sources_from_tool_output`), och ett spår som då saknar belägg visas inte —
+påhittade belägg får aldrig nå kortet (även i CLI:t). **Gräv** sätter
+`session_state["pending_question"]` och `pending_lead_id`, och sidan måste
+**poppa** båda före modellanropet och behandla frågan som en skriven fråga;
+annars skickas samma fråga om vid varje rerun. Spåret markeras grävt först när
+svaret kommit utan fel (`ok` ur `stream_*_to_string`) — markera det aldrig i
+callbacken, då låser ett misslyckat anrop spåret. Inför varje fråga skickas en kort sammanfattning
+`[Spår hittills i konversationen]` (rubrik och status per spår) med till modellen
+— före frågetexten i Claude-prompten och i user-meddelandets `content` i
+OpenAI-vägen. Den visas aldrig i chatten och ligger inte i `chat_history`.
+Verktyget fångas i Claude-läget ur `ToolUseBlock`, i
+OpenAI-läget i verktygsloopen **före** `_run_tool` (spåren är data till sidan,
+modellen får bara kvittensen). På sidan höjer `LEADS_EXTRA_TURNS` tursgränsen i
+**båda** vägarna (Claude och OpenAI) så spåren inte tränger ut en sökning; i
+OpenAI-vägen är de turerna reserverade (`_leads_only_tools`, sökningar avvisas),
+medan Claude-vägen inte kan byta verktyg per tur. CLI:t
+(`src/rag/ask.py --mcp`) har en egen `max_turns=10` utan tillägg.
+
 **Sidhuvud och hjälp-ikoner (alla sidor)**: Rubriken ritas med
 `casebook_ui.render_page_header(titel, meta)` i stället för `st.title` +
 `st.caption` — en kompakt rad i `.palme-header` (namn + förklaring) och

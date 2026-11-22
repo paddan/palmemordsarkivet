@@ -380,6 +380,63 @@ def test_web_search_clamps_max_results(monkeypatch) -> None:
                      mcp_server.MAX_RESULTS_DEFAULT]
 
 
+def test_normalize_leads_klampar_och_trimmar() -> None:
+    spar = [
+        {"title": f" Spår {i} ", "why": " skäl ", "question": f" Fråga {i}? ",
+         "sources": [{"source": "a.txt", "page": 2}]}
+        for i in range(6)
+    ]
+    ut = mcp_server.normalize_leads(spar, "  Vilken hypotes prövar du?  ")
+    assert len(ut["leads"]) == mcp_server.LEADS_MAX == 4
+    assert ut["leads"][0] == {"title": "Spår 0", "why": "skäl", "question": "Fråga 0?",
+                              "sources": [{"source": "a.txt", "page": 2}]}
+    assert ut["counter_question"] == "Vilken hypotes prövar du?"
+
+
+def test_normalize_leads_tal_skrapindata() -> None:
+    ut = mcp_server.normalize_leads(
+        [{"title": "Utan fråga"}, "inte en dict",
+         {"title": "Ok", "question": "Q?", "sources": [
+             {"source": "b.txt", "page": "3"}, {"source": "", "page": 1},
+             {"source": "c.txt", "page": "x"}, {"page": 4}]}],
+        "   ",
+    )
+    assert [s["title"] for s in ut["leads"]] == ["Ok"]
+    assert ut["leads"][0]["sources"] == [{"source": "b.txt", "page": 3}]
+    assert ut["counter_question"] is None
+    assert mcp_server.normalize_leads("inte en lista") == {"leads": [], "counter_question": None}
+
+
+def test_normalize_leads_avvisar_ogiltiga_sidnummer() -> None:
+    """Bara heltal ≥ 1 duger som sidnummer.
+
+    Bool, NaN/inf, icke-heltalsfloat, icke-heltalssträng och tal under 1 släpps;
+    heltalsfloat och en sträng med ett heltal tolkas.
+    """
+    ogiltiga = [True, False, float("nan"), float("inf"), float("-inf"),
+                1.9, "1.5", "x", "", 0, -3, 0.0, -1.0]
+    for sidnummer in ogiltiga:
+        ut = mcp_server.normalize_leads(
+            [{"title": "Spår", "question": "Q?",
+              "sources": [{"source": "a.txt", "page": sidnummer}]}]
+        )
+        assert ut["leads"][0]["sources"] == [], f"page={sidnummer!r} skulle ha släppts"
+
+    giltiga = [(2, 2), (2.0, 2), ("3", 3)]
+    for rå, förväntat in giltiga:
+        ut = mcp_server.normalize_leads(
+            [{"title": "Spår", "question": "Q?",
+              "sources": [{"source": "a.txt", "page": rå}]}]
+        )
+        assert ut["leads"][0]["sources"] == [{"source": "a.txt", "page": förväntat}]
+
+
+def test_leads_receipt() -> None:
+    assert mcp_server.leads_receipt({"leads": [], "counter_question": None}) == "Inga spår registrerades."
+    text = mcp_server.leads_receipt({"leads": [{}, {}], "counter_question": "Q?"})
+    assert "2 spår" in text and "motfråga" in text
+
+
 def test_openai_verktygsscheman_matchar_mcp_verktygen() -> None:
     """Utredning-sidans OpenAI-scheman är en kopia av MCP-verktygen (OpenAI-vägen
     har ingen MCP-klient). Samma mängd, annars erbjuds modellen olika verktyg
@@ -414,6 +471,10 @@ def test_openai_verktygsscheman_matchar_mcp_verktygen() -> None:
         f"{mcp_server.MAX_RESULTS_MIN}–{mcp_server.MAX_RESULTS_MAX}"
         in webb["max_results"]["description"]
     )
+
+    spar = by_name["propose_leads"]["parameters"]
+    assert set(spar["properties"]) == {"leads", "counter_question"}
+    assert spar["properties"]["leads"]["maxItems"] == mcp_server.LEADS_MAX
 
 
 def test_mcp_svar_med_maskering_far_en_knuff_att_sla_upp(monkeypatch) -> None:
@@ -863,5 +924,3 @@ def test_search_profiles_speglar_konfigurationen(monkeypatch) -> None:
     }
     assert valbara[1]["provider"] == "openai"
     assert mcp_server.search_profiles(None) == []
-
-
