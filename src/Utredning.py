@@ -286,7 +286,7 @@ def _load_fuzzy_corpus():
     Tungt (~100 MB text) men byggs bara en gång och bara om användaren slår på
     fuzzy-sökningen. Vi projicerar kolumnerna i sökningen i stället för
     ``to_pandas()`` så vektorkolumnen (~660 MB) aldrig materialiseras."""
-    cols = ["text", "source", "page", "chunk_idx", "nr", "titel", "anmarkning"]
+    cols = ["text", "source", "page", "chunk_idx", "nr", "titel"]
     rows = table.search().select(cols).limit(table.count_rows()).to_list()
     return rows, _search_fuzzy.build_index(rows)
 

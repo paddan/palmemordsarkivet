@@ -16,6 +16,14 @@ from operations.exceptions import OperationFailed
 from operations.pipeline import PipelineDependencies, PipelineOptions, run_pipeline
 
 
+@pytest.fixture(autouse=True)
+def _no_real_neo4j(monkeypatch) -> None:
+    """Pipelinens dokumentnodssteg får aldrig nå en riktig Neo4j i testerna."""
+    from graph import load_documents
+
+    monkeypatch.setattr(load_documents, "run_load_documents", lambda **kw: 0)
+
+
 def _context() -> OperationContext:
     return OperationContext(sink=TerminalSink(), cancel_requested=lambda: False)
 
@@ -389,3 +397,119 @@ def test_pipeline_raises_operation_failed_when_ingest_fails() -> None:
                 ingest=lambda **kw: 3,
             ),
         )
+
+
+def _fake_steps(calls: list[str], load_documents) -> PipelineDependencies:
+    def record(step: str):
+        def run(**kwargs) -> int:
+            calls.append(step)
+            return 0
+
+        return run
+
+    return PipelineDependencies(
+        download=record("download"), download_wpu=record("download-wpu"),
+        ocr=record("ocr"), ingest=record("ingest"), load_documents=load_documents,
+    )
+
+
+def test_pipeline_runs_load_documents_after_ingest() -> None:
+    calls: list[str] = []
+
+    def load(**kwargs) -> int:
+        calls.append("load-documents")
+        assert kwargs["text_dir"] == Path("/txt")
+        assert kwargs["uri"] == "bolt://localhost:7687"
+        return 0
+
+    assert run_pipeline(_options(), _context(), deps=_fake_steps(calls, load)) == 0
+    assert calls[-2:] == ["ingest", "load-documents"]
+
+
+@pytest.mark.parametrize("error", [
+    OSError("nätverk nere"),
+    OperationFailed("Sätt NEO4J_PASSWORD"),
+])
+def test_pipeline_continues_when_documents_step_cannot_run(error, capsys) -> None:
+    def load(**kwargs) -> int:
+        raise error
+
+    ctx = _context()
+    assert run_pipeline(_options(), ctx, deps=_fake_steps([], load)) == 0
+    cap = capsys.readouterr()
+    out = cap.out + cap.err
+    assert "Hoppar dokumentnoder:" in out
+    assert "Pipeline klar." in out
+
+
+def test_pipeline_continues_when_neo4j_is_down(capsys) -> None:
+    ServiceUnavailable = pytest.importorskip("neo4j.exceptions").ServiceUnavailable
+
+    def load(**kwargs) -> int:
+        raise ServiceUnavailable("ingen anslutning")
+
+    assert run_pipeline(_options(), _context(), deps=_fake_steps([], load)) == 0
+    cap = capsys.readouterr()
+    assert "Hoppar dokumentnoder:" in cap.out + cap.err
+
+
+def test_pipeline_fails_when_documents_step_returns_nonzero() -> None:
+    with pytest.raises(OperationFailed, match="Steget load-documents misslyckades"):
+        run_pipeline(_options(), _context(), deps=_fake_steps([], lambda **kw: 1))
+
+
+def test_pipeline_continues_when_neo4j_package_is_missing(capsys) -> None:
+    """Saknat neo4j-paket (ModuleNotFoundError med name=neo4j) hoppar över steget."""
+    def load(**kwargs) -> int:
+        raise ModuleNotFoundError("No module named 'neo4j'", name="neo4j")
+
+    assert run_pipeline(_options(), _context(), deps=_fake_steps([], load)) == 0
+    cap = capsys.readouterr()
+    assert "Hoppar dokumentnoder:" in cap.out + cap.err
+
+
+def test_pipeline_fails_on_other_import_error() -> None:
+    """Ett ImportError för någon annan modul är ett riktigt fel och fäller pipelinen."""
+    def load(**kwargs) -> int:
+        raise ImportError("cannot import name 'x' from 'graph.y'")
+
+    with pytest.raises(ImportError):
+        run_pipeline(_options(), _context(), deps=_fake_steps([], load))
+
+    def load_other_module(**kwargs) -> int:
+        raise ModuleNotFoundError("No module named 'lancedb'", name="lancedb")
+
+    with pytest.raises(ModuleNotFoundError):
+        run_pipeline(_options(), _context(), deps=_fake_steps([], load_other_module))
+
+
+def test_pipeline_works_when_exceptions_module_cannot_be_imported(
+        monkeypatch, capsys) -> None:
+    import builtins
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name.startswith("neo4j"):
+            raise ImportError(name)
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    def load(**kwargs) -> int:
+        raise OperationFailed("Sätt NEO4J_PASSWORD")
+
+    assert run_pipeline(_options(), _context(), deps=_fake_steps([], load)) == 0
+    cap = capsys.readouterr()
+    assert "Hoppar dokumentnoder:" in cap.out + cap.err
+
+
+def test_pipeline_continues_on_neo4j_auth_error(capsys) -> None:
+    AuthError = pytest.importorskip("neo4j.exceptions").AuthError
+
+    def load(**kwargs) -> int:
+        raise AuthError("fel lösenord")
+
+    assert run_pipeline(_options(), _context(), deps=_fake_steps([], load)) == 0
+    cap = capsys.readouterr()
+    assert "Hoppar dokumentnoder:" in cap.out + cap.err

@@ -173,3 +173,12 @@ def test_global_name_rule_preview_counts_affected_entities_pages_and_relations()
     assert preview_name_rule(rows, [], [], {
         "typ": "organisation", "source": "RKA2", "target": "Rikskriminalen A2",
     }) == {"entities": 1, "pages": 1, "relations": 1}
+
+
+def test_self_relation_is_explained_in_plain_swedish():
+    rows = [entry(names=[{"namn": "Olof Palme", "typ": "person"}],
+                  relations=[{"fran": "Olof Palme", "typ": "talade med", "till": "Olof Palme"}])]
+    issues = audit_entries(rows, [])[-1]["issues"]
+    assert ("Relationen pekar på samma person/plats/organisation i båda ändar — "
+            "kontrollera vem den andra parten är, eller uteslut relationen") in issues
+    assert "Självkant" not in issues

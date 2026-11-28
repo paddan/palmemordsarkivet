@@ -2,7 +2,9 @@
 
 Fristående multipage-sida (kräver inga ändringar i Utredning.py). Söker en entitet
 i Neo4j och ritar dess nätverk med Cytoscape (st-link-analysis): dubbelklick
-på en entitetsnod fäller ut den, dubbelklick på en dokumentnod öppnar PDF:en.
+på en entitets- eller uppslagsnod gör den till center, dubbelklick på en
+dokumentnod öppnar PDF:en. Sökningen hittar även dokument (nr eller titel) och
+uppslag (kod) ur dokumentlagret.
 Degraderar snällt om Neo4j inte är igång.
 """
 from __future__ import annotations
@@ -29,8 +31,9 @@ if mode == "Granska och uppdatera":
     render_review(ROOT)
     st.stop()
 
-st.caption("Sök en person, plats eller organisation och utforska dess nätverk i materialet. "
-           "Dubbelklick: fäll ut entitetsnod · öppna dokumentnod.")
+st.caption("Sök en person, plats, organisation, ett dokument (nr eller titel) eller ett uppslag "
+           "och utforska nätverket i materialet. "
+           "Dubbelklick: fäll ut entitets- eller uppslagsnod · öppna dokumentnod.")
 
 try:
     from st_link_analysis import EdgeStyle, NodeStyle, st_link_analysis
@@ -68,13 +71,23 @@ except Exception as exc:  # noqa: BLE001
 def _search(q: str) -> list[dict]:
     with driver.session() as s:
         rows: list[dict] = viz.search_entities(s, q, limit=25)
+        rows += viz.search_documents(s, q, limit=25)
         return rows
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _document_layer_loaded() -> bool:
+    with driver.session() as s:
+        return bool(viz.document_layer_loaded(s))
+
+
+if not _document_layer_loaded():
+    st.info("Dokumentnoderna är inte inlästa — kör Ladda dokumentnoder i Admin.")
 
 
 with st.sidebar:
     st.header("Sök")
     query = st.text_input("Namn (del räcker)", placeholder="t.ex. Engström")
-    show_docs = st.toggle("Visa dokument som nämner entiteten", value=True)
     max_nodes = st.slider("Max grannar", 10, 150, 80,
                           help="Tak på antal relationsrader som hämtas runt entiteten.")
     graph_height = st.slider("Grafhöjd (px)", 400, 1400, 660, step=20,
@@ -99,7 +112,7 @@ if use_linked_centers:
 else:
     hits = _search(query.strip())
     if not hits:
-        st.info(f"Inga entiteter matchar “{query}”.")
+        st.info(f"Inga entiteter, dokument eller uppslag matchar “{query}”.")
         st.stop()
 
     labels = [f'{h["namn"]}  ·  {h["label"]}' for h in hits]
@@ -114,20 +127,43 @@ if st.session_state.get("graph_seed") != seed_key:
     st.session_state["graph_centers"] = list(seed_centers)
 centers = st.session_state["graph_centers"]
 
-# Hämta och slå ihop ego-nätverken för alla utfällda center.
-all_rels: list[dict] = []
+# Det senast valda centret styr vyn: ett dokument eller uppslag visar
+# dokumentlagret, annars den vanliga entitetsvyn (dokument/uppslag bland
+# centren lämnas då utanför).
+newest = centers[-1]
+doc_view = newest["label"] in ("Dokument", "Uppslag")
+doc_props: dict | None = None
 all_docs: list[dict] = []
-with driver.session() as s:
-    for c in centers:
-        rels, docs = viz.fetch_ego(s, c["norm"], c["label"], limit=max_nodes)
-        all_rels.extend(rels)
-        for d in docs:
-            all_docs.append({**d, "center_norm": c["norm"]})
-all_rels = viz.dedup_rels(all_rels)
-if not show_docs:
-    all_docs = []
-
-nodes, edges = viz.assemble_graph(centers, all_rels, all_docs)
+if doc_view:
+    with driver.session() as s:
+        if newest["label"] == "Dokument":
+            doc_props, doc_rows = viz.fetch_document_ego(
+                s, newest["norm"], limit=max_nodes)
+            doc_center = (
+                {"stem": newest["norm"], **doc_props} if doc_props
+                else {"stem": newest["norm"]})
+        else:
+            doc_rows = viz.fetch_uppslag_ego(s, newest["norm"], limit=max_nodes)
+            doc_center = {"kod": newest["norm"]}
+    nodes, edges = viz.assemble_document_graph(doc_center, doc_rows)
+    view_centers = [newest]
+else:
+    # Växeln gör något bara i entitetsvyn, så den ritas först här.
+    with st.sidebar:
+        show_docs = st.toggle("Visa dokument som nämner entiteten", value=True)
+    # Hämta och slå ihop ego-nätverken för alla utfällda entitetscenter.
+    view_centers = [c for c in centers if c["label"] in viz.LABELS]
+    all_rels: list[dict] = []
+    with driver.session() as s:
+        for c in view_centers:
+            rels, docs_ = viz.fetch_ego(s, c["norm"], c["label"], limit=max_nodes)
+            all_rels.extend(rels)
+            for d in docs_:
+                all_docs.append({**d, "center_norm": c["norm"]})
+    all_rels = viz.dedup_rels(all_rels)
+    if not show_docs:
+        all_docs = []
+    nodes, edges = viz.assemble_graph(view_centers, all_rels, all_docs)
 docs = all_docs
 
 with st.sidebar:
@@ -147,16 +183,27 @@ with st.sidebar:
         st.session_state["graph_centers"] = list(seed_centers)
         st.rerun()
 
-center_names = ", ".join(f"{c['namn']} ({c['label']})" for c in centers)
+center_names = ", ".join(f"{c['namn']} ({c['label']})" for c in view_centers)
 st.caption(f"**{center_names}** — {len(nodes)} noder, {len(edges)} kanter")
 
+if doc_view and newest["label"] == "Dokument":
+    if doc_props is None:
+        st.warning("Dokumentet finns inte i dokumentlagret — kör Ladda dokumentnoder i Admin.")
+    else:
+        with st.container(border=True):
+            for etikett, varde in viz.document_meta_rows(doc_props):
+                st.markdown(f"**{etikett}:** {varde}")
+            doc_pdf = _casebook_ui.find_pdf(ROOT, newest["norm"])
+            if doc_pdf and st.button("Öppna PDF", key="doc_open_pdf"):
+                _casebook_ui.open_pdf_in_browser(doc_pdf)
+
 if len(nodes) <= 1 and not edges:
-    st.info("Entiteten har inga registrerade relationer eller dokument i grafen ännu.")
+    st.info("Noden har inga registrerade relationer eller dokument i grafen ännu.")
 else:
     elements = viz.to_cytoscape_elements(nodes, edges)
     node_styles = [
         NodeStyle(typ, viz.NODE_COLORS[typ], "name", viz.NODE_ICONS[typ])
-        for typ in ("Person", "Plats", "Organisation", "Dokument")
+        for typ in ("Person", "Plats", "Organisation", "Dokument", "Uppslag")
     ]
     # labeled=None kringgår en biblioteksbugg: deprecation-varningen triggar
     # på "is not None" så även defaultvärdet False varnar.
@@ -175,7 +222,7 @@ else:
         if ts != st.session_state.get("graf_last_evt"):
             st.session_state["graf_last_evt"] = ts
             by_id = {n["id"]: n for n in nodes}
-            center_ids = {c["norm"] for c in centers}
+            center_ids = {n["id"] for n in nodes if n.get("center")}
             changed = False
             for nid in ret.get("data", {}).get("node_ids", []):
                 n = by_id.get(nid)
@@ -186,8 +233,9 @@ else:
                     if pdf:
                         _casebook_ui.open_pdf_in_browser(pdf)
                 elif nid not in center_ids:
+                    norm = nid[len("upp:"):] if n["type"] == "Uppslag" else nid
                     st.session_state["graph_centers"].append(
-                        {"norm": nid, "namn": n["namn"], "label": n["type"]})
+                        {"norm": norm, "namn": n["namn"], "label": n["type"]})
                     changed = True
             if changed:
                 st.rerun()

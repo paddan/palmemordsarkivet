@@ -190,6 +190,23 @@ def test_bootstrap_prioritizes_source_tree_and_forwards_terminal_arguments(monke
     assert received == {"operation_id": "sample", "argv": ["--jobs", "3"]}
 
 
+def test_bootstrap_removes_scripts_dir_so_entrypoints_do_not_shadow_packages(monkeypatch) -> None:
+    """scripts/neo4j.py och scripts/ingest.py får inte skugga paketen neo4j och ingest."""
+    root = Path(__file__).resolve().parents[1]
+    monkeypatch.syspath_prepend(str(root))
+    import scripts._bootstrap as bootstrap
+
+    scripts_dir = str(root / "scripts")
+    monkeypatch.syspath_prepend(scripts_dir)
+    cli_module = ModuleType("operations.cli")
+    cli_module.run_operation_cli = lambda operation_id, argv: 0
+    monkeypatch.setitem(sys.modules, "operations.cli", cli_module)
+    monkeypatch.setattr(sys, "argv", ["scripts/prov.py"])
+
+    assert bootstrap.run("sample") == 0
+    assert scripts_dir not in sys.path
+
+
 # ---------------------------------------------------------------------------
 # Inbyggda registryn: defaults och exponerade flaggor
 # ---------------------------------------------------------------------------

@@ -86,6 +86,9 @@ def neo4j_start(context: OperationContext | None = None) -> int:
             ctx, "run", "-d", "--name", CONTAINER, "--restart", "unless-stopped",
             "-p", "7474:7474", "-p", "7687:7687",
             "-e", "NEO4J_server_memory_heap_max__size=2G",
+            # Bara namnet: podman hämtar värdet ur processmiljön nedan. Utan
+            # flaggan når variabeln aldrig containern (standardlösenordet gäller).
+            "-e", "NEO4J_AUTH",
             "-v", f"{NEO4J_DIR / 'data'}:/data",
             "neo4j:5",
             env={"NEO4J_AUTH": f"neo4j/{password}"},

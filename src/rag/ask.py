@@ -89,7 +89,7 @@ JEV_QUESTION = {
     },
 }
 
-SELECT_COLS = ["text", "source", "page", "chunk_idx", "nr", "titel", "anmarkning"]
+SELECT_COLS = ["text", "source", "page", "chunk_idx", "nr", "titel"]
 
 # Termineringsorsaker som betyder att modellen skrev klart. Allt annat betyder
 # att texten kan vara avklippt mitt i en mening — utan att det syns i texten.

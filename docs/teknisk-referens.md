@@ -16,6 +16,8 @@ Inspektera med t.ex. `sqlite3 generated/db/state.db`. Tabellerna:
 - `pdf_page_readings` — historik över tidigare läsningar av en sida (motor, text, Markdown, layout, motoridentitet, poäng, `reason` = `rescan`/`restore`/`rejected`; `rejected` = en ny läsning som underkändes vid jämförelse). `rescan-page` sparar den gällande läsningen här innan den skrivs över, så att en sämre omskanning kan återställas
 - `quality` / `quality_pages` — kvalitetspoäng per fil och sida
 - `ingest` — vad som indexerats i LanceDB och med vilken text_mtime
+- `document_meta` — dokumentmetadata tolkad ur filnamnen (en rad per stam): `arkiv` (`palme`/`wpu`), `nr`, `titel`, `bestallt`, `upplagt`, `anmarkning`, `antal_sidor`, `dokumentdatum`, `uppslag_json` och `hanvisningar_json` (JSON-listor), `avkortat` och `updated_at` ("senast uppdaterad av ingest" — skrivs om för alla rader vid varje ingest, inte "senast ändrad"). Fylls av ingest ur filnamnen och är ren tolkning — ingen källtext lagras. Överblivna rader rensas med `prune_document_meta`
+- `ontology_extractions` — rå modellutdata för ontologi-extraktionen (en rad per stam och sida): `text_hash` (sha256 av den normaliserade sidtexten) och `schemaversion` avgör om sidan behöver extraheras om, `profile`/`model`, `raw` (modellens svar), `parsed_json` (tolkat svar), `n_observationer` och `extracted_at`. Sidurvalet görs av den rena `ontologi.selection.select_pages`
 - `llm_corrections` — vilka sidor som LLM-korrigerats
 - `wpu_decisions` — vilka wpu-stems `merge_wpu` redan fattat beslut för
 - `doc_entities` — extraherade entiteter/relationer per sida (kunskapsgrafen)
@@ -47,9 +49,9 @@ LanceDB-källor och ersätts i stället för att dupliceras.
 - `ocrmypdf`, `tesseract-lang`, `poppler`, `qpdf`, `unpaper`, `hunspell` via brew
 - sv_SE-ordlista till `~/Library/Spelling/` (för kvalitetspoängen): länkad från brews hunspell om den finns där, annars hämtad från LibreOffices ordlistor (LGPL-3, pinnad commit `SV_DICTIONARY_COMMIT`); båda filerna skrivs först när båda hämtats
 - `.venv/` skapas med den nyaste Python ≥ 3.11 som finns i `PATH` (`python3`, `python3.11`–`python3.30`)
-- `.venv/` med `pip install -e .[web]` (bl.a. Streamlit, `folium` och `streamlit-folium`)
+- `.venv/` med `pip install -e .[web,graph]` (bl.a. Streamlit, `folium` och `streamlit-folium`)
 - en befintlig `.venv/` återanvänds; saknar den pip (t.ex. skapad av `uv venv`/`uv sync`, som bara installerar grundberoendena) körs först `python -m ensurepip --upgrade`, och paketen installeras med `.venv/bin/python -m pip`; kör en befintlig `.venv/` äldre Python än den nyaste skrivs en uppmaning att ta bort den och köra om
-- med `--dev`: `.venv/` med `pip install -e '.[dev,web]'` så `.venv/bin/python scripts/test.py --static` även kan köra `ruff` och `mypy`
+- med `--dev`: `.venv/` med `pip install -e '.[dev,web,graph]'` (utan `--dev` `web,graph`) så `.venv/bin/python scripts/test.py --static` även kan köra `ruff` och `mypy`
 - skapar en tom `chunks`-tabell i `generated/lancedb/` om den saknas (`ingest.ensure_table`), så att `./web.sh` startar direkt; en befintlig tabell rörs inte och ingest fyller den tomma tabellen som vanligt
 - påminner till sist om LLM-nyckeln när ingen av `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `DEEPSEEK_API_KEY` eller `OPENROUTER_API_KEY` finns i miljön (nyckeln sparas aldrig, så den kan inte sättas av installationen)
 - Laddar ner `swe_best.traineddata` (~12 MB) via `scripts/setup_tessdata.py`
@@ -125,7 +127,8 @@ med samma namn som bara vidarebefordrar argumenten — se
 ```
 
 - Hämtar Google Sheet som CSV, plockar ut Drive-ID från "Länk till kopia".
-- Filnamn blir `<Nr> — <Titel> — <Beställt> — <Upplagt> — <Anmärkning> — <Sidor>.pdf`.
+- Filnamn blir `<Nr> — <Titel> — <Beställt> — <Upplagt> — <Anmärkning> — <Sidor>.pdf`;
+  tomma kolumner hoppas över och namnet kapas vid 180 tecken (kapade stammar tolkas försiktigt).
 - Korrekt extension via magic-bytes (PDF/JPG/PNG/...).
 - Idempotent: hoppa över redan nedladdade. Visar progress + ETA. `--dry-run`
   hämtar inget och skriver inga nedladdningsrader (state.db öppnas för att läsa
@@ -757,7 +760,8 @@ Båda kommandona är idempotenta.
   en rad som ensam är för lång delas vid cellgränser (`|`), i sista hand vid
   ordgränser (ingen token kapas), delar blanketter mellan fält och lägger sidhuvudet
   (`> Sidhuvud: …`) först i varje chunk — inräknat i chunkstorleken. Alla andra
-  sidor ger exakt samma chunks som förut; LanceDB-schemat är oförändrat.
+  sidor ger exakt samma chunks som förut; LanceDB bär bara `nr`/`titel` (de fyra
+  övriga filnamnskolumnerna tas bort vid nästa ingest).
   En chunk som blir för kort för att indexeras (under 80 tecken utan sidhuvudet,
   t.ex. en ensam replik `**M:** Ja.`) slås ihop med föregående eller nästa chunk
   eller får grannens slut som överlapp, så att ingen text faller ur indexet.
@@ -767,9 +771,20 @@ Båda kommandona är idempotenta.
   chunkas som ren text. Förkastad Markdown loggas på debugnivå, en rad per fil
   med antal sidor och de första sidnumren.
 - Embeddar lokalt med `intfloat/multilingual-e5-large` (svenska duger bra).
-- Lagrar i lokal LanceDB med metadata (Nr, Titel, Sida, Anmärkning) **och `mtime`**
-  så att ändrade `.txt`-filer (t.ex. efter `.venv/bin/python scripts/ocr.py --redo`) detekteras automatiskt
-  och re-indexeras vid nästa körning.
+- Tolkar filnamnen efter form (`dokumentmeta.parse_stem`, inte efter position) och
+  fyller `document_meta` i state.db för **alla** textfiler (eller bara `only_stems`)
+  före indexeringen, även när inget behöver indexeras. Ett ensamt datum är
+  *Upplagt/uppdaterat*, inte *Beställt*. Gamla rader för borttagna filer rensas bara
+  vid full körning, och aldrig när textkatalogen saknar `.txt`. Loggen får en
+  summeringsrad (`Dokumentmetadata: N palme, M wpu, …`); tolkningsvarningar står på
+  debugnivå, grupperade med antal och högst fem stammar.
+- Lagrar i lokal LanceDB med metadata (Nr, Titel, Sida) **och `mtime`**; övriga
+  filnamnsfält bor i `document_meta`. En äldre tabell med kolumnerna `bestallt`,
+  `upplagt`, `anmarkning` och `antal_sidor` (som tolkades efter position och ofta
+  var fel) migreras vid nästa ingest genom att de tas bort. `nr` och `titel` är
+  byte-identiska med den gamla tolkningen (`dokumentmeta.lance_name_fields`).
+  Ändrade `.txt`-filer (t.ex. efter `.venv/bin/python scripts/ocr.py --redo`) detekteras automatiskt
+  via mtime i state.db och re-indexeras vid nästa körning.
 - För filer som indexerades innan mtime-tracking infördes saknas mtime i tabellen
   (lagras som `0.0`). Använd `--reindex-since <tid>` för att tvinga re-index av
   legacy-rader vars `.txt` modifierats efter en känd tidpunkt — t.ex. när du
@@ -1487,12 +1502,12 @@ Extraktionen använder samma LLM som är konfigurerad i `generated/llm_config.js
 Haiku som default. Flaggorna `--provider`, `--model`, `--base-url` och
 `--api-key` skriver över den sparade konfigurationen för just denna körning.
 
-Kunskapsgrafen är valfri och dess beroenden installeras därför separat:
+Neo4j är obligatoriskt: `./install.sh` installerar podman (brew) och extran `graph`, och
+`scripts/web.py` startar Neo4j före Streamlit (misslyckas det skrivs en rad till stderr och
+webben startar ändå). Podman-maskinen behöver skapas en gång:
 
 ```bash
-brew install podman
 podman machine init --memory 4096
-.venv/bin/pip install -e '.[graph]'
 ```
 
 ```bash
@@ -1613,6 +1628,60 @@ Extraktionen är idempotent — vilka sidor som behandlats spåras i
 grunden därifrån, och en omkörning av `scripts/load_graph.py` ger samma graf igen
 (`MERGE`).
 
+**Dokumentnoder.** `scripts/load_documents.py` (operationen *Ladda dokumentnoder*,
+`--uri`, `--user`, `--batch`, `--text-dir`) läser in alla dokument ur
+`document_meta` som `Dokument` med metadata, en `Sida`-nod per sida
+(`<stam>#<sida>`, sidantalet räknas ur `generated/text/<stam>.txt` utan det tomma segment som filens avslutande `\f` ger) och
+`Uppslag`, med kanterna `HAR_SIDA`, `INGÅR_I`, `HÄNVISAR_TILL` och `DEL_AV`.
+Omkörning är idempotent; sidor och dokument som försvunnit ur arkivet städas
+bort, men kunskapsgrafens `NÄMNER`/`RELATERAR` rörs aldrig. Steget körs sist i
+Full pipeline och hoppas över med en varning om Neo4j inte är igång.
+
+**Mordnattens ontologi.** `scripts/extract_mordnatten.py` (operationen *Extrahera
+mordnatten*, `src/ontologi/run.py`) väljer sidor ur `data/ontologi/urval.json`
+(serier i dokumentens uppslag, sökfrågor — hybridsökning, topp 20 per fråga, ingen
+reranker —, hela dokument och enskilda sidor; uttryckliga före sök före serie),
+skickar varje sida till en namngiven LLM-profil (`src/ontologi/llm.py`: Claude med en
+tur utan verktyg, eller OpenAI-kompatibelt `chat.completions` med `max_tokens=4096`
+och JSON-läge för OpenAI) och sparar råsvaret plus det kontrollerade svaret
+(`ontologi.extraction.parse_response`) i `ontology_extractions` direkt efter svaret.
+Användarprompten innehåller händelselistan, nyckelpersonerna och svarsschemat ur
+`data/ontologi/schema.json` ordagrant, före sidtexten. Därefter läses sidorna in som
+`Observation` → `KÄLLA` → `Sida` med vittnen, maskade
+uppgifter, händelser, kartplatser och signalement (`src/ontologi/load_graph.py`), alla
+med status `ogranskad`. **Vad som kontrolleras:** citatet (`utdrag`) måste stå ordagrant
+på sidan, annars förkastas observationen; ett vittnesnamn som inte står på sidan blir
+okänt, ett maskerat vittnes roll som inte står på sidan tas bort, och `kan_vara` behålls
+bara mot nyckelpersoner vars alias står i citatet. Tider, händelse, plats, signalement
+och beskrivningar kontrolleras inte — de är modellens tolkning och är alltid märkta
+`ogranskad` tills någon granskat dem. Ankarhändelserna i
+`data/ontologi/ankarhandelser.json` är ett utkast så länge filen har `"utkast": true`;
+varje körning varnar då (`Ankarhändelserna är ett utkast — rätta …`) tills tiderna är
+rättade och nyckeln borttagen. Flaggor: `--profile`, `--max-pages` (100; kostnadsbromsen,
+0 = urvalsfilens `max_sidor`), `--dry-run` (antal sidor per skäl, de tio första och
+uppskattad kostnad `(tecken/4 + 1500) · inpris + 2500 · utpris` per sida ur profilens
+priser, annars `kostnad okänd`; skriver ingenting), `--force` (extrahera om granskade
+sidor vid ny schemaversion — oförändrade sidor, alltså samma text och schemaversion, väljs
+aldrig om, inte ens med `--force`), `--load-only` (bara
+inläsning av alla sparade rader), `--jobs` (samtidiga anrop), `--uri`, `--user`,
+`--text-dir`. Utan `--profile` används standardprofilen, och körningen varnar med dess
+namn. **Köra om efter byte av modell eller prompt:** höj `schemaversion` i
+`data/ontologi/schema.json` — det är det enda som väljer om redan extraherade sidor med
+oförändrad text. Höj den också varje gång prompten eller schemat ändras. Granskade sidor
+väljs då om bara med `--force`. Kan grafen inte läsas (Neo4j nere eller lösenord saknas)
+behandlas alla sidor som redan har en rad i `ontology_extractions` som granskade, med en
+varning, så att granskade observationer aldrig skrivs över i blindo. Återförsök:
+429/5xx/nätfel upp till fyra försök (2, 4, 8 s); 401/402/403
+eller 429 efter sista försöket stoppar körningen efter att det sparade lästs in (felet
+skrivs i `errors.log`). Ett avklippt svar (slutorsak annan än `stop`/`end_turn`, t.ex.
+`length`), ett svar som inte går att tolka (`ogiltigt svar`) och ett oväntat fel på en
+sida sparas inte: sidan räknas som misslyckad, skrivs i `errors.log` och tas om nästa
+körning medan övriga sidor fortsätter. Ett giltigt svar utan observationer sparas.
+Svarar inte Neo4j ligger råsvaren kvar och körningen avslutas med en varning om att
+köra `--load-only` senare. Slutraden: `Mordnatten: E sidor extraherade (T token in,
+U ut), O observationer, V varningar.`; tolkningsvarningarna grupperas per prefix på
+debugnivå. Admin kräver en bekräftelse före start.
+
 ### Utforska i webgränssnittet
 
 Webgränssnittet (`.venv/bin/python scripts/web.py`) har en **Graf**-sida i sidofältet. Sök en person,
@@ -1628,6 +1697,20 @@ dess nätverk — så går det att vandra utåt från den sökta noden. Dubbelkl
 en dokumentnod öppnar PDF:en. Centernoder (sökta + utfällda) märks med ★;
 *Återställ till sökt nod* i sidofältet fäller ihop igen. Återkommer en
 relation i flera dokument kollapsas den till en kant märkt `×N`.
+
+**Dokument och uppslag:** sökrutan hittar även dokument (nr som är lika med eller
+börjar med sökordet, eller en titeldel, skiftlägesokänsligt) och uppslag
+(`D-4991` och `d4991` hittar `D4991-00`) ur dokumentlagret
+(*Ladda dokumentnoder* i Admin) i samma träfflista som entiteterna. Ett dokument
+som center visar dess metadata (nr, titel, arkiv, datum, sidor …) med knappen
+**Öppna PDF** och en graf över dess uppslag, hänvisningar (ut och in), förälder
+och delar, andra dokument i samma uppslag och nämnda entiteter; ett uppslag
+visar sina dokument. Dubbelklick på ett dokument öppnar PDF:en, på ett uppslag
+eller en entitet gör den till center. Är flera center utfällda styr det senast
+valda vyn (dokument/uppslag eller entitetsvyn). Saknas dokumentlagret visar
+sidan `Dokumentnoderna är inte inlästa — kör Ladda dokumentnoder i Admin.`
+Frågorna bor i `src/graph/viz.py` (`search_documents`, `fetch_document_ego`,
+`fetch_uppslag_ego`, `assemble_document_graph`, `document_meta_rows`).
 
 ### Namnvarianter (entity resolution)
 
@@ -1920,7 +2003,7 @@ per-dokumentresultat behålls; ett avbrutet jobb markeras aldrig `succeeded`.
 |---|---|
 | `scripts/jobs.py` | Starta/övervaka/avbryta bakgrundsjobb (`start`, `status`, `list`, `log`, `log --follow`, `cancel`) — delar registry med adminsidan |
 | `scripts/install.py` | Installera pipeline/webgränssnitt via Homebrew och pip (Python-paket, tessdata, hunspell) |
-| `scripts/run_pipeline.py` | Kör hela pipelinen i ett kommando: download → OCR → ingest (flaggor: `--skip-wpu`, `--skip-redo`, `--with-llm`, `--profile NAMN`, `--jobs N`, `--test N`) |
+| `scripts/run_pipeline.py` | Kör hela pipelinen i ett kommando: download → OCR → ingest → dokumentnoder i Neo4j (flaggor: `--skip-wpu`, `--skip-redo`, `--with-llm`, `--profile NAMN`, `--jobs N`, `--test N`) |
 | `scripts/download.py` → `src/download.py` | Hämta PDF:er från Drive |
 | `scripts/download_wpu.py` → `src/download_wpu.py` | Ladda ner alla PDF:er från wpu.nu → `downloaded/wpu_files/` |
 | `scripts/merge_wpu.py` → `src/merge_wpu.py` | Jämför wpu- och palme-text per fil, behåll bäst kvalitet |
@@ -1939,7 +2022,8 @@ per-dokumentresultat behålls; ett avbrutet jobb markeras aldrig `succeeded`.
 | `scripts/normalize.py` → `src/normalize_text.py` | Regelbaserad OCR-normalisering (körs automatiskt av `scripts/ocr.py`) |
 | `scripts/llm_correct.py` → `src/llm_correct.py` | LLM-korrektion av dåliga OCR-sidor via Claude Haiku |
 | `scripts/detect_redactions.py` → `src/operations/detect_redactions.py` | Kör redaktionsdetektering på befintliga text/OCR-par, parallellt i separata processer (`--jobs`) — aldrig trådar, eftersom PDFium inte är trådsäkert; dör en arbetsprocess körs de drabbade filerna om en i taget så att bara den skyldiga filen blir ett fel |
-| `scripts/ingest.py` → `src/rag/ingest.py` | Bygg vektorindex (LanceDB + BM25 FTS) |
+| `scripts/ingest.py` → `src/rag/ingest.py` | Bygg vektorindex (LanceDB + BM25 FTS) och fyll `document_meta` |
+| `src/dokumentmeta.py` | Tolkar filnamnsstammar efter form (`parse_stem`) till metadata för `document_meta` och ger LanceDB:s `nr`/`titel` (`lance_name_fields`) |
 | `src/rag/ask.py` | Frågefunktioner — RAG-läge och MCP-läge (importeras av Utredning-sidan och mcp_server), `format_leads` för CLI:ts spårutskrift samt `stop_notice` som flaggar avklippta modellsvar |
 | `src/rag/mcp_server.py` | MCP-server med `search_archive`, `get_page`, `web_search` och `propose_leads` (startas av ask.py/Utredning.py) |
 | `src/utredningsspar.py` | Konversationens spårlista för utredningsläget (Streamlit-fri): registrera spår, status, beläggsfilter mot sedda källor och sammanfattningen som skickas till modellen |
@@ -1966,6 +2050,8 @@ per-dokumentresultat behålls; ett avbrutet jobb markeras aldrig `succeeded`.
 | `scripts/extract_map_observations.py` → `src/extract_map_observations.py` | LLM-extraktion av person-position-tid-kandidater till `map_observation_candidates` |
 | `scripts/extract_entities.py` → `src/graph/extract_entities.py` | Entitets-/relationsextraktion till `doc_entities` i state.db (Claude Haiku) |
 | `scripts/load_graph.py` → `src/graph/load_neo4j.py` | Ladda den granskade grafprojektionen från state.db till Neo4j |
+| `scripts/load_documents.py` → `src/graph/load_documents.py` (+ `src/graph/document_rows.py`) | Ladda dokument, sidor, uppslag, hänvisningar och delar till Neo4j |
+| `scripts/extract_mordnatten.py` → `src/ontologi/run.py` (+ `config.py`, `extraction.py`, `selection.py`, `llm.py`, `load_graph.py`) | Mordnattens observationer: urval, LLM per sida, råsvar i `ontology_extractions`, inläsning i Neo4j |
 | `scripts/graph_review.py` → `src/graph/review.py` | Regelbaserad kvalitetskontroll av entiteter och relationer |
 | `scripts/graph_review_llm.py` → `src/graph/review_llm.py` | Källbunden LLM-granskning som sparar manuellt godkända förslag |
 | `scripts/graph_sync.py` → `src/graph/review_service.py` | Förhandsvisa, transaktionellt uppdatera och efterkontrollera Neo4j |
@@ -1999,7 +2085,7 @@ Valfritt: installera hunspell + sv_SE-ordlista för att fylla i `pct_swe`-kolumn
 ## Tester
 
 ```bash
-.venv/bin/pip install -e '.[dev,web]'
+.venv/bin/pip install -e '.[dev,web,graph]'
 .venv/bin/python scripts/test.py
 .venv/bin/python scripts/test.py --static
 ```
@@ -2013,7 +2099,7 @@ LLM-korrektionslogiken (llm_correct), re-ingest-flödet (ingest), state-database
 schema-migrationer, delta-urval och `text_mtime`-stämpling (db, ocr_db_helper, normalize, quality),
 citatuppslag/-länkning (citations), RRF-hybridsökningen (ask) och `get_page` (mcp_server),
 entitetsextraktion (extract_entities), graf-laddning (load_neo4j) och
-nyckelentiteter ur svar (answer_entities) samt de sparade promptändringarna och
+nyckelentiteter ur svar (answer_entities), mordnattens ontologi (`test_ontologi_*`: konfiguration, tolkning, urval, LLM-återförsök och körflödet med fejkad LLM, sökning och Neo4j) samt de sparade promptändringarna och
 Admin-formuläret för dem (prompts, admin_ui). `tests/test_utredning_ui.py` kör
 Utredning-sidan headless med Streamlits AppTest och kontrollerar lägesvalet
 (att varje läge visar sin egen sökinställningssektion, att valen överlever ett
@@ -2026,6 +2112,16 @@ mot en tabellsida som ritas med PIL. Markören registreras i `pyproject.toml`, d
 också när layoutmotorn inte går att köra. Kör det uttryckligen med
 `PALME_SURYA_PYTHON=… .venv/bin/pytest -m external tests/test_surya_real.py -v`.
 
+Tester märkta `neo4j` kör mot en riktig, **tom** testdatabas som anges med
+`NEO4J_TEST_URI` (+ `NEO4J_TEST_USER`, `NEO4J_TEST_PASSWORD`) och fixturen
+`neo4j_session` i `tests/conftest.py`. Saknas URI hoppas de över (med
+`PALME_REQUIRE_NEO4J_TESTS=1`, som CI sätter, faller de i stället); innehåller
+databasen någon nod vägrar fixturen köra, och efteråt rensas den. CI kör en
+`neo4j:5`-tjänstecontainer. Lokalt: `podman run -d --rm --name palme-neo4j-test
+-p 17687:7687 -e NEO4J_AUTH=neo4j/palme-ci-test neo4j:5` och sedan
+`NEO4J_TEST_URI=bolt://localhost:17687 NEO4J_TEST_PASSWORD=palme-ci-test
+.venv/bin/pytest -m neo4j` — aldrig port 7687, som är den riktiga grafen.
+
 Tre strukturtester vaktar arkitekturen: `tests/test_packaging.py` kräver att
 `py-modules` i `pyproject.toml` är exakt mängden `src/*.py` på toppnivå (en ny
 modul måste alltså läggas till där, annars saknas den vid `pip install .`),
@@ -2034,9 +2130,11 @@ modul måste alltså läggas till där, annars saknas den vid `pip install .`),
 och `scripts/` finns på paketet.
 
 **CI**: `.github/workflows/ci.yml` kör `scripts/test.py --static` på Ubuntu med
-Python 3.11 vid push och pull request mot `main`. Den installerar `.[dev,web]`
-plus `pymupdf` och CPU-versionen av PyTorch; `graph`- och `surya`-extras behövs
-inte eftersom testerna mockar dem.
+Python 3.11 vid push och pull request mot `main`. Den installerar `.[dev,web,graph]`
+plus `pymupdf` och CPU-versionen av PyTorch; `surya`-extran behövs inte. Jobbet kör
+en `neo4j:5`-tjänstecontainer, och teststeget sätter `NEO4J_TEST_URI`,
+`NEO4J_TEST_PASSWORD` och `PALME_REQUIRE_NEO4J_TESTS=1`, så Neo4j-testerna måste
+köras där (de hoppas inte över).
 
 ## Loggning
 

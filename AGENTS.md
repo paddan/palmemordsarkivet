@@ -106,11 +106,14 @@ samma kommando som `.venv/bin/python scripts/run_pipeline.py`. Kör med
 # Kartobservations-kandidater (valfritt)
 .venv/bin/python scripts/extract_map_observations.py --dry-run --limit 5
 
-# Kunskapsgraf (valfritt; installera podman + .[graph])
+# Kunskapsgraf (Neo4j är obligatoriskt: install.py ger podman + .[graph], web.py startar den)
 .venv/bin/python scripts/extract_entities.py --limit 5 --dry-run
 .venv/bin/python scripts/neo4j.py status
 # eller: ./neo4j.sh [start|stop|status] (start är standard)
 .venv/bin/python scripts/load_graph.py
+.venv/bin/python scripts/load_documents.py            # dokument, sidor, uppslag, hänvisningar och delar
+.venv/bin/python scripts/extract_mordnatten.py --dry-run --profile "<profil>"  # urval + kostnad, inga LLM-anrop
+.venv/bin/python scripts/extract_mordnatten.py --load-only  # läs in sparade råsvar i grafen igen
 .venv/bin/python scripts/graph_review.py
 .venv/bin/python scripts/graph_review_llm.py --profile "Standard"
 .venv/bin/python scripts/graph_sync.py                 # förhandsvisa skillnader
@@ -510,6 +513,52 @@ källan.
 
 **Kunskapsgraf byggs lazy (Utredning.py)**: `_render_answer_graph` tar svaret, inte färdiga centers. Den dyra entitetsextraktionen (`_compute_answer_centers` → vald backend i `generated/llm_config.json`) och Neo4j-frågorna körs **först när användaren öppnar graf-toggeln** — inte automatiskt efter varje svar. DeepSeek/OpenAI använder vald modell; Claude använder Haiku för den lilla extraktionsuppgiften. Resultatet cachas per svar i session state och returneras så utredningspärmen kan spara det.
 
+**Dokumentlagret i Neo4j (`graph/load_documents.py`)**: `load-documents` skriver
+`Dokument`, `Sida` (id `<stam>#<sida>`) och `Uppslag` med kanterna `HAR_SIDA`,
+`INGÅR_I`, `HÄNVISAR_TILL` och `DEL_AV` ur `document_meta` (rader byggs rent i
+`graph/document_rows.py`; sidantal räknas ur textfilerna). Allt är parametriserat
+MERGE och körs sist i Full pipeline, som hoppar över steget med en varning när
+Neo4j saknas. Kanterna är skilda från kunskapsgrafens `NÄMNER`/`RELATERAR`
+(`graph_owner='palmemordsarkivet'`): dokumentlagret ändrar eller tar aldrig bort
+dem, och `graph_sync` rör aldrig dokumentlagrets kanter. Städningen tar bort
+inaktuella sidor och dokument som lagret själv skrivit (egenskapen `arkiv`), men
+ett dokument som kunskapsgrafen fortfarande pekar på behåller `stem`, `nr` och
+`titel`.
+
+**Mordnattens ontologi (`src/ontologi/`, operationen `extract-mordnatten`)**:
+råsvaren sparas i `ontology_extractions` i state.db **direkt efter varje
+LLM-svar** (`run.py`, `asyncio` med högst `--jobs` samtidiga anrop) och är den
+beständiga kopian; grafen är ett pekregister ovanpå dokumentlagrets `Sida` och
+byggs om med `--load-only`. Neo4j nere → råsvaren ligger kvar, varning och exitkod
+0. Profilen löses före all LLM-kontakt (okänd profil, fel backend eller saknad
+nyckel → `OperationFailed`; utan `--profile` varnar körningen med standardprofilens
+namn); `LlmFatal` (401/402/403, eller 429 efter fyra försök)
+stoppar nya anrop, skrivs i `errors.log`, läser in det som hann sparas och felar sedan; ett avbrott läser
+också in det sparade före omhöjningen. Ett avklippt svar (slutorsak annan än
+`stop`/`end_turn`/ingen, t.ex. `length`), ett svar `parse_response` bara kan ge
+`ogiltigt svar` för och ett oväntat fel på en sida **sparas inte** — sidan räknas som
+misslyckad, loggas (även i `errors.log`) och tas om nästa körning; spara dem aldrig,
+då väljs sidan aldrig om. Ett giltigt svar med noll observationer sparas. Urvalet hoppar alltid över sidor med
+oförändrad text och schemaversion, även med `--force` (som bara gäller granskade sidor vid ny
+schemaversion) — höj därför `schemaversion` i `data/ontologi/schema.json` när prompten,
+schemat eller modellen byts. Kan grafen inte läsas (Neo4j nere, lösenord saknas) behandlas alla
+sidor som redan har en rad i `ontology_extractions` som granskade, med en varning — hellre
+för få omextraktioner än överskrivna granskningar. `--dry-run` ger antal per skäl och en kostnadsuppskattning ur
+profilens priser (annars `kostnad okänd`). `"utkast": true` i `ankarhandelser.json`
+(`OntologiConfig.handelser_utkast`) ger en varning i varje körning tills ägaren rättat
+tiderna. Maskningsreglerna: en `MaskadUppgift`
+gäller bara inom sitt dokument och får aldrig `SAMMA_PERSON` eller annan
+identitetskant, en platshållare (`[MASKAD]`, `NN`, `okänd`, `X`) blir aldrig ett
+`Vittne`, och innehållet bakom en maskering gissas aldrig. **Det som kontrolleras
+mot sidan** är citatet, vittnesnamnet och `kan_vara`: `parse_response` förkastar en
+observation vars `utdrag` inte står på sidan, ett vittnesnamn som inte står på sidan
+blir okänt, ett maskerat vittnes `roll` som inte står på sidan blir `None`, och
+`KAN_VARA` skapas bara mot en `Nyckelperson` vars alias står i utdraget. Tider,
+händelse, plats, signalement och beskrivningar är **overifierad LLM-tolkning** som
+alltid når grafen märkt `ogranskad` — påstå inte att de är kontrollerade. Svarsschemat
+(`cfg.schema`) skickas ordagrant i användarprompten (`build_prompt`). LLM, sökning och Neo4j
+injiceras via `run.Deps`; testerna når aldrig nätet.
+
 **Grafgranskning (`graph/review*.py`)**: Originalen i `doc_entities` ändras aldrig.
 Manuella beslut gäller en exakt förekomst och sidans payload-hash; efter ny
 extraktion blir beslutet inaktuellt och appliceras inte. Beslut vars objekt helt
@@ -550,7 +599,8 @@ bygger på att jämföra `pdf_files.text_mtime` mot `normalized_at`/`scored_at`/
 `--rebuild` tvingar omkörning. `tesseract_blacklisted_at` är bara en spärr för
 fler Tesseract-försök; `scripts/ocr.py` försöker Surya-fallback innan en fil betraktas
 som slutligt OCR-misslyckad. `surya_failed_at` markerar att även Surya inte fick
-fram text, och då hoppar `merge_wpu` sådana textlösa wpu-filer tyst. En wpu-fil utan text men med `tesseract_done_at` har raderats som sämre dubblett (jämförelsen sker mot alla texter i `text/`, även andra wpu-filers) och markeras avgjord med en debugrad — inte `[saknar text]`, eftersom Tesseract aldrig läser om den. Modulen
+fram text, och då hoppar `merge_wpu` sådana textlösa wpu-filer tyst. En wpu-fil utan text men med `tesseract_done_at` har raderats som sämre dubblett (jämförelsen sker mot alla texter i `text/`, även andra wpu-filers) och markeras avgjord med en debugrad — inte `[saknar text]`, eftersom Tesseract aldrig läser om den. Tabellen `document_meta` (en rad per stam) fylls av
+ingest ur filnamnen före indexeringen. Modulen
 `src/db/` (re-exporterat via `db/__init__.py`) exponerar alla CRUD- och delta-queries; konsumenter skriver aldrig
 egen SQL.
 
@@ -575,6 +625,14 @@ kandidat i Karta-fliken (**Granska extraherade kartförslag**) skapas en rad i
 (exact/fuzzy/none); okända platser måste få koordinater innan godkännande.
 Varje lyckad sida markeras dessutom i `map_observation_extractions`, även om
 LLM:en returnerar noll kandidater, så omkörningar inte debiterar tomma sidor igen.
+
+**Filnamn tolkas efter form, inte position (`src/dokumentmeta.py`)**: kalkylarkets
+tomma kolumner hoppas över i `build_filename`, så fältens plats i namnet varierar
+och en positionstolkning gav fel `bestallt`/`upplagt`/`anmarkning`. `parse_stem`
+tolkar efter form och är källan för `document_meta`. LanceDB:s `nr`/`titel`
+(`lance_name_fields`) ska förbli byte-identiska med den gamla tolkningen eftersom
+citat, träffhuvuden och `citations.resolve_truncated` bygger på dem; de övriga
+kolumnerna (`DROPPED_NAME_FIELDS`) tas bort ur en äldre tabell vid ingest.
 
 **mtime-tracking (ingest.py)**: Varje `.txt`-fil jämförs mot mtime som lagras i `ingest`-tabellen i state.db (auktoritativt); nyare fil → re-ingest. LanceDB-tabellen har fortfarande en `mtime`-kolumn men den läses inte längre för delta-beslut. Om ingest-state saknas men källan finns i LanceDB behandlas filen som re-indexering, så gamla chunks ersätts i stället för att dupliceras. Legacy-rader med sentinel-mtime `0.0` re-indexeras bara med `--reindex-since`.
 
@@ -799,3 +857,4 @@ kryssruta när etiketten ändras).
    importerade moduler ligger kvar i `sys.modules` från första importen — en
    pågående server kör alltså gamla promptar och gamla verktyg tills processen
    startas om. Starta om `./web.sh` innan du felsöker uteblivet webbsök.
+9. **Neo4j-tester**: märkta `@pytest.mark.neo4j`, kör bara mot en tom testdatabas via `NEO4J_TEST_URI` (fixturen `neo4j_session` vägrar en databas med noder och rensar efteråt). Använd aldrig `bolt://localhost:7687` lokalt — det är din riktiga graf; lokalt används en testcontainer på port 17687 (se `docs/teknisk-referens.md`). CI:s port 7687 är en tillfällig tjänstecontainer och inte din graf. CI sätter `PALME_REQUIRE_NEO4J_TESTS=1` så de aldrig hoppas över tyst.

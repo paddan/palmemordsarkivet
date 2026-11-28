@@ -1,0 +1,16 @@
+{
+  "utkast": true,
+  "handelser": [
+    {"id": "palmes-lamnar-hemmet", "namn": "Palmes lämnar hemmet", "ordning": 1, "tid_fran": "20:30", "tid_till": "20:40", "beskrivning": "Olof och Lisbet Palme lämnar bostaden i Gamla stan."},
+    {"id": "ankomst-grand", "namn": "Ankomst till Grand", "ordning": 2, "tid_fran": "20:45", "tid_till": "20:55", "beskrivning": "Paret anländer till biografen Grand på Sveavägen."},
+    {"id": "grand-slut", "namn": "Filmen på Grand slutar", "ordning": 3, "tid_fran": "23:05", "tid_till": "23:12", "beskrivning": "Föreställningen tar slut och publiken lämnar biografen."},
+    {"id": "vandring-sveavagen", "namn": "Promenad på Sveavägen", "ordning": 4, "tid_fran": "23:10", "tid_till": "23:21", "beskrivning": "Paret går söderut längs Sveavägen utan livvakter."},
+    {"id": "skotten", "namn": "Skotten", "ordning": 5, "tid_fran": "23:21", "tid_till": "23:22", "beskrivning": "Olof Palme skjuts till döds och Lisbet Palme skadas vid Sveavägen/Tunnelgatan."},
+    {"id": "flykt-tunnelgatan", "namn": "Flykt längs Tunnelgatan", "ordning": 6, "tid_fran": "23:21", "tid_till": "23:23", "beskrivning": "Gärningsmannen lämnar platsen mot Tunnelgatan."},
+    {"id": "flykt-trapporna", "namn": "Flykt uppför trapporna", "ordning": 7, "tid_fran": "23:22", "tid_till": "23:24", "beskrivning": "Gärningsmannen springer uppför trapporna mot Malmskillnadsgatan."},
+    {"id": "flykt-malmskillnadsgatan", "namn": "Flykt vid Malmskillnadsgatan", "ordning": 8, "tid_fran": "23:23", "tid_till": "23:30", "beskrivning": "Gärningsmannen ses på och kring Malmskillnadsgatan efter trapporna."},
+    {"id": "forsta-polis", "namn": "Första polis på plats", "ordning": 9, "tid_fran": "23:22", "tid_till": "23:26", "beskrivning": "Först anlända polis och vittnen vid mordplatsen."},
+    {"id": "ambulans", "namn": "Ambulans", "ordning": 10, "tid_fran": "23:24", "tid_till": "23:30", "beskrivning": "Ambulansen anländer och Palme förs bort."},
+    {"id": "sabbatsberg", "namn": "Sabbatsbergs sjukhus", "ordning": 11, "tid_fran": "23:28", "tid_till": "23:40", "beskrivning": "Palme förs till Sabbatsbergs sjukhus där han förklaras död."}
+  ]
+}

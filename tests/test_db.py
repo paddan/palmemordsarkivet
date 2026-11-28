@@ -235,7 +235,7 @@ def test_init_schema_migrates_legacy_v4_fixture(tmp_path):
                 "SELECT version FROM schema_version ORDER BY version"
             )
         ]
-        assert versions == [4, 6, 7, 8, 9, 10, 11, 12, SCHEMA_VERSION]
+        assert versions == [4, 6, 7, 8, 9, 10, 11, 12, 13, 14, SCHEMA_VERSION]
     finally:
         conn.close()
 
@@ -1435,8 +1435,8 @@ def test_migration_012_creates_readings(tmp_path):
     migrated = connect(legacy)
     try:
         init_schema(migrated)
-        assert SCHEMA_VERSION == 13
-        assert migrated.execute("PRAGMA user_version").fetchone()[0] == 13
+        assert SCHEMA_VERSION == 15
+        assert migrated.execute("PRAGMA user_version").fetchone()[0] == 15
         assert _readings_cols(migrated) == _readings_cols(fresh)
         assert "reason" in _readings_cols(fresh)
         idx = {r[1] for r in migrated.execute("PRAGMA index_list(pdf_page_readings)")}

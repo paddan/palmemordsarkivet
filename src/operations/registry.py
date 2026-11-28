@@ -394,6 +394,43 @@ def _register_graph_operations() -> None:
     ))
 
     _registry.register(OperationDefinition(
+        id="load-documents", label="Ladda dokumentnoder", group="Extraktion och graf",
+        description="Läs in alla dokument och sidor med metadata i Neo4j.",
+        parameters=(
+            _p("uri", "--uri", "str", "bolt://localhost:7687", "Neo4j-URI"),
+            _p("user", "--user", "str", "neo4j", "Användare"),
+            _p("batch", "--batch", "int", 1000, "Rader per skrivbatch"),
+            _p("text_dir", "--text-dir", "path", ROOT / "generated" / "text", "Text-katalog"),
+        ),
+        admin_visible=True, mutating=True, confirmation=None,
+        run=adapters.load_documents_adapter,
+    ))
+
+    _registry.register(OperationDefinition(
+        id="extract-mordnatten", label="Extrahera mordnatten", group="Extraktion och graf",
+        description="Extrahera observationer från mordnatten ur utvalda sidor och läs in "
+                    "dem i grafen.",
+        parameters=(
+            _p("profile", "--profile", "str", "", "LLM-konfiguration"),
+            _p("max_pages", "--max-pages", "int", 100, "Max antal sidor"),
+            _p("dry_run", "--dry-run", "bool", False, "Visa urval och kostnad utan att köra"),
+            _p("force", "--force", "bool", False,
+               "Extrahera om även granskade sidor vid ny schemaversion"),
+            _p("load_only", "--load-only", "bool", False, "Bara inläsning i grafen"),
+            _p("jobs", "--jobs", "int", _LLM_JOBS, "Parallella LLM-anrop"),
+            _p("uri", "--uri", "str", "bolt://localhost:7687", "Neo4j-URI"),
+            _p("user", "--user", "str", "neo4j", "Användare"),
+            _p("text_dir", "--text-dir", "path", ROOT / "generated" / "text", "Text-katalog"),
+        ),
+        admin_visible=True, mutating=True,
+        confirmation=(
+            "Extraktionen skickar sidtext till den valda LLM-profilen och kostar pengar. "
+            "Kör först med Visa urval och kostnad."
+        ),
+        run=adapters.extract_mordnatten_adapter,
+    ))
+
+    _registry.register(OperationDefinition(
         id="graph-review", label="Kontrollera grafkvalitet", group="Extraktion och graf",
         description="Kontrollera grafunderlag och spara rapport utan att ändra Neo4j.",
         parameters=(), admin_visible=True, mutating=True, confirmation=None,

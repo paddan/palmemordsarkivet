@@ -70,7 +70,12 @@ def audit_entries(entries: list[dict], decisions: list[dict]) -> list[dict]:
                     if not original.get("typ", "").strip():
                         issues.append("Tom relationstyp")
                     if normalize_name(original.get("fran", "")) == normalize_name(original.get("till", "")):
-                        issues.append("Självkant")
+                        # Tidigare etiketten "Självkant" (grafteorins self-loop),
+                        # som granskaren inte förstod.
+                        issues.append(
+                            "Relationen pekar på samma person/plats/organisation i båda ändar — "
+                            "kontrollera vem den andra parten är, eller uteslut relationen"
+                        )
                 key = _hash([entry["pdf_stem"], entry["page_num"], kind, index])
                 decision = by_key.get(key)
                 result.append({"item_key": key, "source_hash": source_hash, "kind": kind,

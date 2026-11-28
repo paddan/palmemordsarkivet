@@ -21,6 +21,17 @@ SURYA_LAYOUT_PACKAGE = "surya-ocr==0.22.1"
 SURYA_LAYOUT_PYTHON_VERSION = "3.12"
 SURYA_LAYOUT_BREW_TOOLS = (("llama-server", "llama.cpp"), ("uv", "uv"))
 
+# brew-paket som huvudinstallationen kräver. podman kör Neo4j (kunskapsgrafen).
+BREW_PACKAGES = (
+    "ocrmypdf", "tesseract-lang", "poppler", "qpdf", "unpaper", "hunspell", "podman",
+)
+
+
+def pip_extras(with_dev: bool) -> str:
+    """Pip-extras för huvudinstallationen; graph (neo4j) ingår alltid."""
+    return "dev,web,graph" if with_dev else "web,graph"
+
+
 # Homebrews hunspell levererar inga ordlistor; LibreOffices svenska (LGPL-3,
 # Göran Andersson) hämtas då i stället. Pinnad commit, så en ändring uppströms
 # inte tyst byter ordlista (och därmed kvalitetspoängen).
@@ -272,7 +283,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     print("→ brew-paket…")
-    subprocess.run(["brew", "install", "--quiet", "ocrmypdf", "tesseract-lang", "poppler", "qpdf", "unpaper", "hunspell"], check=False)
+    subprocess.run(["brew", "install", "--quiet", *BREW_PACKAGES], check=False)
 
     # Hunspell svensk ordlista: symlänka brew-ordlistan om den saknas.
     # brew-hunspells sv_SE.aff/.dic till ~/Library/Spelling om de inte redan finns.
@@ -318,7 +329,7 @@ def main(argv: list[str] | None = None) -> int:
     # `python -m pip`: ensurepip skapar bara pip3/pip3.X, inte skriptet `pip`.
     pip = [str(venv / "bin" / "python"), "-m", "pip"]
     subprocess.run([*pip, "install", "--upgrade", "pip", "--quiet"], check=True)
-    extras = "dev,web" if with_dev else "web"
+    extras = pip_extras(with_dev)
     subprocess.run([*pip, "install", "--quiet", "-e", f".[{extras}]"], cwd=ROOT, check=True)
     if with_surya:
         subprocess.run([*pip, "install", "--quiet", "-e", ".[surya]"], cwd=ROOT, check=True)

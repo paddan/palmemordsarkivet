@@ -14,7 +14,6 @@ Kör:
 from __future__ import annotations
 
 import argparse
-import re
 import sys
 import time
 from pathlib import Path
@@ -29,66 +28,18 @@ from tenacity import (
 
 import db as state_db
 
+# ID-hjälparna bor i dokumentmeta; uttrycklig re-export så merge_wpu och
+# testerna fortsätter importera dem härifrån.
+from dokumentmeta import PALME_ID_RE as PALME_ID_RE
+from dokumentmeta import WPU_ID_RE as WPU_ID_RE
+from dokumentmeta import IdKey as IdKey
+from dokumentmeta import palme_id_keys as palme_id_keys
+from dokumentmeta import wpu_id_keys as wpu_id_keys
+
 ROOT = Path(__file__).resolve().parents[1]
 OUT_DIR = ROOT / "downloaded" / "wpu_files"
 WPU_API = "https://wpu.nu/api.php"
 USER_AGENT = "palmemordsarkivet-wpu-downloader/1.0"
-
-# Dokument-ID i wpu-filnamn: PREFIX{digits}-{NN}[-{SUFFIX}]
-# Exempel: DA14259-00, EDE9980-00-A, IVA16636-00-B
-WPU_ID_RE = re.compile(
-    r"(?<![A-Za-z])([A-Z]{1,4})(\d+)-(\d{2})(?:-([A-Z]+))?(?![A-Za-z\d])"
-)
-
-# Dokument-ID i palmemordsarkivet-filnamn: PREFIX-{digits}[-version|-suffix|-version-suffix]
-# Exempel: DA-14259, DA-14244-A, DA-14244-09, EDE-9980, IVA-16636-B
-PALME_ID_RE = re.compile(
-    r"(?<![A-Za-z])([A-Z]{1,4})-(\d+)"
-    r"(?:"
-    r"  -(\d+)(?:-([A-Z]+))?"   # -version eller -version-suffix
-    r"  |"
-    r"  -([A-Z]+)"              # bara suffix (version → 0)
-    r")?(?![A-Za-z\d])",
-    re.VERBOSE,
-)
-
-IdKey = tuple[str, int, int, str]  # (prefix, base, version, suffix_char)
-
-
-def _expand_suffix(suffix: str) -> list[str]:
-    return list(suffix) if suffix else [""]
-
-
-def wpu_id_keys(filename: str) -> set[IdKey]:
-    """Extrahera dokument-ID-nycklar ur ett wpu-filnamn."""
-    keys: set[IdKey] = set()
-    for m in WPU_ID_RE.finditer(filename):
-        prefix = m.group(1)
-        base = int(m.group(2))
-        version = int(m.group(3))
-        for ch in _expand_suffix(m.group(4) or ""):
-            keys.add((prefix, base, version, ch))
-    return keys
-
-
-def palme_id_keys(filename: str) -> set[IdKey]:
-    """Extrahera dokument-ID-nycklar ur ett palmemordsarkivet-filnamn."""
-    keys: set[IdKey] = set()
-    for m in PALME_ID_RE.finditer(filename):
-        prefix = m.group(1)
-        base = int(m.group(2))
-        if m.group(3) is not None:
-            version = int(m.group(3))
-            suffix = m.group(4) or ""
-        elif m.group(5) is not None:
-            version = 0
-            suffix = m.group(5)
-        else:
-            version = 0
-            suffix = ""
-        for ch in _expand_suffix(suffix):
-            keys.add((prefix, base, version, ch))
-    return keys
 
 
 def fetch_all_wpu_files() -> list[dict]:

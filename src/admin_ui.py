@@ -515,6 +515,27 @@ OPERATION_HELP: dict[str, SectionHelp] = {
             ("batch", "Antal rader per skrivning till Neo4j."),
         ),
     ),
+    "load-documents": SectionHelp(
+        "Läser in alla dokument och sidor med metadata, uppslag, hänvisningar och delar i Neo4j. Kunskapsgrafens kanter rörs inte. Körs också sist i Full pipeline.",
+        (
+            ("uri", "Adressen till instansen — tom betyder lokal Neo4j."),
+            ("user", "Neo4j-användare; standard är neo4j."),
+            ("batch", "Antal rader per skrivning till Neo4j."),
+        ),
+    ),
+    "extract-mordnatten": SectionHelp(
+        "Låter en LLM läsa utvalda sidor (urvalet i data/ontologi/urval.json: serier, sökfrågor, dokument och sidor) och plocka ut iakttagelser från mordnatten. Råsvaren sparas i state.db direkt. Citatet, vittnesnamnet och kopplingen till nyckelpersoner kontrolleras mot sidan; tider, händelse, plats, signalement och beskrivningar är modellens tolkning och når grafen som ogranskade observationer. Maskerade vittnen kopplas aldrig ihop och innehållet bakom en maskering gissas aldrig. Kräver att dokumentlagret är inläst (Ladda dokumentnoder).",
+        (
+            ("dry_run", "Visar hur många sidor som väljs och varför, de första sidorna och en kostnadsuppskattning ur profilens priser — utan LLM-anrop och utan att något skrivs. Kör den först."),
+            ("force", "Extraherar om sidor med granskade observationer när schemaversionen ändrats; de granskade blir då inaktuella. Sidor med oförändrad text och schemaversion väljs aldrig om, inte ens med detta val — för att köra om efter byte av modell eller prompt höjs schemaversion i data/ontologi/schema.json."),
+            ("load_only", "Hoppar över urval och LLM och läser in alla sparade råsvar i grafen igen — t.ex. när Neo4j var nere vid förra körningen."),
+            ("profile", "Vilken LLM-konfiguration som läser sidorna; skapas under Inställningar. Sidtexten skickas till profilens tjänst, med kostnad per sida."),
+            ("uri", "Adressen till instansen — tom betyder lokal Neo4j."),
+            ("user", "Neo4j-användare; standard är neo4j."),
+            ("max_pages", "Högst så många sidor per körning, i prioritetsordning (uttryckliga sidor före sökträffar före serier). Kostnadsbromsen; 0 använder urvalsfilens max_sidor."),
+            ("jobs", "Hur många LLM-anrop som körs samtidigt."),
+        ),
+    ),
     "neo4j-start": SectionHelp(
         "Startar den lokala Neo4j-containern via podman. Första gången skapas container och lösenord automatiskt."
     ),

@@ -1,6 +1,7 @@
 """Migrerad logik från ``run_pipeline.sh``.
 
-Full pipeline: download → (wpu) → OCR → (LLM-korrigering + quality) → ingest.
+Full pipeline: download → (wpu) → OCR → (LLM-korrigering + quality) → ingest → dokumentnoder i Neo4j
+(hoppas över med en varning om Neo4j inte är igång).
 OCR och ingest körs alltid, även när download inte hittar nya PDF:er.
 """
 
@@ -46,6 +47,7 @@ class PipelineDependencies:
     llm_correct: Callable[..., int] | None = None
     quality: Callable[..., int] | None = None
     ingest: Callable[..., int] | None = None
+    load_documents: Callable[..., int] | None = None
     count_pdfs: Callable[[Path], int] | None = None
 
 
@@ -79,6 +81,14 @@ def run_pipeline(
     run_llm = deps.llm_correct or (lambda **kw: llm_correct.run_llm_correct(**kw))
     run_quality = deps.quality or (lambda **kw: quality.run_quality(**kw))
     run_ingest = deps.ingest or (lambda **kw: ingest.run_ingest(**kw))
+
+    def _default_load_documents(**kw) -> int:
+        from graph import load_documents  # noqa: PLC0415 — tung import
+
+        rc: int = load_documents.run_load_documents(**kw)
+        return rc
+
+    run_load_documents = deps.load_documents or _default_load_documents
 
     def _require(step: str, rc: int | None) -> None:
         """Kasta OperationFailed med stegnamn om steget returnerade en felkod."""
@@ -121,6 +131,37 @@ def run_pipeline(
         chunk_overlap=150, model_name="", unusable_list=options.root / "generated" / "unusable.txt",
         reindex_since=None, context=ctx,
     ))
+
+    # Dokumentnoderna kräver en körande Neo4j; saknas den hoppas steget över.
+    skip_errors: tuple[type[BaseException], ...] = (OperationFailed, OSError)
+    try:
+        from neo4j.exceptions import AuthError, ServiceUnavailable  # noqa: PLC0415
+
+        skip_errors += (ServiceUnavailable, AuthError)
+    except ImportError:
+        pass
+    docs_rc: int | None = None
+    try:
+        docs_rc = run_load_documents(
+            uri="bolt://localhost:7687", user="neo4j", batch=1000,
+            text_dir=options.txt, context=ctx,
+        )
+    except skip_errors as exc:
+        ctx.log(
+            f"Hoppar dokumentnoder: {exc}. "
+            "Kör Ladda dokumentnoder när Neo4j är igång.",
+            level="warning",
+        )
+    except ModuleNotFoundError as exc:
+        # Bara ett saknat neo4j-paket är en miljöbrist; andra importfel är buggar.
+        if exc.name != "neo4j" and not (exc.name or "").startswith("neo4j."):
+            raise
+        ctx.log(
+            f"Hoppar dokumentnoder: {exc}. Installera extran graph "
+            "och kör Ladda dokumentnoder när Neo4j är igång.",
+            level="warning",
+        )
+    _require("load-documents", docs_rc)
 
     ctx.log("Pipeline klar.")
     return 0

@@ -72,4 +72,8 @@ def test_neo4j_start_passes_password_via_env_not_argv(tmp_path: Path, monkeypatc
     argv_text = " ".join(run_calls[0]["argv"])
     assert "hemligt-lösenord" not in argv_text
     assert "NEO4J_AUTH=" not in argv_text
+    # Utan "-e NEO4J_AUTH" (bara namnet) vidarebefordrar podman inte variabeln
+    # till containern, och Neo4j startar då med standardlösenordet neo4j/neo4j.
+    argv = run_calls[0]["argv"]
+    assert argv[argv.index("NEO4J_AUTH") - 1] == "-e"
     assert run_calls[0]["env"] == {"NEO4J_AUTH": "neo4j/hemligt-lösenord"}

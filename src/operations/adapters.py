@@ -208,6 +208,38 @@ def load_graph_adapter(context, params: Mapping) -> None:
     _raise_on_failure("load-graph", rc)
 
 
+def load_documents_adapter(context, params: Mapping) -> None:
+    from graph import load_documents
+
+    rc = load_documents.run_load_documents(
+        uri=params["uri"],
+        user=params["user"],
+        batch=params["batch"],
+        text_dir=params["text_dir"],
+        context=context,
+    )
+    _raise_on_failure("load-documents", rc)
+
+
+def extract_mordnatten_adapter(context, params: Mapping) -> None:
+    """Extrahera mordnattens observationer och läs in dem i grafen."""
+    from ontologi.run import run_extract_mordnatten
+
+    rc = run_extract_mordnatten(
+        profile=params["profile"],
+        max_pages=params["max_pages"],
+        dry_run=params["dry_run"],
+        force=params["force"],
+        load_only=params["load_only"],
+        jobs=params["jobs"],
+        uri=params["uri"],
+        user=params["user"],
+        text_dir=params["text_dir"],
+        context=context,
+    )
+    _raise_on_failure("extract-mordnatten", rc)
+
+
 def llm_correct_adapter(context, params: Mapping) -> None:
     import llm_correct
 

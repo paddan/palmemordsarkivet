@@ -189,13 +189,29 @@ I samma vy kan du skapa en global namnregel, till exempel
 `RKA2` → `Rikskriminalen A2`, och se dess träffar innan den används över hela
 den granskade grafen.
 
+Grafen innehåller också alla dokument och sidor med metadata ur filnamnen —
+uppslag, hänvisningar ("se 531.1") och delar — så att du kan söka på
+dokumentnummer, titel eller uppslagskod (`D-4991`) och se dokumentets kopplingar
+och öppna PDF:en. Dokumentnoderna läses in med `./load_documents.sh` och sist i
+Full pipeline. Neo4j körs i podman och startas av `./web.sh`.
+
+### Mordnatten (ontologi)
+
+`./extract_mordnatten.sh` låter en LLM läsa utvalda sidor (först EA-serierna,
+se `data/ontologi/urval.json`) och extraherar observationer från mordnatten —
+tid, plats, ankarhändelse, vittne och signalement — som läses in i grafen som
+**ogranskade** uppgifter med källsida. Kör alltid `--dry-run` först: den visar
+urvalet och en kostnadsuppskattning. Ankarhändelserna i
+`data/ontologi/ankarhandelser.json` är ett utkast som ska rättas. Grafen pekar
+ut var något står; belägget är alltid sidans text.
+
 ## Dokumentation
 
 - **[Kom igång](docs/kom-igang.md)** — installation, API-nyckel, kör pipelinen
   och ställ din första fråga.
 - **[Teknisk referens](docs/teknisk-referens.md)** — alla steg och flaggor i
   detalj: nedladdning, OCR (Tesseract/Surya, valfri Surya 2-layout), indexering, RAG/MCP, state-databasen,
-  valfri installation av kunskapsgrafen, LLM-konfiguration, filöversikt och
+  kunskapsgrafen (Neo4j via podman), ontologin för mordnatten, LLM-konfiguration, filöversikt och
   tester.
 
 ## Licens

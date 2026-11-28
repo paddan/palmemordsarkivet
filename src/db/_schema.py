@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 DEFAULT_DB: Path = Path(os.environ.get("STATE_DB", str(ROOT / "generated" / "db" / "state.db")))
 
-SCHEMA_VERSION: int = 13
+SCHEMA_VERSION: int = 15
 
 LLM_USAGE_SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS llm_usage (
@@ -97,7 +97,45 @@ CREATE INDEX IF NOT EXISTS idx_page_readings_page
     ON pdf_page_readings(pdf_stem, page_num)
 """
 
-SCHEMA_SQL = GRAPH_REVIEW_SCHEMA_SQL + LLM_USAGE_SCHEMA_SQL + PAGE_READINGS_SCHEMA_SQL + ";\n" + """
+DOCUMENT_META_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS document_meta (
+    pdf_stem          TEXT PRIMARY KEY,
+    arkiv             TEXT NOT NULL CHECK(arkiv IN ('palme', 'wpu')),
+    nr                TEXT,
+    titel             TEXT NOT NULL,
+    bestallt          TEXT,
+    upplagt           TEXT,
+    anmarkning        TEXT,
+    antal_sidor       INTEGER,
+    dokumentdatum     TEXT,
+    uppslag_json      TEXT NOT NULL DEFAULT '[]',
+    hanvisningar_json TEXT NOT NULL DEFAULT '[]',
+    avkortat          INTEGER NOT NULL DEFAULT 0,
+    updated_at        TEXT NOT NULL
+)
+"""
+
+ONTOLOGY_EXTRACTIONS_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS ontology_extractions (
+    pdf_stem        TEXT NOT NULL,
+    sida            INTEGER NOT NULL,
+    text_hash       TEXT NOT NULL,
+    schemaversion   INTEGER NOT NULL,
+    profile         TEXT NOT NULL,
+    model           TEXT NOT NULL,
+    raw             TEXT NOT NULL,
+    parsed_json     TEXT NOT NULL,
+    n_observationer INTEGER NOT NULL,
+    extracted_at    TEXT NOT NULL,
+    PRIMARY KEY (pdf_stem, sida)
+)
+"""
+
+SCHEMA_SQL = (
+    GRAPH_REVIEW_SCHEMA_SQL + LLM_USAGE_SCHEMA_SQL + PAGE_READINGS_SCHEMA_SQL
+    + ";\n" + DOCUMENT_META_SCHEMA_SQL + ";\n"
+    + ONTOLOGY_EXTRACTIONS_SCHEMA_SQL + ";\n"
+) + """
 CREATE TABLE IF NOT EXISTS schema_version (
     version    INTEGER PRIMARY KEY,
     applied_at TEXT NOT NULL
@@ -577,6 +615,20 @@ def _migration_013_rejected_reason(conn: sqlite3.Connection) -> None:
     conn.execute("DROP TABLE pdf_page_readings_old")
 
 
+def _migration_014_document_meta(conn: sqlite3.Connection) -> None:
+    """Skapa tabellen med dokumentmetadata tolkad ur filnamnen."""
+    for statement in DOCUMENT_META_SCHEMA_SQL.split(";"):
+        if statement.strip():
+            conn.execute(statement)
+
+
+def _migration_015_ontology_extractions(conn: sqlite3.Connection) -> None:
+    """Skapa tabellen med rå ontologi-extraktion per sida."""
+    for statement in ONTOLOGY_EXTRACTIONS_SCHEMA_SQL.split(";"):
+        if statement.strip():
+            conn.execute(statement)
+
+
 MIGRATIONS: tuple[_Migration, ...] = (
     _Migration(6, "pdf_files OCR-felstatus", _migration_006_pdf_file_ocr_status),
     _Migration(7, "admin_jobs jobbmodell", _migration_007_admin_jobs),
@@ -586,6 +638,8 @@ MIGRATIONS: tuple[_Migration, ...] = (
     _Migration(11, "Markdown och layout per sida", _migration_011_page_layout),
     _Migration(12, "läsningshistorik per sida", _migration_012_page_readings),
     _Migration(13, "historikskälet rejected", _migration_013_rejected_reason),
+    _Migration(14, "dokumentmetadata ur filnamn", _migration_014_document_meta),
+    _Migration(15, "rå ontologi-extraktion per sida", _migration_015_ontology_extractions),
 )
 
 

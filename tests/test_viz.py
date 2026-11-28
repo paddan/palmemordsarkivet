@@ -7,9 +7,20 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
+import pytest  # noqa: E402
+
 from graph.viz import (  # noqa: E402 — kräver src på sys.path ovan
+    NODE_COLORS,
+    NODE_ICONS,
+    assemble_document_graph,
     assemble_graph,
     dedup_rels,
+    document_layer_loaded,
+    document_meta_rows,
+    fetch_document_ego,
+    fetch_uppslag_ego,
+    normalize_uppslag_query,
+    search_documents,
     search_entities,
 )
 
@@ -212,3 +223,153 @@ def test_assemble_graph_doc_label_variants() -> None:
     assert _doc_label({"stem": "s", "nr": "", "titel": "Bara titel"}) == "Bara titel"
     assert _doc_label({"stem": "s", "nr": "42", "titel": ""}) == "42"
     assert _doc_label({"stem": "fallback", "nr": "", "titel": ""}) == "fallback"
+
+
+# ── Dokument- och uppslagsvyer ───────────────────────────────────────────────
+
+def test_uppslag_style_registered() -> None:
+    assert "Uppslag" in NODE_COLORS
+    assert NODE_ICONS["Uppslag"] == "folder"
+
+
+def test_normalize_uppslag_query() -> None:
+    assert normalize_uppslag_query("D-4991") == "D4991"
+    assert normalize_uppslag_query("d 4991") == "D4991"
+
+
+def test_uppslag_lookup_ignores_dash_and_space_on_both_sides() -> None:
+    from unittest.mock import MagicMock
+
+    from graph import viz
+
+    session = MagicMock()
+    session.run.return_value = []
+    viz.search_documents(session, "d 4991")
+    cypher = [c.args[0] for c in session.run.call_args_list
+              if "Uppslag" in c.args[0]][0]
+    assert "replace(replace(toUpper(u.kod), '-', ''), ' ', '')" in cypher
+    assert normalize_uppslag_query("d4991") == "D4991"
+
+
+def test_document_meta_rows_order_and_skip_empty() -> None:
+    doc = {"nr": "1", "titel": "PM", "arkiv": "palme", "dokumentdatum": None,
+           "bestallt": "2020-06-12", "upplagt": "2020-07-14", "anmarkning": "", "sidor": 10}
+    assert document_meta_rows(doc) == [
+        ("Nr", "1"), ("Titel", "PM"), ("Arkiv", "palme"),
+        ("Beställt", "2020-06-12"), ("Upplagt", "2020-07-14"), ("Sidor", "10")]
+
+
+def test_assemble_document_graph_nodes_and_edges() -> None:
+    center = {"stem": "A", "nr": "1", "titel": "PM"}
+    rows = [{"kind": "uppslag", "kod": "D4991-00"},
+            {"kind": "hanvisar_ut", "stem": "B", "namn": "2 — X"},
+            {"kind": "nämner", "norm": "stig engström", "namn": "Stig Engström",
+             "label": "Person"}]
+    nodes, edges = assemble_document_graph(center, rows)
+    assert {n["id"] for n in nodes} == {"doc:A", "upp:D4991-00", "doc:B", "stig engström"}
+    assert {(e["source"], e["target"], e["label"]) for e in edges} == {
+        ("doc:A", "upp:D4991-00", "ingår i"), ("doc:A", "doc:B", "hänvisar till"),
+        ("doc:A", "stig engström", "nämner")}
+
+
+def test_assemble_document_graph_directions_and_uppslag_center() -> None:
+    center = {"stem": "A", "nr": "1", "titel": "PM"}
+    rows = [{"kind": "hanvisar_in", "stem": "B", "namn": "B"},
+            {"kind": "forälder", "stem": "P", "namn": "P"},
+            {"kind": "del", "stem": "C", "namn": "C"},
+            {"kind": "samma_uppslag", "stem": "E", "namn": "E", "kod": "U1"}]
+    nodes, edges = assemble_document_graph(center, rows)
+    got = {(e["source"], e["target"], e["label"]) for e in edges}
+    assert ("doc:B", "doc:A", "hänvisar till") in got
+    assert ("doc:A", "doc:P", "del av") in got
+    assert ("doc:C", "doc:A", "del av") in got
+    assert ("doc:E", "upp:U1", "ingår i") in got
+    assert next(n for n in nodes if n["id"] == "doc:A").get("center")
+    # uppslag som center: dokumentraderna blir kanter in i uppslaget
+    n2, e2 = assemble_document_graph(
+        {"kod": "U1"}, [{"kind": "dokument", "stem": "A", "namn": "1 — PM"}])
+    assert {(e["source"], e["target"], e["label"]) for e in e2} == {
+        ("doc:A", "upp:U1", "ingår i")}
+    assert next(n for n in n2 if n["id"] == "upp:U1")["type"] == "Uppslag"
+
+
+def test_document_layer_loaded_uses_cheap_query() -> None:
+    class _R:
+        def __init__(self, rec):
+            self._rec = rec
+
+        def single(self):
+            return self._rec
+
+    class _S:
+        def __init__(self, rec):
+            self.rec = rec
+            self.q = ""
+
+        def run(self, q, **kw):
+            self.q = q
+            return _R(self.rec)
+
+    s = _S({"d": 1})
+    assert document_layer_loaded(s) is True
+    assert "LIMIT 1" in s.q
+    assert document_layer_loaded(_S(None)) is False
+
+
+def _load(session, metas, counts=None):
+    from graph.document_rows import build_document_rows
+    from graph.load_documents import write_document_layer
+    from operations.context import OperationContext, TerminalSink
+
+    ctx = OperationContext(sink=TerminalSink(), cancel_requested=lambda: False)
+    rows = build_document_rows(metas, counts or {})
+    write_document_layer(session, rows, batch=100, ctx=ctx)
+
+
+def _meta(stem, nr, titel="Titel", **kw):
+    base = {"pdf_stem": stem, "arkiv": "palme", "nr": nr, "titel": titel,
+            "bestallt": None, "upplagt": None, "anmarkning": None,
+            "antal_sidor": None, "dokumentdatum": None, "avkortat": False,
+            "uppslag": [], "hanvisningar": [], "del_av": None}
+    base.update(kw)
+    return base
+
+
+@pytest.mark.neo4j
+def test_search_documents_by_nr_title_and_uppslag(neo4j_session) -> None:
+    odd = "1295 — Förhör m ' och \" — x"
+    _load(neo4j_session, [
+        _meta("1 — PM", "1", "Promemoria", uppslag=["D4991-00"]),
+        _meta(odd, "1295", "Vapenaffären", uppslag=["D4991-00"]),
+    ])
+    by_nr = search_documents(neo4j_session, "1")
+    assert by_nr[0]["norm"] == "1 — PM" and by_nr[0]["label"] == "Dokument"
+    assert by_nr[0]["namn"] == "1 — Promemoria"
+    assert [h["norm"] for h in search_documents(neo4j_session, "vapenaff")] == [odd]
+    upp = [h for h in search_documents(neo4j_session, "D-4991") if h["label"] == "Uppslag"]
+    assert upp == [{"label": "Uppslag", "namn": "D4991-00", "norm": "D4991-00"}]
+    assert any(h["label"] == "Uppslag" for h in search_documents(neo4j_session, "d4991"))
+    assert search_documents(neo4j_session, "1295")[0]["norm"] == odd
+
+
+@pytest.mark.neo4j
+def test_fetch_document_ego_returns_all_kinds(neo4j_session) -> None:
+    _load(neo4j_session, [
+        _meta("1 — A", "1", "A", uppslag=["U1"], hanvisningar=["2"]),
+        _meta("2 — B", "2", "B", uppslag=["U1"]),
+        _meta("1.1 — C", "1.1", "C"),
+    ], {"1 — A": 3})
+    neo4j_session.run(
+        "MATCH (d:Dokument {stem: $s}) MERGE (p:Person {norm: 'x y', namn: 'X Y'}) "
+        "MERGE (d)-[:NÄMNER]->(p)", s="1 — A").consume()
+    props, rows = fetch_document_ego(neo4j_session, "1 — A")
+    assert props["nr"] == "1" and props["sidor"] == 3
+    kinds = {r["kind"] for r in rows}
+    assert {"uppslag", "hanvisar_ut", "del", "samma_uppslag", "nämner"} <= kinds
+    _, rows_b = fetch_document_ego(neo4j_session, "2 — B")
+    assert "hanvisar_in" in {r["kind"] for r in rows_b}
+    _, rows_c = fetch_document_ego(neo4j_session, "1.1 — C")
+    assert "forälder" in {r["kind"] for r in rows_c}
+    assert fetch_document_ego(neo4j_session, "saknas") == (None, [])
+    docs = fetch_uppslag_ego(neo4j_session, "U1")
+    assert {r["stem"] for r in docs} == {"1 — A", "2 — B"}

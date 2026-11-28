@@ -187,3 +187,12 @@ def test_missing_llm_key_is_pointed_out() -> None:
 def test_any_llm_key_silences_the_hint() -> None:
     assert install.missing_llm_key_hint({"DEEPSEEK_API_KEY": "x"}) is None
     assert install.missing_llm_key_hint({"OPENAI_API_KEY": ""}) is not None
+
+
+def test_pip_extras_include_graph() -> None:
+    assert install.pip_extras(with_dev=True) == "dev,web,graph"
+    assert install.pip_extras(with_dev=False) == "web,graph"
+
+
+def test_brew_installs_podman() -> None:
+    assert "podman" in install.BREW_PACKAGES

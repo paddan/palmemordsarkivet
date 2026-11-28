@@ -28,6 +28,7 @@ from sentence_transformers import SentenceTransformer
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import db as state_db  # noqa: E402
+from dokumentmeta import lance_name_fields, parse_stem  # noqa: E402
 from normalize_text import markdown_is_fresh, normalize_markdown  # noqa: E402
 
 try:
@@ -48,18 +49,11 @@ CHUNK_OVERLAP = 150
 MIN_CHUNK_CHARS = 80  # kortare chunks indexeras inte (is_useful)
 MIN_ALNUM_RATIO = 0.55  # filtrera OCR-skräp
 
-# Filnamn: "<Nr> — <Titel> — <Beställt> — <Upplagt> — <Anmärkning> — <Sidor>.txt"
-NAME_FIELDS = ["nr", "titel", "bestallt", "upplagt", "anmarkning", "antal_sidor"]
-
-
-def parse_filename(stem: str) -> dict:
-    parts = [p.strip() for p in stem.split(" — ")]
-    out = {f: "" for f in NAME_FIELDS}
-    for f, v in zip(NAME_FIELDS, parts, strict=False):
-        out[f] = v
-    if not out["nr"]:
-        out["nr"] = stem[:40]
-    return out
+# LanceDB bär bara nr och titel (citat och träffhuvuden bygger på dem). Övrig
+# filnamnsmetadata bor i state.db:s document_meta (dokumentmeta.parse_stem).
+LANCE_NAME_FIELDS = ("nr", "titel")
+# Kolumner som tidigare tolkades efter position och därför ofta var fel.
+DROPPED_NAME_FIELDS = ("bestallt", "upplagt", "anmarkning", "antal_sidor")
 
 
 def split_pages(text: str) -> list[str]:
@@ -660,7 +654,7 @@ def _chunk_schema() -> pa.Schema:
         pa.field("page", pa.int32()),
         pa.field("chunk_idx", pa.int32()),
         pa.field("mtime", pa.float64()),
-        *[pa.field(f, pa.string()) for f in NAME_FIELDS],
+        *[pa.field(f, pa.string()) for f in LANCE_NAME_FIELDS],
     ])
 
 
@@ -691,8 +685,63 @@ def _oppna_tabell(db, rebuild: bool, ctx: Any):
         if "mtime" not in table.schema.names:
             ctx.log("Migrerar tabell: lägger till mtime-kolumn (default 0.0).")
             table.add_columns({"mtime": "cast(0.0 as double)"})
+        gamla = [f for f in DROPPED_NAME_FIELDS if f in table.schema.names]
+        if gamla:
+            ctx.log(
+                "Migrerar tabell: tar bort namnfält som tolkades efter position "
+                f"({', '.join(gamla)})."
+            )
+            table.drop_columns(gamla)
         return table
     return db.create_table(TABLE, schema=_chunk_schema())
+
+
+def _uppdatera_dokumentmeta(
+    state_conn, text_dir: Path, only_stems: Collection[str] | None, ctx: Any
+) -> int:
+    """Tolka filnamnen och fyll ``document_meta``; returnerar antal rader.
+
+    Tolkar alla ``*.txt`` (eller bara ``only_stems``) och upsertar. Rader för
+    stammar som försvunnit rensas bara vid full körning, och aldrig när
+    listningen är tom (``prune_document_meta`` med tom lista raderar allt).
+    """
+    if only_stems is None:
+        stems = [p.stem for p in sorted(text_dir.glob("*.txt"))]
+    else:
+        stems = sorted(only_stems)
+    metas = [parse_stem(s) for s in stems]
+    n = state_db.upsert_document_meta(state_conn, [m.to_row() for m in metas])
+
+    removed = 0
+    if only_stems is None:
+        if stems:
+            removed = state_db.prune_document_meta(state_conn, stems)
+        else:
+            ctx.log(
+                f"Dokumentmetadata: inga .txt i {text_dir} — hoppar över rensning "
+                "av gamla rader",
+                level="warning",
+            )
+
+    palme = sum(1 for m in metas if m.arkiv == "palme")
+    wpu = len(metas) - palme
+    avkortade = sum(1 for m in metas if m.avkortat)
+    utan_sidor = sum(1 for m in metas if m.antal_sidor is None)
+    ctx.log(
+        f"Dokumentmetadata: {palme} palme, {wpu} wpu, {avkortade} avkortade, "
+        f"{utan_sidor} utan sidantal, {removed} borttagna"
+    )
+    grupper: dict[str, list[str]] = {}
+    for m in metas:
+        for w in m.varningar:
+            grupper.setdefault(w.split(":", 1)[0], []).append(m.pdf_stem)
+    for w, ss in sorted(grupper.items()):
+        ctx.log(
+            f"Dokumentmetadata: varning '{w}' för {len(ss)} dokument, "
+            f"första: {ss[:5]}",
+            level="debug",
+        )
+    return int(n)
 
 
 def _lasa_indexerade_mtimes(state_conn) -> dict[str, float]:
@@ -1092,6 +1141,7 @@ def run_ingest(
 
     state_conn = state_db.connect()
     state_db.init_schema(state_conn)
+    _uppdatera_dokumentmeta(state_conn, text_dir, only_stems, ctx)
     already = _lasa_indexerade_mtimes(state_conn)
     table_sources = get_table_sources(table)
     unusable_mtimes_file = _oanvandbara_mtimes_fil(unusable_list)
@@ -1115,7 +1165,7 @@ def run_ingest(
     for i, (f, disk_mtime, is_reingest) in enumerate(todo, 1):
         ctx.check_cancelled()
         ctx.progress(i, len(todo), f.name)
-        meta = parse_filename(f.stem)
+        meta = lance_name_fields(f.stem)
         raw = _las_textfil(f, i, len(todo), ctx)
         if raw is None:
             continue

@@ -10,6 +10,7 @@ detaljer om varje steg, se [Teknisk referens](teknisk-referens.md).
 - macOS (testat på Darwin 25), Python 3.11+ — `./install.sh` bygger `.venv` med
   den nyaste Python som finns i `PATH` (i dag Homebrews 3.15)
 - [Homebrew](https://brew.sh)
+- Podman (installeras av `./install.sh`) — kör Neo4j, som webbgränssnittet startar vid `./web.sh`
 - Minst en stödd LLM-backend: Claude, OpenAI, DeepSeek, OpenRouter eller en
   OpenAI-kompatibel lokal tjänst
 
@@ -262,20 +263,20 @@ För att leta fram kandidater ur OCR-texten utan att publicera dem direkt:
 kartförslag**. En kandidat måste ha person, koordinat, tid och källa innan den
 kan godkännas till tidslinjen.
 
-## Kunskapsgraf (valfritt)
+## Kunskapsgraf
 
 Utöver vektorsökningen kan arkivet byggas som en kunskapsgraf i Neo4j, med en
-interaktiv grafvy i webgränssnittet.
+interaktiv grafvy i webgränssnittet. Neo4j är en fast del av appen: `./install.sh`
+installerar podman och grafberoendena (`.[graph]`), och `./web.sh` startar Neo4j
+innan webben. Startar den inte skrivs en varning och webben körs ändå.
 
-### 1. Installera grafberoenden
+### 1. Förbered podman
 
-Installera först grafens valfria beroenden. Podman-maskinen behöver minst 4 GiB
-minne för Neo4j:
+`./install.sh` har redan installerat podman och grafberoendena. Podman-maskinen
+behöver minst 4 GiB minne för Neo4j:
 
 ```bash
-brew install podman
 podman machine init --memory 4096
-.venv/bin/pip install -e '.[graph]'
 ```
 
 ### 2. Välj LLM för extraktionen
@@ -355,6 +356,15 @@ skriv en variant och dess kanoniska namn, exempelvis `RKA2` →
 `Rikskriminalen A2`, och välj **Visa träffar**. Regeln gäller sedan alla
 matchande entiteter och relationer i den granskade grafen. Originalextraktionen
 ändras inte och regeln kan tas bort igen.
+
+Piloten för mordnatten (observationer, vittnen och signalement ur utvalda sidor) körs med
+`./extract_mordnatten.sh --dry-run --profile "<profil>"` först — den visar urval och
+kostnad utan LLM-anrop — och därefter utan `--dry-run` (kräver inläst dokumentlager,
+`./load_documents.sh`). Ankarhändelserna i `data/ontologi/ankarhandelser.json` är ett
+utkast: så länge filen har `"utkast": true` varnar varje körning. Rätta tiderna och ta
+bort `"utkast"` innan piloten. Byter du modell eller prompt och vill köra om redan
+lästa sidor höjer du `schemaversion` i `data/ontologi/schema.json` — `--force` väljer
+aldrig om sidor med oförändrad text och schemaversion.
 
 Full beskrivning (schema, kostnad, namnnormalisering) finns under
 [Kunskapsgraf](teknisk-referens.md#kunskapsgraf-neo4j).

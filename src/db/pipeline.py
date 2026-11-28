@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Collection, Iterable, Mapping
+from typing import Any
 
 from ._schema import now
 
@@ -981,3 +983,164 @@ def list_documents_for_review(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     return list(conn.execute(
         "SELECT pdf_stem, source, pdf_path, tesseract_done_at FROM pdf_files ORDER BY pdf_stem"
     ))
+
+
+# --- document_meta ----------------------------------------------------
+
+def upsert_document_meta(
+    conn: sqlite3.Connection, rows: Iterable[Mapping[str, Any]]
+) -> int:
+    """UPSERT dokumentmetadata (en rad per stam) i en transaktion.
+
+    ``uppslag``/``hanvisningar`` (listor) kodas till JSON och ``avkortat`` till
+    0/1. ``updated_at`` sätts här och skrivs om för alla rader vid varje anrop:
+    den betyder "senast uppdaterad av ingest", inte "senast ändrad". Returnerar antal skrivna rader.
+    """
+    stamp = now()
+    params = [
+        (
+            r["pdf_stem"], r["arkiv"], r.get("nr"), r["titel"],
+            r.get("bestallt"), r.get("upplagt"), r.get("anmarkning"),
+            r.get("antal_sidor"), r.get("dokumentdatum"),
+            json.dumps(list(r.get("uppslag") or []), ensure_ascii=False),
+            json.dumps(list(r.get("hanvisningar") or []), ensure_ascii=False),
+            1 if r.get("avkortat") else 0, stamp,
+        )
+        for r in rows
+    ]
+    if not params:
+        return 0
+    conn.executemany(
+        """
+        INSERT INTO document_meta(pdf_stem, arkiv, nr, titel, bestallt, upplagt,
+                                  anmarkning, antal_sidor, dokumentdatum,
+                                  uppslag_json, hanvisningar_json, avkortat,
+                                  updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(pdf_stem) DO UPDATE SET
+            arkiv             = excluded.arkiv,
+            nr                = excluded.nr,
+            titel             = excluded.titel,
+            bestallt          = excluded.bestallt,
+            upplagt           = excluded.upplagt,
+            anmarkning        = excluded.anmarkning,
+            antal_sidor       = excluded.antal_sidor,
+            dokumentdatum     = excluded.dokumentdatum,
+            uppslag_json      = excluded.uppslag_json,
+            hanvisningar_json = excluded.hanvisningar_json,
+            avkortat          = excluded.avkortat,
+            updated_at        = excluded.updated_at
+        """,
+        params,
+    )
+    conn.commit()
+    return len(params)
+
+
+def prune_document_meta(conn: sqlite3.Connection, keep: Collection[str]) -> int:
+    """Ta bort rader vars stam inte finns i ``keep``; returnerar antal borttagna.
+
+    Läser befintliga stammar och raderar skillnaden med ``executemany`` —
+    ett ``NOT IN (?, …)`` med ~10 000 parametrar går inte att lita på.
+    """
+    keep_set = set(keep)
+    stale = [
+        (row[0],)
+        for row in conn.execute("SELECT pdf_stem FROM document_meta")
+        if row[0] not in keep_set
+    ]
+    if stale:
+        conn.executemany("DELETE FROM document_meta WHERE pdf_stem=?", stale)
+    conn.commit()
+    return len(stale)
+
+
+def _decode_document_meta(row: sqlite3.Row) -> dict[str, Any]:
+    """Avkoda en document_meta-rad: listor ur JSON, ``avkortat`` som bool."""
+    out = dict(row)
+    out["uppslag"] = json.loads(out.pop("uppslag_json"))
+    out["hanvisningar"] = json.loads(out.pop("hanvisningar_json"))
+    out["avkortat"] = bool(out["avkortat"])
+    return out
+
+
+def get_document_meta(
+    conn: sqlite3.Connection, pdf_stem: str
+) -> dict[str, Any] | None:
+    """Metadata för en stam (listor avkodade, ``avkortat`` som bool) eller None."""
+    row = conn.execute(
+        "SELECT * FROM document_meta WHERE pdf_stem=?", (pdf_stem,)
+    ).fetchone()
+    return None if row is None else _decode_document_meta(row)
+
+
+def list_document_meta(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    """Alla metadatarader i samma form som ``get_document_meta``, sorterade på stam."""
+    return [
+        _decode_document_meta(row)
+        for row in conn.execute("SELECT * FROM document_meta ORDER BY pdf_stem")
+    ]
+
+
+# --- ontology_extractions ---------------------------------------------
+
+def upsert_ontology_extraction(
+    conn: sqlite3.Connection, row: Mapping[str, Any]
+) -> None:
+    """Skriv (eller ersätt) rå modellutdata för en (stam, sida).
+
+    ``parsed`` (dict) kodas till JSON; ``extracted_at`` sätts här.
+    """
+    conn.execute(
+        """
+        INSERT INTO ontology_extractions(pdf_stem, sida, text_hash,
+                                         schemaversion, profile, model, raw,
+                                         parsed_json, n_observationer,
+                                         extracted_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(pdf_stem, sida) DO UPDATE SET
+            text_hash       = excluded.text_hash,
+            schemaversion   = excluded.schemaversion,
+            profile         = excluded.profile,
+            model           = excluded.model,
+            raw             = excluded.raw,
+            parsed_json     = excluded.parsed_json,
+            n_observationer = excluded.n_observationer,
+            extracted_at    = excluded.extracted_at
+        """,
+        (
+            row["pdf_stem"], row["sida"], row["text_hash"],
+            row["schemaversion"], row["profile"], row["model"], row["raw"],
+            json.dumps(row["parsed"], ensure_ascii=False),
+            row["n_observationer"], now(),
+        ),
+    )
+    conn.commit()
+
+
+def _decode_ontology_extraction(row: sqlite3.Row) -> dict[str, Any]:
+    """Avkoda en rad: ``parsed_json`` blir ``parsed``."""
+    out = dict(row)
+    out["parsed"] = json.loads(out.pop("parsed_json"))
+    return out
+
+
+def get_ontology_extraction(
+    conn: sqlite3.Connection, pdf_stem: str, sida: int
+) -> dict[str, Any] | None:
+    """Extraktionen för en sida (``parsed`` avkodad) eller None."""
+    row = conn.execute(
+        "SELECT * FROM ontology_extractions WHERE pdf_stem=? AND sida=?",
+        (pdf_stem, sida),
+    ).fetchone()
+    return None if row is None else _decode_ontology_extraction(row)
+
+
+def list_ontology_extractions(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    """Alla extraktioner, sorterade på stam och sida."""
+    return [
+        _decode_ontology_extraction(row)
+        for row in conn.execute(
+            "SELECT * FROM ontology_extractions ORDER BY pdf_stem, sida"
+        )
+    ]

@@ -387,7 +387,13 @@ from .pipeline import (
     get_bad_pages as get_bad_pages,
 )
 from .pipeline import (
+    get_document_meta as get_document_meta,
+)
+from .pipeline import (
     get_ingested_mtime as get_ingested_mtime,
+)
+from .pipeline import (
+    get_ontology_extraction as get_ontology_extraction,
 )
 from .pipeline import (
     get_page_markdown_map as get_page_markdown_map,
@@ -423,6 +429,9 @@ from .pipeline import (
     is_tesseract_failed as is_tesseract_failed,
 )
 from .pipeline import (
+    list_document_meta as list_document_meta,
+)
+from .pipeline import (
     list_documents_for_review as list_documents_for_review,
 )
 from .pipeline import (
@@ -436,6 +445,9 @@ from .pipeline import (
 )
 from .pipeline import (
     list_ocr_page_texts as list_ocr_page_texts,
+)
+from .pipeline import (
+    list_ontology_extractions as list_ontology_extractions,
 )
 from .pipeline import (
     list_page_readings as list_page_readings,
@@ -519,6 +531,9 @@ from .pipeline import (
     page_scores_by_engine as page_scores_by_engine,
 )
 from .pipeline import (
+    prune_document_meta as prune_document_meta,
+)
+from .pipeline import (
     quality_histogram as quality_histogram,
 )
 from .pipeline import (
@@ -550,6 +565,12 @@ from .pipeline import (
 )
 from .pipeline import (
     touch_text_mtime as touch_text_mtime,
+)
+from .pipeline import (
+    upsert_document_meta as upsert_document_meta,
+)
+from .pipeline import (
+    upsert_ontology_extraction as upsert_ontology_extraction,
 )
 from .pipeline import (
     upsert_pdf_file as upsert_pdf_file,
@@ -679,6 +700,13 @@ __all__ = [
     "record_download",
     "record_graph_review_run",
     "record_ingest",
+    "upsert_document_meta",
+    "prune_document_meta",
+    "get_document_meta",
+    "list_document_meta",
+    "upsert_ontology_extraction",
+    "get_ontology_extraction",
+    "list_ontology_extractions",
     "record_map_observation",
     "record_map_observation_candidate",
     "record_map_place",

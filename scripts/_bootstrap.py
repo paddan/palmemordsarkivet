@@ -16,6 +16,12 @@ def _prioritize_source_tree() -> None:
     if source in sys.path:
         sys.path.remove(source)
     sys.path.insert(0, source)
+    # Python lägger scriptens katalog först i sys.path. Där ligger entrypoints
+    # som heter som riktiga paket (scripts/neo4j.py, scripts/ingest.py), så
+    # `import neo4j` träffade annars entrypointen i stället för drivrutinen.
+    scripts_dir = str(ROOT / "scripts")
+    while scripts_dir in sys.path:
+        sys.path.remove(scripts_dir)
 
 
 def run(operation_id: str, argv: list[str] | None = None) -> int:

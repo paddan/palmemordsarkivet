@@ -1,0 +1,7 @@
+{
+  "nyckelpersoner": [
+    {"id": "garningsmannen", "namn": "Gärningsmannen", "alias": ["gärningsmannen", "mördaren", "mannen som sköt", "skytten", "gärningsman", "gärningsmannens", "mördarens", "skyttens"]},
+    {"id": "olof-palme", "namn": "Olof Palme", "alias": ["Olof Palme", "statsministern", "Palme", "Palmes", "statsministerns"]},
+    {"id": "lisbet-palme", "namn": "Lisbet Palme", "alias": ["Lisbet Palme", "fru Palme", "hustrun", "Lisbet Palmes"]}
+  ]
+}

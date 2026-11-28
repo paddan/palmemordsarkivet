@@ -1,0 +1,66 @@
+{
+  "schemaversion": 1,
+  "schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "required": ["observationer"],
+    "additionalProperties": false,
+    "properties": {
+      "observationer": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["tid_text", "tid_fran", "tid_till", "plats", "handelse_id", "vittne", "observerade", "utdrag", "osakerhet"],
+          "additionalProperties": false,
+          "properties": {
+            "tid_text": {"type": ["string", "null"]},
+            "tid_fran": {"type": ["string", "null"], "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$"},
+            "tid_till": {"type": ["string", "null"], "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$"},
+            "plats": {"type": ["string", "null"]},
+            "handelse_id": {"type": ["string", "null"]},
+            "vittne": {
+              "type": "object",
+              "required": ["namn", "maskad", "kategori", "roll"],
+              "additionalProperties": false,
+              "properties": {
+                "namn": {"type": ["string", "null"]},
+                "maskad": {"type": "boolean"},
+                "kategori": {"enum": ["namn", "adress", "telefon", "personnummer", "okänd"]},
+                "roll": {"type": ["string", "null"]}
+              }
+            },
+            "observerade": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["beskrivning", "signalement", "kan_vara"],
+                "additionalProperties": false,
+                "properties": {
+                  "beskrivning": {"type": "string"},
+                  "signalement": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": ["typ", "varde_text", "min", "max", "enhet"],
+                      "additionalProperties": false,
+                      "properties": {
+                        "typ": {"enum": ["längd", "ålder", "kroppsbyggnad", "hår", "klädsel", "färg", "övrigt"]},
+                        "varde_text": {"type": "string"},
+                        "min": {"type": ["number", "null"]},
+                        "max": {"type": ["number", "null"]},
+                        "enhet": {"type": ["string", "null"]}
+                      }
+                    }
+                  },
+                  "kan_vara": {"type": "array", "items": {"type": "string"}}
+                }
+              }
+            },
+            "utdrag": {"type": "string"},
+            "osakerhet": {"type": ["string", "null"]}
+          }
+        }
+      }
+    }
+  }
+}
